@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "emberhud",
+  "version": "1.0.0",
+  "name": "EmberHUD",
+  "description": "Lunar-style in-game HUD for EmberClient (FPS, CPS, Coordinates, Keystrokes)",
+  "authors": ["EmberClient"],
+  "environment": "client",
+  "mixins": ["emberhud.mixins.json"]
+}
