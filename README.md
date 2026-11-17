@@ -19,7 +19,7 @@ Get the latest version from the [Releases page](https://github.com/AashrithKrish
 
 | Computer | File | How to install |
 |---|---|---|
-| **Mac** (Apple silicon or Intel, macOS 13+) | `Lumos-macOS-universal.dmg` | Open it and drag **Lumos** into Applications. The first time, right-click Lumos and choose **Open**. |
+| **Mac** (Apple silicon or Intel, macOS 13+) | `Lumos.dmg` | Open it and drag **Lumos** into Applications. The first time, right-click Lumos and choose **Open**. |
 | **Windows** 10 or 11 (64-bit) | `Lumos-Windows-x64.zip` | Unzip it anywhere and double-click **Lumos.exe**. If Windows shows "Windows protected your PC", click **More info**, then **Run anyway**. |
 | **Linux** (x86_64, glibc 2.35+: Ubuntu 22.04, Fedora 36, Debian 12 or newer) | `Lumos-Linux-x86_64.tar.gz` | Extract it anywhere and run `./lumos-launcher`; `./install-desktop-entry.sh` adds Lumos to your applications menu. Needs GTK 3 and WebKitGTK 4.1 (`libwebkit2gtk-4.1-0` on Ubuntu/Debian). |
 
@@ -27,14 +27,29 @@ These are the only official Lumos Client downloads. Lumos isn't signed with a pa
 
 ## What you get
 
-- **Every version, ready in one click:** vanilla and Fabric releases, with Java downloaded automatically.
-- **Instances:** separate setups, each with its own version, mods, resource packs, shaders and worlds.
-- **Mods & packs per instance:** browse Modrinth inside the launcher and pick which instance to install into. Dependencies come along automatically. You can also add your own `.jar` and `.zip` files, or switch any of them off.
-- **Skins and capes with Ely.by:** sign in with a free Ely.by account and choose a skin or cape from the catalog inside the launcher. Other Ely.by players see them in game.
-- **LumosHUD:** FPS, CPS, coordinates and keystrokes in game (Fabric 1.21.x).
-- **Horizon 26.3 (Rust):** an optional engine that plays Minecraft 26.3 without Java. Lumos sets it up the first time you choose it, and installs Horizon's own mods, shaders and packs, including its native Rust mods as ready-made builds (on Apple silicon Macs and Windows x64).
-- **Boost FPS:** one click per Fabric instance adds the best performance mods for its version and tuned Java settings.
+**Playing**
+- **Every version, ready in one click:** vanilla, Fabric, NeoForge and Forge, with Java downloaded for you.
+- **Instances:** separate setups with their own version, mods, resource packs, shaders and worlds. Each instance has its own memory, window size and Java arguments, and a clear Delete button.
+- **Boost FPS:** one click on a Fabric instance adds performance mods for its version (plus RetiNO on a Mac) and tuned Java flags.
 - **Servers:** save servers, see their ping, join in one click.
+
+**Mods, packs and modpacks**
+- **Discover:** browse Modrinth inside the launcher. Results match the instance's version and loader, and mods you already have show as installed.
+- **Dependencies and checks:** required dependencies are installed with a mod, you get a warning before installing something that doesn't fit, and **Check mods** looks for missing dependencies, incompatible mods and duplicates.
+- **Modpacks:** import a Modrinth modpack (`.mrpack`) or install one from the Modpacks tab. You can also add your own `.jar` and `.zip` files, or switch any of them off.
+
+**Look and cosmetics**
+- **LumosHUD:** a Lunar-style in-game HUD with 18 modules (FPS, CPS, coordinates, keystrokes, armor, potion effects and more), icons, a Lunar or Minimal style, and an editor you open with Right Shift. For Fabric 1.21.6 to 1.21.11. Horizon instances get Horizon's own HUD switches.
+- **Lumos capes:** 12 free cape designs, for players signed in with an Ely.by account.
+- **Ely.by skins:** wear a skin from the Ely.by catalog or upload your own with one click.
+
+**Horizon 26.3 (Rust)**
+- An optional engine that plays Minecraft 26.3 without Java. Lumos sets it up the first time you choose it.
+- Discover browses Horizon's own mod, shader and resource-pack registry for these instances. Native Rust mods come as ready-made cloud builds, and a combined build lets several of them share one instance.
+
+**Staying healthy**
+- **Updates:** Lumos checks GitHub for new releases. On Mac and Windows it can install one after checking its SHA-256; on Linux it points you to the release page.
+- **Crash explainer** puts a likely cause in plain words, and **Repair instance** re-downloads damaged game files without touching your worlds or mods.
 
 ## What you need
 
