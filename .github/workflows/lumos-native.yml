@@ -149,28 +149,22 @@ jobs:
           python tools/lumos_native/apply.py --tool "$tool" --work work
           cat work/applied.json
       - name: Build the game with them, and its preparer
-        working-directory: work/stage
         run: |
           pkg=horizon-client
-          grep -q 'name = "horizon-client"' ../src/crates/horizon-game/Cargo.toml 2>/dev/null && pkg=horizon-game
+          grep -q 'name = "horizon-client"' work/src/crates/horizon-game/Cargo.toml 2>/dev/null && pkg=horizon-game
           profile=release
-          grep -q '^\[profile.fast\]' Cargo.toml && profile=fast
+          grep -q '^\[profile.fast\]' work/stage/Cargo.toml && profile=fast
           export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/work/target"
-          build() { cargo build --locked --profile "$profile" -p "$pkg" --bin horizon-client -p horizon-prepare --bin horizon-prepare; }
-          if ! build; then
-            # A mod's own crate (e.g. a voice-chat library) can fail to compile: build the group without those.
-            echo "::warning::full build failed; retrying without mods that bring their own crates"
-            tool=$GITHUB_WORKSPACE/tools-bin/bin/horizon-mixins; [ -x "$tool.exe" ] && tool="$tool.exe"
-            (cd "$GITHUB_WORKSPACE" && python tools/lumos_native/apply.py --tool "$tool" --work work --without-crates)
-            cat "$GITHUB_WORKSPACE/work/applied.json"
-            build
-          fi
+          tool=$GITHUB_WORKSPACE/tools-bin/bin/horizon-mixins; [ -x "$tool.exe" ] && tool="$tool.exe"
+          # Builds from here, not inside work/stage: a mod that breaks the compile is left out and the rest re-applied there.
+          python tools/lumos_native/build.py --tool "$tool" --work work --package "$pkg" --profile "$profile"
+          cat work/applied.json
           out="$CARGO_TARGET_DIR/$profile"
           mkdir -p "$GITHUB_WORKSPACE/work/bin"
           ext=""; [ "$RUNNER_OS" = Windows ] && ext=".exe"
           cp "$out/horizon-client$ext" "$out/horizon-prepare$ext" "$GITHUB_WORKSPACE/work/bin/"
-          if [ "$RUNNER_OS" = Windows ] && [ -f ../src/tools/ci/fetch_dxc.py ]; then
-            python ../src/tools/ci/fetch_dxc.py "$GITHUB_WORKSPACE/work/bin" || echo "DXC not added (the game falls back to FXC)"
+          if [ "$RUNNER_OS" = Windows ] && [ -f work/src/tools/ci/fetch_dxc.py ]; then
+            python work/src/tools/ci/fetch_dxc.py "$GITHUB_WORKSPACE/work/bin" || echo "DXC not added (the game falls back to FXC)"
           fi
           ls -l "$GITHUB_WORKSPACE/work/bin"
       # Publish this game right away (not after the whole batch), then refresh the index.

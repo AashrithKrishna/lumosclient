@@ -17,13 +17,24 @@ import sys
 import tempfile
 
 
+def rmtree(path):
+    """Removes a folder for real (read-only files too, as Windows checkouts have) or says why not."""
+    def force(fn, p, _):
+        os.chmod(p, 0o700)
+        fn(p)
+    if os.path.exists(path):
+        shutil.rmtree(path, onerror=force)
+    if os.path.exists(path):
+        sys.exit(f"couldn't remove {path} (is something still using it?)")
+
+
 def apply(tool, src, mod_ids, mods_root, out):
     with tempfile.TemporaryDirectory() as tmp:
         sel = os.path.join(tmp, "mods")
         os.makedirs(sel)
         for i in mod_ids:
             shutil.copytree(os.path.join(mods_root, i), os.path.join(sel, i))
-        shutil.rmtree(out, ignore_errors=True)
+        rmtree(out)
         r = subprocess.run([tool, "apply", "--workspace", src, "--mods", sel, "--out", out],
                            capture_output=True, text=True)
         ok = r.returncode == 0
@@ -35,6 +46,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tool", required=True)
     ap.add_argument("--work", required=True)
+    ap.add_argument("--exclude", default="", help="comma-separated mod ids to leave out (the reason file says why)")
     ap.add_argument("--without-crates", action="store_true",
                     help="leave out mods that bring their own Rust crates ([[crate]]): used when the full build failed")
     a = ap.parse_args()
@@ -44,6 +56,14 @@ def main():
     scratch = os.path.join(a.work, "scratch-stage")
     ids = sorted(os.listdir(mods))
     failed, good = {}, []
+    reasons = {}
+    rf = os.path.join(a.work, "excluded.json")
+    if os.path.exists(rf):
+        reasons = json.load(open(rf))
+    for i in filter(None, a.exclude.split(",")):
+        if i in ids:
+            ids.remove(i)
+            failed[i] = reasons.get(i, "didn't compile with this Horizon version")
     if a.without_crates:
         for i in list(ids):
             tomls = [os.path.join(r, f) for r, _, fs in os.walk(os.path.join(mods, i)) for f in fs if f == "horizon-mixin.toml"]
@@ -55,7 +75,7 @@ def main():
         ok, why = apply(a.tool, src, [i], mods, scratch)
         (good.append(i) if ok else failed.__setitem__(i, why))
         print(f"{'ok  ' if ok else 'FAIL'} {i}" + ("" if ok else f": {why}"), file=sys.stderr)
-    shutil.rmtree(scratch, ignore_errors=True)
+    rmtree(scratch)
     applied = []
     if good:
         ok, why = apply(a.tool, src, good, mods, stage)
@@ -69,7 +89,7 @@ def main():
                     applied.append(i)
                 else:
                     failed[i] = f"conflicts with the others: {why}"
-            shutil.rmtree(scratch, ignore_errors=True)
+            rmtree(scratch)
             if applied:
                 ok, why = apply(a.tool, src, applied, mods, stage)
                 if not ok:
