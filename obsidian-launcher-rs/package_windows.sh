@@ -43,7 +43,8 @@ HROOT="$RES/horizon-root"
 mkdir -p "$RES/bin" "$RES/mods" "$HROOT/exporters" "$HROOT/mods/horizon/src/test/java/dev/horizonlab"
 
 cp "$PROGRAMS/lumos-launcher.exe" "$APP/Lumos.exe"
-cp "$PROGRAMS/horizon-client.exe" "$PROGRAMS/horizon-prepare.exe" "$RES/bin/"
+# The engine, its preparer and anything shipped beside them (DXC's dxcompiler.dll and its licences).
+find "$PROGRAMS" -maxdepth 1 -type f ! -name lumos-launcher.exe -exec cp {} "$RES/bin/" \;
 cp "$HUD_JAR" "$RES/mods/"
 cp "$AUTHLIB_JAR" "$RES/"
 cp "$ROOT/research-lock.json" "$HROOT/"

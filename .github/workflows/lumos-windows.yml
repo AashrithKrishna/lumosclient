@@ -41,6 +41,8 @@ jobs:
           mkdir -p out
           cp obsidian-launcher-rs/target/release/lumos-launcher.exe out/
           cp target/release/horizon-client.exe target/release/horizon-prepare.exe out/
+          # Microsoft's DXC (pinned, checksummed) with its licences: DirectX 12 uses it on integrated GPUs.
+          python tools/ci/fetch_dxc.py out
           ls -l out
       - uses: actions/upload-artifact@v7
         with:

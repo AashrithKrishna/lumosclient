@@ -19,7 +19,7 @@ Get the latest version from the [Releases page](https://github.com/AashrithKrish
 
 | Computer | File | How to install |
 |---|---|---|
-| **Mac** (Apple silicon or Intel, macOS 13+) | `Lumos.dmg` | Open it and drag **Lumos** into Applications. The first time, right-click Lumos and choose **Open**. |
+| **Mac** (Apple silicon: M1 or later, macOS 13+) | `Lumos.dmg` | Open it and drag **Lumos** into Applications. The first time, right-click Lumos and choose **Open**. |
 | **Windows** 10 or 11 (64-bit) | `Lumos-Windows-x64.zip` | Unzip it anywhere and double-click **Lumos.exe**. If Windows shows "Windows protected your PC", click **More info**, then **Run anyway**. |
 
 These are the only official Lumos Client downloads. Lumos isn't signed with a paid certificate yet, which is why your computer asks before opening it.

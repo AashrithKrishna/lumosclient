@@ -209,7 +209,8 @@ fn offline_uuid_hex(name: &str) -> String {
 fn bundle_resources() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    [dir.join("../Resources"), dir.join("resources")].into_iter().find(|p| p.is_dir())
+    // `resources` first: on Windows (case-insensitive) a stray "Resources" beside the exe must not win.
+    [dir.join("resources"), dir.join("../Resources")].into_iter().find(|p| p.is_dir())
 }
 
 /// The source checkout this binary was built from (only exists on the developer's machine).
@@ -334,12 +335,28 @@ fn content_extension_ok(kind: &str, file: &str) -> bool {
     }
 }
 
+/// Shown when a request names an instance that was deleted in the meantime.
+const GONE_INSTANCE: &str = "That instance no longer exists, so nothing was changed.";
+
 /// Largest file the player can add through the launcher (bigger ones go in via the folder).
 const MAX_IMPORT_BYTES: usize = 256 * 1024 * 1024;
 
-/// Rejects anything that is not a plain file name (no separators, no `..`).
+/// Rejects anything that is not one plain file name on every OS: no separators or `..`, and
+/// nothing Windows reads as a drive, stream or device (`C:x`, `a:b`, `NUL`, trailing dots).
 fn safe_file_name(name: &str) -> bool {
-    !name.is_empty() && !name.contains('/') && !name.contains('\\') && name != "." && name != ".."
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2",
+        "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let stem = name.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    !name.is_empty()
+        && name.len() <= 255
+        && name != "."
+        && name != ".."
+        && !name.ends_with('.')
+        && !name.ends_with(' ')
+        && !name.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+        && !RESERVED.contains(&stem.as_str())
 }
 
 fn list_content_json(game_dir: &Path, kind: &str, profile_id: &str) -> String {
@@ -418,6 +435,25 @@ struct AppState {
 }
 
 impl AppState {
+    #[cfg(test)]
+    fn for_tests(base_dir: PathBuf, config: LauncherConfig) -> Self {
+        AppState {
+            paths: installer::Paths::new(&base_dir, None),
+            base_dir,
+            config,
+            pings: HashMap::new(),
+            resources_ready: false,
+            catalog: Vec::new(),
+            catalog_error: None,
+            active_child: None,
+            system_memory_mb: 0,
+            pending_launch: false,
+            session: None,
+            horizon_retry: None,
+            task: None,
+        }
+    }
+
     fn new() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let base_dir = home.join("LumosClient");
@@ -537,25 +573,19 @@ impl AppState {
         }
     }
 
-    /// The instance a request names: its id, folder and Minecraft version. An empty or
-    /// unknown id means the active instance, so content never lands in a stranger's folder.
-    fn target_instance(&self, id: &str) -> (String, PathBuf, String) {
+    /// The instance a request names: its id, folder and Minecraft version. An empty id means
+    /// the active instance; an id that no longer exists (deleted meanwhile) gives `None`, so
+    /// content never lands in some other instance's folder.
+    fn target_instance(&self, id: &str) -> Option<(String, PathBuf, String)> {
         let active = &self.config.active_profile_id;
-        let chosen = self
-            .config
-            .profiles
-            .iter()
-            .find(|p| !id.is_empty() && p.id == id && safe_file_name(&p.id))
-            .or_else(|| self.config.profiles.iter().find(|p| &p.id == active));
-        match chosen {
-            Some(p) if p.id != *active => {
-                let dir = self.base_dir.join("instances").join(&p.id);
-                let _ = fs::create_dir_all(&dir);
-                let ver = if p.version.is_empty() { self.config.selected_version.clone() } else { p.version.clone() };
-                (p.id.clone(), dir, ver)
-            }
-            _ => (active.clone(), self.active_game_dir(), self.config.selected_version.clone()),
+        if id.is_empty() || id == active {
+            return Some((active.clone(), self.active_game_dir(), self.config.selected_version.clone()));
         }
+        let p = self.config.profiles.iter().find(|p| p.id == id && safe_file_name(&p.id))?;
+        let dir = self.base_dir.join("instances").join(&p.id);
+        let _ = fs::create_dir_all(&dir);
+        let ver = if p.version.is_empty() { self.config.selected_version.clone() } else { p.version.clone() };
+        Some((p.id.clone(), dir, ver))
     }
 
     fn active_game_dir(&self) -> PathBuf {
@@ -1260,12 +1290,13 @@ fn import_content(game_dir: &Path, kind: &str, file: &str, data_b64: &str) -> Re
     fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
     let tmp = dir.join(format!(".{file}.{}.part", now_millis()));
     fs::write(&tmp, &bytes).map_err(|e| format!("Couldn't save {file}: {e}"))?;
-    // A disabled copy of the same file would otherwise sit next to the new one.
-    let _ = fs::remove_file(dir.join(format!("{file}.disabled")));
     fs::rename(&tmp, dir.join(file)).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         format!("Couldn't save {file}: {e}")
-    })
+    })?;
+    // The new file replaces a switched-off copy of the same name (only once it's safely saved).
+    let _ = fs::remove_file(dir.join(format!("{file}.disabled")));
+    Ok(())
 }
 
 /// Fabric Loader version an instance version uses (from its JSON, ours or the official launcher's).
@@ -1496,10 +1527,13 @@ fn install_modrinth_inner(
 fn download_modrinth_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, slug: String, project_type: String, profile_id: String) {
     std::thread::spawn(move || {
         // Everything goes into the instance the player installed to, checked against its own version.
-        let (pid, game_dir, selected, paths) = {
+        let target = {
             let st = shared.lock().unwrap();
-            let (pid, dir, ver) = st.target_instance(&profile_id);
-            (pid, dir, ver, st.paths.clone())
+            st.target_instance(&profile_id).map(|(pid, dir, ver)| (pid, dir, ver, st.paths.clone()))
+        };
+        let Some((pid, game_dir, selected, paths)) = target else {
+            push_install_status(&proxy, &slug, "error", GONE_INSTANCE, &profile_id);
+            return;
         };
         let push_install_status = |proxy: &EventLoopProxy<UserEvent>, slug: &str, state: &str, msg: &str| push_install_status(proxy, slug, state, msg, &pid);
         if project_type == "mod" && !is_fabric_version(&selected) {
@@ -1631,7 +1665,7 @@ fn main() {
         .with_html(html)
         .with_ipc_handler(move |req| {
             let body = req.body();
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else { return };
+            let Ok(mut v) = serde_json::from_str::<serde_json::Value>(body) else { return };
             let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("");
             let text = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_owned();
 
@@ -1658,10 +1692,10 @@ fn main() {
                     let target = text("target");
                     let dir = {
                         let st = ipc_state.lock().unwrap();
-                        let (_, inst, _) = st.target_instance(&text("profileId"));
-                        match target.as_str() {
-                            "instance" => inst,
-                            "mods" | "resourcepacks" | "shaderpacks" | "saves" | "screenshots" | "logs" => inst.join(&target),
+                        let inst = st.target_instance(&text("profileId")).map(|t| t.1);
+                        match (target.as_str(), inst) {
+                            ("instance", Some(inst)) => inst,
+                            ("mods" | "resourcepacks" | "shaderpacks" | "saves" | "screenshots" | "logs", Some(inst)) => inst.join(&target),
                             _ => st.base_dir.clone(),
                         }
                     };
@@ -1675,24 +1709,40 @@ fn main() {
                     }
                 }
                 "list_content" => {
-                    let (pid, game_dir, _) = ipc_state.lock().unwrap().target_instance(&text("profileId"));
-                    push_content(&ipc_proxy, &game_dir, &text("kind"), &pid);
+                    if let Some((pid, game_dir, _)) = ipc_state.lock().unwrap().target_instance(&text("profileId")) {
+                        push_content(&ipc_proxy, &game_dir, &text("kind"), &pid);
+                    }
                 }
                 "import_content" => {
                     let (kind, file) = (text("kind"), text("file"));
-                    let (pid, game_dir, _) = ipc_state.lock().unwrap().target_instance(&text("profileId"));
-                    let result = import_content(&game_dir, &kind, &file, &text("data"));
-                    match result {
-                        Ok(()) => call_js(&ipc_proxy, "onNotice", json!({"message": format!("Added {file}"), "kind": "ok"})),
-                        Err(e) => call_js(&ipc_proxy, "onNotice", json!({"message": e, "kind": "err"})),
+                    let target = ipc_state.lock().unwrap().target_instance(&text("profileId"));
+                    match target {
+                        None => call_js(&ipc_proxy, "onNotice", json!({"message": GONE_INSTANCE, "kind": "err"})),
+                        Some((pid, game_dir, _)) => {
+                            // Decoding and writing a big file takes a moment: keep the window responsive.
+                            let data = match v.get_mut("data").map(serde_json::Value::take) {
+                                Some(serde_json::Value::String(d)) => d,
+                                _ => String::new(),
+                            };
+                            let proxy = ipc_proxy.clone();
+                            std::thread::spawn(move || {
+                                match import_content(&game_dir, &kind, &file, &data) {
+                                    Ok(()) => call_js(&proxy, "onNotice", json!({"message": format!("Added {file}"), "kind": "ok"})),
+                                    Err(e) => call_js(&proxy, "onNotice", json!({"message": e, "kind": "err"})),
+                                }
+                                push_content(&proxy, &game_dir, &kind, &pid);
+                            });
+                        }
                     }
-                    push_content(&ipc_proxy, &game_dir, &kind, &pid);
                 }
                 "toggle_content" => {
                     let (kind, file) = (text("kind"), text("file"));
                     let enable = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
-                    if let (Some(folder), true) = (content_folder(&kind), safe_file_name(&file)) {
-                        let (pid, game_dir, _) = ipc_state.lock().unwrap().target_instance(&text("profileId"));
+                    let target = ipc_state.lock().unwrap().target_instance(&text("profileId"));
+                    if target.is_none() {
+                        call_js(&ipc_proxy, "onNotice", json!({"message": GONE_INSTANCE, "kind": "err"}));
+                    }
+                    if let (Some(folder), true, Some((pid, game_dir, _))) = (content_folder(&kind), safe_file_name(&file), target) {
                         let dir = game_dir.join(folder);
                         let target = if enable {
                             file.strip_suffix(".disabled").unwrap_or(&file).to_owned()
@@ -1702,8 +1752,11 @@ fn main() {
                             format!("{file}.disabled")
                         };
                         if target != file {
-                            if let Err(e) = fs::rename(dir.join(&file), dir.join(&target)) {
-                                push_log(&ipc_proxy, &format!("[LumosClient] Could not rename {file}: {e}"));
+                            if dir.join(&target).exists() {
+                                // Both copies exist: renaming would silently overwrite one of them.
+                                call_js(&ipc_proxy, "onNotice", json!({"message": format!("{target} already exists in this instance. Remove one of the two copies first."), "kind": "err"}));
+                            } else if let Err(e) = fs::rename(dir.join(&file), dir.join(&target)) {
+                                call_js(&ipc_proxy, "onNotice", json!({"message": format!("Couldn't switch {file}: {e}"), "kind": "err"}));
                             }
                         }
                         push_content(&ipc_proxy, &game_dir, &kind, &pid);
@@ -1711,8 +1764,11 @@ fn main() {
                 }
                 "trash_content" => {
                     let (kind, file) = (text("kind"), text("file"));
-                    if let (Some(folder), true) = (content_folder(&kind), safe_file_name(&file)) {
-                        let (pid, game_dir, _) = ipc_state.lock().unwrap().target_instance(&text("profileId"));
+                    let target = ipc_state.lock().unwrap().target_instance(&text("profileId"));
+                    if target.is_none() {
+                        call_js(&ipc_proxy, "onNotice", json!({"message": GONE_INSTANCE, "kind": "err"}));
+                    }
+                    if let (Some(folder), true, Some((pid, game_dir, _))) = (content_folder(&kind), safe_file_name(&file), target) {
                         let src = game_dir.join(folder).join(&file);
                         let base = ipc_state.lock().unwrap().base_dir.clone();
                         match move_to_trash(&base, &src, &file) {
@@ -1841,7 +1897,8 @@ fn main() {
                 "search_modrinth" => {
                     let (selected, paths) = {
                         let st = ipc_state.lock().unwrap();
-                        (st.target_instance(&text("profileId")).2, st.paths.clone())
+                        let ver = st.target_instance(&text("profileId")).map(|t| t.2).unwrap_or_else(|| st.config.selected_version.clone());
+                        (ver, st.paths.clone())
                     };
                     search_modrinth_async(
                         ipc_proxy.clone(),
@@ -2095,6 +2152,35 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_names_cannot_escape_the_folder_on_any_os() {
+        for ok in ["sodium-fabric-0.6.jar", "My Pack (v2).zip", "a.jar.disabled", "con-tent.jar"] {
+            assert!(safe_file_name(ok), "{ok}");
+        }
+        for bad in ["", ".", "..", "../x.jar", "a/b.jar", "a\\b.jar", "C:x.jar", "x:stream.jar", "NUL", "con.jar", "Com1.zip", "x.jar.", "x.jar ", "a\u{0}b", "a?b.jar"] {
+            assert!(!safe_file_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn requests_for_a_deleted_instance_go_nowhere() {
+        let base = std::env::temp_dir().join(format!("lumos-target-{}", now_millis()));
+        let cfg: LauncherConfig = serde_json::from_str(
+            r#"{"playerName":"P","minecraftDir":"","javaHome":"","activeProfileId":"a","selectedVersion":"1.21.11",
+                "resolutionWidth":1280,"resolutionHeight":720,
+                "profiles":[{"id":"a","name":"A","world":"","lastPlayed":0,"playtimeSecs":0,"version":"1.21.11"},
+                            {"id":"b","name":"B","world":"","lastPlayed":0,"playtimeSecs":0,"version":"Fabric 1.20.1"}]}"#,
+        )
+        .expect("config parses");
+        let st = AppState::for_tests(base.clone(), cfg);
+        assert_eq!(st.target_instance("").map(|t| t.0).as_deref(), Some("a"));
+        let (id, dir, ver) = st.target_instance("b").expect("b exists");
+        assert_eq!((id.as_str(), ver.as_str()), ("b", "Fabric 1.20.1"));
+        assert_eq!(dir, base.join("instances").join("b"));
+        assert!(st.target_instance("deleted").is_none());
+        let _ = fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn imported_files_land_in_the_named_content_folder() {

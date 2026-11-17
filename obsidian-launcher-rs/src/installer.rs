@@ -236,6 +236,9 @@ fn safe_id(id: &str) -> bool {
         && !id.contains('/')
         && !id.contains('\\')
         && !id.contains('\0')
+        && !id.chars().any(|c| c.is_control() || matches!(c, ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+        && !id.ends_with('.')
+        && !id.ends_with(' ')
         && id != "."
         && id != ".."
 }

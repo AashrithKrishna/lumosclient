@@ -1524,6 +1524,8 @@
     renderStatus();
     renderDiscoverSide();
     confirmSave();
+    // The active instance changed elsewhere (e.g. a new instance): show its own files.
+    if (ui.libDetail && ui.contentFor !== state.activeProfileId) loadContent();
   };
 
   function accountName() {
@@ -2226,6 +2228,7 @@
     ui.content = {};
     if (ui.modLoaded) { ui.modOffset = 0; setTimeout(searchMods, 60); }
     ['mods', 'resourcepacks', 'shaderpacks'].forEach(k => { const c = $('cnt-' + k); if (c) c.textContent = '–'; });
+    if (ui.libDetail) loadContent(); // never leave one instance's files under another's name
   }
   function openNewInstance() {
     closePopovers();
@@ -2423,6 +2426,12 @@
   }));
   $('contentSearch').addEventListener('input', renderContentList);
   $('contentFile').addEventListener('change', e => { importFiles([...e.target.files], ui.contentKind); e.target.value = ''; });
+  // Files dropped anywhere else must not navigate the window away from the launcher.
+  document.addEventListener('dragover', e => e.preventDefault());
+  document.addEventListener('drop', e => {
+    e.preventDefault();
+    if (e.dataTransfer?.files?.length && !(ui.page === 'library' && ui.libDetail)) toast('Open an instance (Mods & packs) to add files to it.', 'info');
+  });
   const dropZone = $('libDetail');
   dropZone.addEventListener('dragover', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); $('contentList').classList.add('dropping'); } });
   dropZone.addEventListener('dragleave', e => { if (!dropZone.contains(e.relatedTarget)) $('contentList').classList.remove('dropping'); });
