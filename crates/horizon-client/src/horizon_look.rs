@@ -20,11 +20,11 @@ pub(crate) fn give() {
         return;
     }
     let (blocks, dark) = (theme::BLOCKS_DARK, theme::DARK);
-    // Obsidian + Ember Orange + Electric Green theme.
+    // Obsidian + Lumos Orange + Electric Green theme.
     const OBSIDIAN_BG: u32 = 0x0b0b10;
     const OBSIDIAN_RULE: u32 = 0x222230;
-    const EMBER_ORANGE: u32 = 0xff5a1f;
-    const EMBER_ORANGE_HOVER: u32 = 0xff7442;
+    const LUMOS_ORANGE: u32 = 0xff5a1f;
+    const LUMOS_ORANGE_HOVER: u32 = 0xff7442;
     const ELECTRIC_GREEN: u32 = 0x00ff87;
     const ELECTRIC_GREEN_EDGE: u32 = 0x5cffb0;
     horizon_client::menu_style::install(MenuStyle {
@@ -34,9 +34,9 @@ pub(crate) fn give() {
             ink_soft: blocks.ink_soft,
             muted: blocks.muted,
             outline: blocks.outline,
-            accent: EMBER_ORANGE,
-            face: EMBER_ORANGE,
-            face_hover: EMBER_ORANGE_HOVER,
+            accent: LUMOS_ORANGE,
+            face: LUMOS_ORANGE,
+            face_hover: LUMOS_ORANGE_HOVER,
             success: ELECTRIC_GREEN,
             warn: blocks.warn,
             danger: blocks.danger,
@@ -47,7 +47,7 @@ pub(crate) fn give() {
             ink: dark.ink,
             ink_soft: dark.ink_soft,
             rule: OBSIDIAN_RULE,
-            accent: EMBER_ORANGE,
+            accent: LUMOS_ORANGE,
             on_accent: OBSIDIAN_BG,
             lit: ELECTRIC_GREEN,
             lit_edge: ELECTRIC_GREEN_EDGE,

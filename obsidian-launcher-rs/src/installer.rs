@@ -426,7 +426,7 @@ fn install_fabric_json(paths: &Paths, mc: &str) -> Result<String, String> {
     }
     profile["id"] = Value::String(id.clone());
     profile["inheritsFrom"] = Value::String(mc.to_owned());
-    profile["emberFabricLoader"] = Value::String(loader);
+    profile["lumosFabricLoader"] = Value::String(loader);
     write_json_atomic(&version_json_in(&paths.game, &id), &profile)?;
     Ok(id)
 }
@@ -905,7 +905,8 @@ pub fn ensure_java(paths: &Paths, component: &str, intel_only_natives: bool, rep
     for p in &platforms {
         let dir = paths.runtime.join(format!("{component}-{p}"));
         let java = java_binary(&dir);
-        if dir.join(".ember-runtime.json").is_file() && java.is_file() {
+        // ".ember-runtime.json" is the marker written by builds from before the rename.
+        if (dir.join(".lumos-runtime.json").is_file() || dir.join(".ember-runtime.json").is_file()) && java.is_file() {
             return Ok(java);
         }
     }
@@ -925,7 +926,7 @@ pub fn ensure_java(paths: &Paths, component: &str, intel_only_natives: bool, rep
     let man_url = entry.pointer("/manifest/url").and_then(Value::as_str).ok_or("Java listing is missing a link.")?;
     let man_sha1 = entry.pointer("/manifest/sha1").and_then(Value::as_str);
     let dir = paths.runtime.join(format!("{component}-{platform}"));
-    let marker = dir.join(".ember-runtime.json");
+    let marker = dir.join(".lumos-runtime.json");
     let java = java_binary(&dir);
     let man_path = paths.cache.join(format!("java-{component}-{platform}.json"));
     net::download_verified(man_url, &man_path, man_sha1, None)?;
@@ -1245,7 +1246,7 @@ pub fn install(paths: &Paths, spec: &str, report: Report) -> Result<(Resolved, P
 
 /// The Minecraft version the bundled preparer is pinned to (`--launch-api`).
 pub fn horizon_minecraft(prepare: &Path, root: &Path) -> Result<String, String> {
-    let out = Command::new(prepare)
+    let out = no_console(&mut Command::new(prepare))
         .arg("--launch-api")
         .arg("--root")
         .arg(root)
@@ -1268,12 +1269,23 @@ pub fn sync_horizon_root(bundle: &Path, dest: &Path) -> Result<(), String> {
         net::sha1_file(&lock).unwrap_or_default(),
         net::sha1_file(&bundle.join("exporters/manifest.json")).unwrap_or_default()
     );
-    let marker = dest.join(".ember-sync");
+    let marker = dest.join(".lumos-sync");
     if fs::read_to_string(&marker).is_ok_and(|m| m == stamp) {
         return Ok(());
     }
     copy_tree(bundle, dest)?;
     fs::write(&marker, stamp).map_err(|e| format!("Couldn't write {}: {e}", marker.display()))
+}
+
+/// Keeps helper programs from opening a console window on Windows (no-op elsewhere).
+pub fn no_console(cmd: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
 }
 
 fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
@@ -1292,7 +1304,7 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
 
 /// `horizon-prepare --check`: true when the prepared resources are complete and current.
 pub fn horizon_check(prepare: &Path, root: &Path, output: &Path) -> bool {
-    Command::new(prepare)
+    no_console(&mut Command::new(prepare))
         .current_dir(root)
         .arg("--check")
         .arg("--root")
@@ -1334,7 +1346,7 @@ pub fn ensure_horizon(
     )?;
     let java_home = java_home_of(&java);
     report("Preparing Horizon (the first time takes a few minutes)", 0.0);
-    let mut child = Command::new(prepare)
+    let mut child = no_console(&mut Command::new(prepare))
         .arg("--prepare")
         .arg("--server-jar")
         .arg(&server_jar)
@@ -1571,7 +1583,7 @@ mod tests {
 
     #[test]
     fn catalog_lists_fabric_and_vanilla() {
-        let root = std::env::temp_dir().join(format!("ember-cat-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("lumos-cat-{}", std::process::id()));
         let paths = Paths::new(&root, None);
         let m = json!({"versions":[{"id":"26.3","type":"release"},{"id":"26.4-snapshot-8","type":"snapshot"},{"id":"1.8.9","type":"release"}]});
         let c = catalog(&paths, Some(&m));
@@ -1581,12 +1593,12 @@ mod tests {
     }
 
     /// Live: the whole first-run Horizon setup from a built app's bundled support files
-    /// (EMBER_BUNDLE=<.../Lumos.app/Contents/Resources>). Large download. Run with --ignored.
+    /// (LUMOS_BUNDLE=<.../Lumos.app/Contents/Resources>). Large download. Run with --ignored.
     #[test]
     #[ignore]
     fn live_horizon_setup() {
-        let bundle = PathBuf::from(std::env::var("EMBER_BUNDLE").expect("set EMBER_BUNDLE"));
-        let root = std::env::temp_dir().join("ember-live-horizon");
+        let bundle = PathBuf::from(std::env::var("LUMOS_BUNDLE").expect("set LUMOS_BUNDLE"));
+        let root = std::env::temp_dir().join("lumos-live-horizon");
         let paths = Paths::new(&root, None);
         let hroot = paths.horizon_root();
         sync_horizon_root(&bundle.join("horizon-root"), &hroot).expect("sync");
@@ -1603,13 +1615,13 @@ mod tests {
     #[test]
     #[ignore]
     fn live_launch_fabric() {
-        let root = std::env::temp_dir().join("ember-live-install");
+        let root = std::env::temp_dir().join("lumos-live-install");
         let paths = Paths::new(&root, None);
         let report = |_: &str, _: f64| {};
         let (r, prep, java) = install(&paths, "Fabric 1.21.11", &report).expect("install");
         let game_dir = root.join("instance");
         fs::create_dir_all(&game_dir).unwrap();
-        let auth = Auth { name: "EmberTest".into(), uuid: "0123456789abcdef0123456789abcdef".into(), access_token: "0".into(), user_type: "legacy".into(), javaagent: None };
+        let auth = Auth { name: "LumosTest".into(), uuid: "0123456789abcdef0123456789abcdef".into(), access_token: "0".into(), user_type: "legacy".into(), javaagent: None };
         let o = LaunchOpts { memory_mb: 2048, extra_jvm: vec![], width: 854, height: 480, fullscreen: false, server: None, launcher_version: "test".into() };
         let args = build_args(&r, &prep, &game_dir, &auth, &o);
         let log_path = root.join("launch.log");
@@ -1634,7 +1646,7 @@ mod tests {
     #[test]
     #[ignore]
     fn live_install_fabric() {
-        let root = std::env::temp_dir().join("ember-live-install");
+        let root = std::env::temp_dir().join("lumos-live-install");
         let paths = Paths::new(&root, None);
         let report = |m: &str, f: f64| eprintln!("{m} {f:.2}");
         let (r, prep, java) = install(&paths, "Fabric 1.21.11", &report).expect("install");

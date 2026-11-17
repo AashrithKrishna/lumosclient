@@ -1,0 +1,49 @@
+# Builds the Windows x64 programs for Lumos Client: the launcher, the Horizon engine and its preparer.
+# obsidian-launcher-rs/package_windows.sh turns the artifact into the Lumos-Windows-x64.zip players download.
+name: lumos windows
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: lumos-windows
+          workspaces: |
+            . -> target
+            obsidian-launcher-rs -> target
+      - name: Horizon engine and preparer
+        run: cargo build --release --locked -p horizon-game --bin horizon-client -p horizon-prepare --bin horizon-prepare
+      - name: Launcher tests
+        run: cargo test --release --locked --manifest-path obsidian-launcher-rs/Cargo.toml
+      - name: Launcher
+        run: cargo build --release --locked --manifest-path obsidian-launcher-rs/Cargo.toml
+      - name: Collect the programs
+        run: |
+          mkdir -p out
+          cp obsidian-launcher-rs/target/release/lumos-launcher.exe out/
+          cp target/release/horizon-client.exe target/release/horizon-prepare.exe out/
+          ls -l out
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lumos-windows-x64-programs
+          path: out/
+          retention-days: 14

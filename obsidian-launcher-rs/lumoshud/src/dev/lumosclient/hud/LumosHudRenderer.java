@@ -1,4 +1,4 @@
-package dev.emberclient.hud;
+package dev.lumosclient.hud;
 
 import org.lwjgl.glfw.GLFW;
 import java.lang.reflect.Field;
@@ -6,10 +6,10 @@ import java.lang.reflect.Method;
 import java.util.ArrayDeque;
 import java.util.Deque;
 
-public final class EmberHudRenderer {
+public final class LumosHudRenderer {
     private static final int BG = 0xAA0B0B10;
     private static final int BG_ACTIVE = 0xCCFF5A1F;
-    private static final int EMBER = 0xFFFF5A1F;
+    private static final int ACCENT = 0xFFFF5A1F;
     private static final int GREEN = 0xFF00FF87;
     private static final int TEXT = 0xFFF2F4F8;
 
@@ -31,7 +31,7 @@ public final class EmberHudRenderer {
     private static Method ctxFill;
     private static Method ctxDrawText;
 
-    private EmberHudRenderer() {}
+    private LumosHudRenderer() {}
 
     private static void ensureInit() {
         if (initAttempted) return;
@@ -87,7 +87,7 @@ public final class EmberHudRenderer {
             int z = (int) Math.floor((double) entityGetZ.invoke(player));
             String dir = facing((float) entityGetYaw.invoke(player));
 
-            drawPill(ctx, font, 8, 8, "LUMOS", EMBER);
+            drawPill(ctx, font, 8, 8, "LUMOS", ACCENT);
             drawPill(ctx, font, 8, 26, "FPS: " + fps, GREEN);
             drawPill(ctx, font, 8, 44, "CPS: " + leftClicks.size() + " | " + rightClicks.size(), TEXT);
             drawPill(ctx, font, 8, 62, "XYZ: " + x + ", " + y + ", " + z + " (" + dir + ")", TEXT);

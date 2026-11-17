@@ -1086,7 +1086,7 @@
         <!-- HUD -->
         <div class="sec col hidden" data-sec="hud" style="gap:12px">
           <div class="set-group">
-            <div class="set-row" data-k="emberhud hud fps cps keystrokes coordinates overlay">
+            <div class="set-row" data-k="lumoshud hud fps cps keystrokes coordinates overlay">
               <div class="txt"><b>Enable LumosHUD</b><span>Built-in overlay for Fabric 1.21.11: FPS, CPS, coordinates + facing and keystrokes. Synced into the instance's mods folder on launch.</span></div>
               <label class="switch"><input type="checkbox" id="setHud" aria-label="Enable LumosHUD" /><span></span></label>
             </div>
@@ -1108,7 +1108,7 @@
               </div>
             </div>
             <div class="set-row" data-k="accent colour color">
-              <div class="txt"><b>Accent</b><span id="accentName">Ember</span></div>
+              <div class="txt"><b>Accent</b><span id="accentName">Blaze</span></div>
               <div class="swatches" id="swatches"></div>
             </div>
             <div class="set-row" data-k="home layout instances launchpad grid sklauncher">
@@ -1173,7 +1173,7 @@
             <div class="set-row" data-k="about version">
               <img class="js-logo" style="width:48px;height:48px;border-radius:12px" alt="" />
               <div class="txt"><b id="aboutVersion">LumosClient</b><span>Rust launcher for Horizon 26.3 and your local Java versions.</span></div>
-              <button class="btn sm" data-act="url" data-url="https://github.com/AashrithKrishna/emberclient"><svg class="i sm"><use href="#i-external"/></svg>GitHub</button>
+              <button class="btn sm" data-act="url" data-url="https://github.com/AashrithKrishna/lumosclient"><svg class="i sm"><use href="#i-external"/></svg>GitHub</button>
             </div>
             <div class="set-row stack" data-k="keyboard shortcuts keys">
               <div class="txt"><b>Keyboard shortcuts</b></div>
@@ -1228,10 +1228,10 @@
   // ───────────────────────── State ─────────────────────────
   let state = {
     playerName: 'Player', selectedVersion: '1.21.11', versions: [], resourcesReady: false,
-    emberHudEnabled: true, resolutionWidth: 1280, resolutionHeight: 720, fullscreen: false,
+    lumosHudEnabled: true, resolutionWidth: 1280, resolutionHeight: 720, fullscreen: false,
     memoryMb: 8192, jvmArgs: '', javaHome: '', minecraftDir: '', profiles: [], activeProfileId: 'default',
     servers: [], pings: {}, baseDir: '~/LumosClient', running: false, systemMemoryMb: 0,
-    uiAccent: 'ember', uiTheme: 'dark', uiMotion: true, hideOnLaunch: false, sessionStartedSecsAgo: null, homeLayout: 'launchpad'
+    uiAccent: 'blaze', uiTheme: 'dark', uiMotion: true, hideOnLaunch: false, sessionStartedSecsAgo: null, homeLayout: 'launchpad'
   };
   const ui = {
     page: 'home', libDetail: false, contentKind: 'mods', content: {}, modType: 'mod', modOffset: 0, modTotal: 0,
@@ -1239,7 +1239,7 @@
     pendingSave: null, logs: [], unreadProblems: false, palSel: 0, palItems: []
   };
   const ACCENTS = [
-    ['ember', 'Ember', '#ff6b2c', '#ff9f43'], ['amber', 'Amber', '#f5a524', '#ffd166'],
+    ['blaze', 'Blaze', '#ff6b2c', '#ff9f43'], ['amber', 'Amber', '#f5a524', '#ffd166'],
     ['crimson', 'Crimson', '#f0435a', '#ff7a8a'], ['violet', 'Violet', '#8b5cf6', '#c084fc'],
     ['azure', 'Azure', '#3b82f6', '#60a5fa'], ['emerald', 'Emerald', '#22c55e', '#4ade80']
   ];
@@ -1348,7 +1348,7 @@
   };
   const PX_LABEL = {
     grass: 'Grass block', sword: 'Sword', pickaxe: 'Pickaxe', chest: 'Chest', diamond: 'Diamond',
-    crafting: 'Crafting table', bed: 'Bed', potion: 'Potion', heart: 'Heart', flame: 'Ember',
+    crafting: 'Crafting table', bed: 'Bed', potion: 'Potion', heart: 'Heart', flame: 'Flame',
     sky: 'Sky island', house: 'House', compass: 'Compass', book: 'Book', portal: 'Portal',
     painting: 'Painting', sun: 'Sun', apple: 'Apple'
   };
@@ -1381,7 +1381,7 @@
       [/creative|build|redstone|craft/, 'crafting'],
       [/mod|tech|pack|factory|mine|cave|prison/, 'pickaxe'],
       [/magic|potion|alchemy|witch/, 'potion'],
-      [/nether|fire|ember|hell/, 'flame'],
+      [/nether|fire|blaze|lava|hell/, 'flame'],
       [/adventure|explore|map|rpg|quest/, 'compass'],
       [/story|lore|book/, 'book'],
       [/loot|storage|hoard/, 'chest'],
@@ -1486,12 +1486,14 @@
   // ───────────────────────── Theme ─────────────────────────
   function applyAppearance() {
     const root = document.documentElement;
-    root.dataset.accent = state.uiAccent || 'ember';
+    root.dataset.accent = state.uiAccent || 'blaze';
     root.dataset.theme = state.uiTheme === 'oled' ? 'oled' : 'dark';
     root.dataset.motion = state.uiMotion === false ? 'off' : 'on';
   }
 
   // ───────────────────────── Render: state ─────────────────────────
+  const IS_MAC = /Mac/i.test(navigator.platform || navigator.userAgent);
+  const TRASH = IS_MAC ? 'Trash' : /Win/i.test(navigator.platform || navigator.userAgent) ? 'Recycle Bin' : 'trash folder';
   window.renderState = function (next) {
     state = { ...state, ...next };
     if (ui.pendingSave && !ui.saveSent) Object.assign(state, ui.pendingSave); // keep edits made during the save delay
@@ -1658,8 +1660,8 @@
     $('heroLoaderChip').innerHTML = icon('box') + esc(m.label || m.loader);
     $('metaRam').innerHTML = icon('cpu') + fmtGb(state.memoryMb || 0);
     $('metaRes').innerHTML = icon('monitor') + (state.fullscreen ? 'Fullscreen' : `${state.resolutionWidth}×${state.resolutionHeight}`);
-    const hudLive = state.emberHudEnabled !== false && /fabric/i.test(state.selectedVersion) && /1\.21\.11/.test(state.selectedVersion);
-    $('metaHud').innerHTML = icon('hud') + (state.emberHudEnabled === false ? 'LumosHUD off' : hudLive ? 'LumosHUD on' : 'LumosHUD (Fabric 1.21.11 only)');
+    const hudLive = state.lumosHudEnabled !== false && /fabric/i.test(state.selectedVersion) && /1\.21\.11/.test(state.selectedVersion);
+    $('metaHud').innerHTML = icon('hud') + (state.lumosHudEnabled === false ? 'LumosHUD off' : hudLive ? 'LumosHUD on' : 'LumosHUD (Fabric 1.21.11 only)');
     $('horizonBanner').classList.toggle('hidden', !horizonFirstRun() || busy());
 
     // Quick play: instances (switch) + servers (join)
@@ -1795,7 +1797,7 @@
         <div class="meta"><div class="name">${esc(prettyName(it.file))}</div><div class="file">${esc(it.file)} · ${fmtBytes(it.size)}</div></div>
         ${it.enabled ? '' : '<span class="chip">Disabled</span>'}
         <label class="switch" title="${it.enabled ? 'Disable' : 'Enable'}"><input type="checkbox" aria-label="${it.enabled ? 'Disable' : 'Enable'} ${esc(prettyName(it.file))}" ${it.enabled ? 'checked' : ''} data-act="toggle-content" data-file="${esc(it.file)}" /><span></span></label>
-        <button class="btn ghost sm icon danger" data-act="trash-content" data-file="${esc(it.file)}" title="Move to Trash" aria-label="Move to Trash">${icon('trash')}</button>
+        <button class="btn ghost sm icon danger" data-act="trash-content" data-file="${esc(it.file)}" title="Move to ${TRASH}" aria-label="Move to ${TRASH}">${icon('trash')}</button>
       </div>`).join('') || `<div class="empty"><b>No matches</b></div>`;
   }
 
@@ -1958,7 +1960,7 @@
     $('memScale').innerHTML = `<span>1 GB</span><span>${fmtGb(Math.round(max / 2 / 1024) * 1024)}</span><span>${fmtGb(max)}</span>`;
     setVal('setMemory', state.memoryMb); setVal('setMemoryNum', state.memoryMb);
     const rec = recommendedMemory();
-    $('memHint').textContent = state.systemMemoryMb ? `This Mac has ${fmtGb(state.systemMemoryMb)}. Recommended: ${fmtGb(rec)}.` : 'How much RAM the game may use.';
+    $('memHint').textContent = state.systemMemoryMb ? `This computer has ${fmtGb(state.systemMemoryMb)}. Recommended: ${fmtGb(rec)}.` : 'How much RAM the game may use.';
     $('memPresets').innerHTML = [['Recommended', rec], ['2 GB', 2048], ['4 GB', 4096], ['6 GB', 6144], ['8 GB', 8192]]
       .filter(([l, v], i) => v <= max && (i === 0 || v !== rec))
       .map(([l, v]) => `<button class="opt ${state.memoryMb === v ? 'active' : ''}" data-act="mem-preset" data-v="${v}">${l === 'Recommended' ? icon('sparkle') + 'Recommended · ' + fmtGb(v) : l}</button>`).join('');
@@ -1968,7 +1970,7 @@
     setChecked('setFullscreen', state.fullscreen);
     document.querySelectorAll('.radio-card[data-hide]').forEach(b => b.classList.toggle('active', String(!!state.hideOnLaunch) === b.dataset.hide));
     setVal('javaHome', state.javaHome || ''); setVal('setJvmArgs', state.jvmArgs || '');
-    setChecked('setHud', state.emberHudEnabled !== false);
+    setChecked('setHud', state.lumosHudEnabled !== false);
     document.querySelectorAll('[data-theme-opt]').forEach(b => b.classList.toggle('active', b.dataset.themeOpt === (state.uiTheme || 'dark')));
     $('swatches').innerHTML = ACCENTS.map(([k, name, a, b]) => `<button class="swatch ${state.uiAccent === k ? 'active' : ''}" style="background:linear-gradient(135deg,${a},${b})" data-act="accent" data-k="${k}" title="${name}" aria-label="${name}"></button>`).join('');
     $('accentName').textContent = (ACCENTS.find(a => a[0] === state.uiAccent) || ACCENTS[0])[1];
@@ -1997,7 +1999,7 @@
       ui.saveSent = true;
       send('save_settings', {
         resolutionWidth: state.resolutionWidth, resolutionHeight: state.resolutionHeight, fullscreen: state.fullscreen,
-        memoryMb: state.memoryMb, jvmArgs: state.jvmArgs, javaHome: state.javaHome, emberHudEnabled: state.emberHudEnabled !== false,
+        memoryMb: state.memoryMb, jvmArgs: state.jvmArgs, javaHome: state.javaHome, lumosHudEnabled: state.lumosHudEnabled !== false,
         uiAccent: state.uiAccent, uiTheme: state.uiTheme, uiMotion: state.uiMotion !== false, hideOnLaunch: !!state.hideOnLaunch, homeLayout: state.homeLayout || 'launchpad'
       });
       clearTimeout(ui.saveTimeout);
@@ -2143,7 +2145,7 @@
   // ───────────────────────── Command palette ─────────────────────────
   function paletteItems() {
     const items = [];
-    const add = (group, label, ic, run, hint = '') => items.push({ group, label, ic, run, hint });
+    const add = (group, label, ic, run, hint = '') => items.push({ group, label, ic, run, hint: keyLabel(hint) });
     if (state.running) add('Actions', 'Stop the running game', 'stop', () => send('stop_process'));
     else add('Actions', `Launch ${state.selectedVersion}`, 'play', launch, '⌘↩');
     add('Actions', 'New instance', 'plus', openNewInstance);
@@ -2270,7 +2272,7 @@
         if ((state.profiles || []).length <= 1) { toast('You need at least one instance.', 'err'); break; }
         if (!confirmClick(el, icon('trash') + 'Click again')) break;
         send('delete_profile', { id: state.activeProfileId }); showLibDetail(false);
-        toast('Instance removed. Its folder is in the Trash if you need it back.', 'info');
+        toast(`Instance removed. Its folder is in the ${TRASH} if you need it back.`, 'info');
         break;
       case 'content-refresh': loadContent(); break;
       case 'content-folder': send('open_folder', { target: ui.contentKind }); break;
@@ -2279,7 +2281,7 @@
         ui.modOffset = 0; ui.modLoaded = true; go('discover'); searchMods(); break;
       case 'toggle-content': send('toggle_content', { kind: ui.contentKind, file: d.file, enabled: el.checked }); break;
       case 'trash-content':
-        if (!confirmClick(el, icon('trash'))) { el.title = 'Click again to move to Trash'; break; }
+        if (!confirmClick(el, icon('trash'))) { el.title = `Click again to move to ${TRASH}`; break; }
         send('trash_content', { kind: ui.contentKind, file: d.file }); break;
       case 'install': send('download_modrinth', { slug: d.slug, projectType: d.type }); window.onInstallStatus(d.slug, 'installing', ''); break;
       case 'page': { const next = Math.max(0, ui.modOffset + (+d.dir) * 20); if (next >= ui.modTotal && +d.dir > 0) break; ui.modOffset = next; searchMods(); break; }
@@ -2339,7 +2341,7 @@
   $('setFullscreen').addEventListener('change', e => saveSettings({ fullscreen: e.target.checked }));
   $('javaHome').addEventListener('change', e => saveSettings({ javaHome: e.target.value.trim() }));
   $('setJvmArgs').addEventListener('change', e => saveSettings({ jvmArgs: e.target.value.trim() }));
-  $('setHud').addEventListener('change', e => saveSettings({ emberHudEnabled: e.target.checked }));
+  $('setHud').addEventListener('change', e => saveSettings({ lumosHudEnabled: e.target.checked }));
   $('setMotion').addEventListener('change', e => saveSettings({ uiMotion: e.target.checked }));
 
   // Account
@@ -2431,6 +2433,11 @@
   window.addEventListener('resize', closePopovers);
 
   // ───────────────────────── Boot ─────────────────────────
+  // Shortcut labels: ⌘ on a Mac, Ctrl everywhere else.
+  const keyLabel = IS_MAC ? (s => s)
+    : (s => s.replace(/⌘⇧/g, 'Ctrl+Shift+').replace(/⌘↩/g, 'Ctrl+Enter').replace(/⌘/g, 'Ctrl+'));
+  document.querySelectorAll('[data-tip]').forEach(el => { el.dataset.tip = keyLabel(el.dataset.tip); });
+  document.querySelectorAll('kbd').forEach(el => { el.textContent = keyLabel(el.textContent); });
   const logo = $('logoSrc').getAttribute('src');
   document.querySelectorAll('.js-logo').forEach(img => { img.src = logo; });
   renderSettingsValues(); renderHome(); renderStatus();

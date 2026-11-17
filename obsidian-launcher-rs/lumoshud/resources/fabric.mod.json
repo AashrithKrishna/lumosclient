@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "emberhud",
+  "id": "lumoshud",
   "version": "1.0.0",
   "name": "LumosHUD",
   "description": "Lunar-style in-game HUD for LumosClient (FPS, CPS, Coordinates, Keystrokes)",
@@ -9,6 +9,6 @@
   ],
   "environment": "client",
   "mixins": [
-    "emberhud.mixins.json"
+    "lumoshud.mixins.json"
   ]
 }

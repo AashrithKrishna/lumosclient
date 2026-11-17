@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-pub const USER_AGENT: &str = concat!("LumosClient/", env!("CARGO_PKG_VERSION"), " (+https://github.com/AashrithKrishna/emberclient)");
+pub const USER_AGENT: &str = concat!("LumosClient/", env!("CARGO_PKG_VERSION"), " (+https://github.com/AashrithKrishna/lumosclient)");
 
 /// The launcher-wide HTTP agent (connection pooling, timeouts, native roots).
 pub fn agent() -> ureq::Agent {
@@ -214,7 +214,7 @@ mod tests {
 
     #[test]
     fn validity_checks_size_and_sha1() {
-        let dir = std::env::temp_dir().join(format!("ember-net-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("lumos-net-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let p = dir.join("a.txt");
         fs::write(&p, b"hello").unwrap();

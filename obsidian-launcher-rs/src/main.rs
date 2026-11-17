@@ -2,6 +2,9 @@
 //! backend over `window.ipc.postMessage(JSON)`; the backend answers by evaluating
 //! `window.renderState(...)`, `window.onTask(...)` and friends in the page.
 
+// No console window behind the launcher on Windows.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -84,8 +87,8 @@ struct LauncherConfig {
     memory_mb: u32,
     #[serde(default)]
     jvm_args: String,
-    #[serde(default = "default_true")]
-    ember_hud_enabled: bool,
+    #[serde(default = "default_true", alias = "emberHudEnabled")]
+    lumos_hud_enabled: bool,
     #[serde(default = "default_accent")]
     ui_accent: String,
     #[serde(default = "default_theme")]
@@ -129,7 +132,7 @@ fn default_true() -> bool {
     true
 }
 fn default_accent() -> String {
-    "ember".into()
+    "blaze".into()
 }
 fn default_theme() -> String {
     "dark".into()
@@ -158,6 +161,16 @@ fn system_memory_mb() -> u64 {
             .and_then(|s| s.trim().parse::<u64>().ok())
             .map(|b| b / 1024 / 1024)
             .unwrap_or(0);
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+        status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        // SAFETY: `status` is a properly sized, writable MEMORYSTATUSEX with dwLength set.
+        if unsafe { GlobalMemoryStatusEx(&mut status) } != 0 {
+            return status.ullTotalPhys / 1024 / 1024;
+        }
     }
     if cfg!(target_os = "linux") {
         return fs::read_to_string("/proc/meminfo")
@@ -245,7 +258,7 @@ fn bundled_file(rel: &str, dev_rel: &str) -> Option<PathBuf> {
 }
 
 fn bundled_hud() -> Option<PathBuf> {
-    bundled_file("mods/emberhud-1.21.11.jar", "emberhud/emberhud-1.21.11.jar")
+    bundled_file("mods/lumoshud-1.21.11.jar", "lumoshud/lumoshud-1.21.11.jar")
 }
 
 fn bundled_authlib() -> Option<PathBuf> {
@@ -253,6 +266,39 @@ fn bundled_authlib() -> Option<PathBuf> {
         &format!("authlib-injector-{}.jar", elyby::AUTHLIB_VERSION),
         &format!("vendor/authlib-injector-{}.jar", elyby::AUTHLIB_VERSION),
     )
+}
+
+/// Where removed files go, as the player knows it.
+const TRASH_NAME: &str = if cfg!(target_os = "macos") {
+    "the Trash"
+} else if cfg!(windows) {
+    "the Recycle Bin"
+} else {
+    "LumosClient's trash folder"
+};
+
+/// Moves a file or folder somewhere recoverable instead of deleting it: the macOS Trash,
+/// the Windows Recycle Bin, or LumosClient's own trash folder elsewhere.
+fn move_to_trash(base_dir: &Path, path: &Path, label: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let _ = (base_dir, label);
+        trash::delete(path).map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let trash = if cfg!(target_os = "macos") {
+            dirs::home_dir().unwrap_or_default().join(".Trash")
+        } else {
+            base_dir.join("trash")
+        };
+        fs::create_dir_all(&trash).map_err(|e| e.to_string())?;
+        let mut dest = trash.join(label);
+        if dest.exists() {
+            dest = trash.join(format!("{label} {}", now_millis()));
+        }
+        fs::rename(path, &dest).map_err(|e| e.to_string())
+    }
 }
 
 /// Opens a folder or URL with the OS's default handler.
@@ -362,7 +408,7 @@ impl AppState {
     fn new() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let base_dir = home.join("LumosClient");
-        // Renamed from EmberClient: carry the player's instances, settings and downloads over.
+        // Earlier builds used other folder names: carry the player's instances, settings and downloads over.
         let legacy = ["VyrnClient", "MystralClient", "EmberClient"].into_iter().map(|n| home.join(n)).find(|d| d.is_dir()).unwrap_or_else(|| home.join("EmberClient"));
         if !base_dir.exists() && legacy.is_dir() {
             let _ = fs::rename(&legacy, &base_dir);
@@ -389,7 +435,7 @@ impl AppState {
                 fullscreen: false,
                 memory_mb: default_memory(),
                 jvm_args: String::new(),
-                ember_hud_enabled: true,
+                lumos_hud_enabled: true,
                 ui_accent: default_accent(),
                 ui_theme: default_theme(),
                 ui_motion: true,
@@ -416,6 +462,7 @@ impl AppState {
         if config.ely_client_token.is_empty() {
             config.ely_client_token = elyby::new_client_token();
         }
+        migrate_legacy_names(&mut config);
         if config.profiles.is_empty() {
             config.profiles.push(Profile {
                 id: "default".into(),
@@ -517,7 +564,7 @@ impl AppState {
             "fullscreen": self.config.fullscreen,
             "memoryMb": self.config.memory_mb,
             "jvmArgs": self.config.jvm_args,
-            "emberHudEnabled": self.config.ember_hud_enabled,
+            "lumosHudEnabled": self.config.lumos_hud_enabled,
             "versions": self.version_list(),
             "catalog": catalog,
             "catalogError": self.catalog_error,
@@ -694,6 +741,7 @@ fn spawn_streaming_exe(
     stdin_payload: Option<String>,
 ) -> Result<(), String> {
     let mut cmd = Command::new(exe);
+    installer::no_console(&mut cmd);
     cmd.args(args)
         .current_dir(cwd)
         .stdin(if stdin_payload.is_some() { Stdio::piped() } else { Stdio::null() })
@@ -941,9 +989,26 @@ fn build_auth(shared: &Arc<Mutex<AppState>>, cfg: &LauncherConfig, paths: &insta
     }
 }
 
-fn sync_ember_hud(game_dir: &Path, version: &str, enabled: bool) {
+/// File name the HUD mod had before the rename; removed from instances on launch.
+const LEGACY_HUD_JAR: &str = "emberhud-1.21.11.jar";
+
+/// Settings saved by builds from before the rename.
+fn migrate_legacy_names(config: &mut LauncherConfig) {
+    if config.ui_accent == "ember" {
+        config.ui_accent = default_accent();
+    }
+    for s in &mut config.servers {
+        if s.name == "Local Ember Server" {
+            s.name = "Local Server".into();
+        }
+    }
+}
+
+fn sync_lumos_hud(game_dir: &Path, version: &str, enabled: bool) {
     let mods_dir = game_dir.join("mods");
-    let dest = mods_dir.join("emberhud-1.21.11.jar");
+    // Earlier builds shipped the HUD under its old name; two copies would draw it twice.
+    let _ = fs::remove_file(mods_dir.join(LEGACY_HUD_JAR));
+    let dest = mods_dir.join("lumoshud-1.21.11.jar");
     let wants = enabled && version.contains("Fabric") && version.contains("1.21.11");
     if wants {
         if let Some(src) = bundled_hud() {
@@ -966,7 +1031,7 @@ fn launch_java(
     let report = |l: &str, f: f64| rep.report(l, f);
     let auth = build_auth(shared, cfg, &snap.paths, rep)?;
     let (resolved, prepared, managed_java) = installer::install(&snap.paths, &cfg.selected_version, &report)?;
-    sync_ember_hud(&snap.game_dir, &cfg.selected_version, cfg.ember_hud_enabled);
+    sync_lumos_hud(&snap.game_dir, &cfg.selected_version, cfg.lumos_hud_enabled);
     let custom = (!cfg.java_home.trim().is_empty())
         .then(|| installer::java_binary_in_home(Path::new(cfg.java_home.trim())))
         .filter(|p| p.is_file());
@@ -1487,7 +1552,7 @@ fn main() {
 
     let b64 = |bytes: &[u8]| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
     let html = include_str!("ui.html")
-        .replace("{{LOGO_DATA_URI}}", &format!("data:image/png;base64,{}", b64(include_bytes!("../assets/emberclient_logo_128.png"))))
+        .replace("{{LOGO_DATA_URI}}", &format!("data:image/png;base64,{}", b64(include_bytes!("../assets/lumos_logo_128.png"))))
         .replace("{{PANORAMA_DATA_URI}}", &format!("data:image/jpeg;base64,{}", b64(include_bytes!("../assets/panorama.jpg"))));
 
     let webview = WebViewBuilder::new()
@@ -1566,20 +1631,10 @@ fn main() {
                     if let (Some(folder), true) = (content_folder(&kind), safe_file_name(&file)) {
                         let game_dir = ipc_state.lock().unwrap().active_game_dir();
                         let src = game_dir.join(folder).join(&file);
-                        // Recoverable: the macOS Trash, else LumosClient's own trash folder.
-                        let trash = if cfg!(target_os = "macos") {
-                            dirs::home_dir().unwrap_or_default().join(".Trash")
-                        } else {
-                            ipc_state.lock().unwrap().base_dir.join("trash")
-                        };
-                        let _ = fs::create_dir_all(&trash);
-                        let mut dest = trash.join(&file);
-                        if dest.exists() {
-                            dest = trash.join(format!("{}-{file}", now_millis()));
-                        }
-                        match fs::rename(&src, &dest) {
-                            Ok(_) => call_js(&ipc_proxy, "onNotice", json!({"message": format!("Moved {file} to the Trash"), "kind": "info"})),
-                            Err(e) => call_js(&ipc_proxy, "onNotice", json!({"message": format!("Couldn't move {file} to the Trash: {e}"), "kind": "err"})),
+                        let base = ipc_state.lock().unwrap().base_dir.clone();
+                        match move_to_trash(&base, &src, &file) {
+                            Ok(_) => call_js(&ipc_proxy, "onNotice", json!({"message": format!("Moved {file} to {TRASH_NAME}"), "kind": "info"})),
+                            Err(e) => call_js(&ipc_proxy, "onNotice", json!({"message": format!("Couldn't move {file} to {TRASH_NAME}: {e}"), "kind": "err"})),
                         }
                         push_content(&ipc_proxy, &game_dir, &kind);
                     }
@@ -1655,16 +1710,9 @@ fn main() {
                         // Recoverable: the instance folder goes to the Trash, not straight to deletion.
                         let folder = st.base_dir.join("instances").join(&id);
                         if folder.is_dir() {
-                            let trash = if cfg!(target_os = "macos") {
-                                dirs::home_dir().unwrap_or_default().join(".Trash")
-                            } else {
-                                st.base_dir.join("trash")
-                            };
-                            let _ = fs::create_dir_all(&trash);
                             let name = st.config.profiles.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_else(|| id.clone());
                             let clean: String = name.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-').collect();
-                            let dest = trash.join(format!("LumosClient {} {}", clean.trim(), now_millis()));
-                            let _ = fs::rename(&folder, &dest);
+                            let _ = move_to_trash(&st.base_dir, &folder, &format!("LumosClient {}", clean.trim()));
                         }
                         st.config.profiles.retain(|p| p.id != id);
                         if st.config.active_profile_id == id {
@@ -1752,11 +1800,11 @@ fn main() {
                     if let Some(jh) = v.get("javaHome").and_then(|x| x.as_str()) {
                         st.config.java_home = jh.trim().to_owned();
                     }
-                    if let Some(hud) = v.get("emberHudEnabled").and_then(|x| x.as_bool()) {
-                        st.config.ember_hud_enabled = hud;
+                    if let Some(hud) = v.get("lumosHudEnabled").and_then(|x| x.as_bool()) {
+                        st.config.lumos_hud_enabled = hud;
                     }
                     if let Some(a) = v.get("uiAccent").and_then(|x| x.as_str()) {
-                        if ["ember", "amber", "crimson", "violet", "azure", "emerald"].contains(&a) {
+                        if ["blaze", "amber", "crimson", "violet", "azure", "emerald"].contains(&a) {
                             st.config.ui_accent = a.to_owned();
                         }
                     }
@@ -1966,6 +2014,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn old_settings_carry_over_with_new_names() {
+        let old = r#"{"playerName":"P","minecraftDir":"","javaHome":"","activeProfileId":"default","selectedVersion":"1.21.11",
+            "resolutionWidth":1280,"resolutionHeight":720,"profiles":[],"emberHudEnabled":false,"uiAccent":"ember",
+            "servers":[{"id":"s","name":"Local Ember Server","address":"127.0.0.1:25565"},{"id":"t","name":"Mine","address":"x"}]}"#;
+        let mut cfg: LauncherConfig = serde_json::from_str(old).expect("old config still parses");
+        assert!(!cfg.lumos_hud_enabled);
+        migrate_legacy_names(&mut cfg);
+        assert_eq!(cfg.ui_accent, "blaze");
+        assert_eq!(cfg.servers[0].name, "Local Server");
+        assert_eq!(cfg.servers[1].name, "Mine");
+        let saved = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(saved["lumosHudEnabled"], false);
+        assert!(saved.get("emberHudEnabled").is_none());
+    }
+
+    #[test]
     fn log4j_xml_becomes_text() {
         let mut x = Log4jText::default();
         assert_eq!(x.feed("plain line"), vec!["plain line"]);
@@ -1987,7 +2051,7 @@ mod tests {
 
     #[test]
     fn modrinth_versions() {
-        let paths = installer::Paths::new(&std::env::temp_dir().join("ember-mcv-test"), None);
+        let paths = installer::Paths::new(&std::env::temp_dir().join("lumos-mcv-test"), None);
         assert_eq!(mc_version_for(&paths, "Fabric 1.21.11"), "1.21.11");
         assert_eq!(mc_version_for(&paths, "1.21.11"), "1.21.11");
         assert_eq!(mc_version_for(&paths, HORIZON_ID), "26.3");

@@ -17,11 +17,11 @@ rm -rf "$BUILD"
 mkdir -p "$BUILD/classes"
 
 "$JAVAC" -proc:none --release 21 -cp "$CP" -d "$BUILD/classes" \
-  "$DIR/src/dev/emberclient/hud/EmberHudMixin.java" \
-  "$DIR/src/dev/emberclient/hud/EmberHudRenderer.java"
+  "$DIR/src/dev/lumosclient/hud/LumosHudMixin.java" \
+  "$DIR/src/dev/lumosclient/hud/LumosHudRenderer.java"
 
 cp "$DIR/resources/fabric.mod.json" "$BUILD/classes/"
-cp "$DIR/resources/emberhud.mixins.json" "$BUILD/classes/"
+cp "$DIR/resources/lumoshud.mixins.json" "$BUILD/classes/"
 
-"$JAR_BIN" cf "$DIR/emberhud-1.21.11.jar" -C "$BUILD/classes" .
-echo "Built $DIR/emberhud-1.21.11.jar"
+"$JAR_BIN" cf "$DIR/lumoshud-1.21.11.jar" -C "$BUILD/classes" .
+echo "Built $DIR/lumoshud-1.21.11.jar"

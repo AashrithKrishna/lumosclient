@@ -11,7 +11,7 @@ MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 RES_BIN="$RESOURCES/bin"
 HROOT="$RESOURCES/horizon-root"
-LOGO_PNG="$LAUNCHER/assets/emberclient_logo.png"
+LOGO_PNG="$LAUNCHER/assets/lumos_logo.png"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$LAUNCHER/Cargo.toml" | head -1)"
 
 AUTHLIB_VERSION="1.2.8"
@@ -105,7 +105,7 @@ PLIST
 cp "$LAUNCHER/target/release/lumos-launcher" "$MACOS/lumos-launcher"
 cp "$ROOT/target/release/horizon-client" "$RES_BIN/horizon-client"
 cp "$ROOT/target/release/horizon-prepare" "$RES_BIN/horizon-prepare"
-cp "$LAUNCHER/emberhud/emberhud-1.21.11.jar" "$RESOURCES/mods/emberhud-1.21.11.jar"
+cp "$LAUNCHER/lumoshud/lumoshud-1.21.11.jar" "$RESOURCES/mods/lumoshud-1.21.11.jar"
 cp "$AUTHLIB_JAR" "$RESOURCES/authlib-injector-${AUTHLIB_VERSION}.jar"
 # Horizon preparer support files (copied to ~/LumosClient/horizon on first use).
 cp "$ROOT/research-lock.json" "$HROOT/research-lock.json"

@@ -1,4 +1,4 @@
-package dev.emberclient.hud;
+package dev.lumosclient.hud;
 
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -7,9 +7,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(targets = "giq", remap = false)
-public class EmberHudMixin {
+public class LumosHudMixin {
     @Inject(method = "a(Lgir;Lgez;)V", at = @At("TAIL"), remap = false)
-    private void emberclient$onRenderHud(@Coerce Object drawContext, @Coerce Object tickCounter, CallbackInfo ci) {
-        EmberHudRenderer.render(drawContext);
+    private void lumos$onRenderHud(@Coerce Object drawContext, @Coerce Object tickCounter, CallbackInfo ci) {
+        LumosHudRenderer.render(drawContext);
     }
 }

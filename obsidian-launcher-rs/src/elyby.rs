@@ -577,7 +577,7 @@ mod tests {
 
     #[test]
     fn jar_with_wrong_hash_is_rejected() {
-        let dir = std::env::temp_dir().join(format!("ember-elyby-bundled-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("lumos-elyby-bundled-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let fake = dir.join("fake.jar");
@@ -600,7 +600,7 @@ mod tests {
     #[test]
     #[ignore]
     fn live_authlib_download() {
-        let dir = std::env::temp_dir().join(format!("ember-elyby-authlib-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("lumos-elyby-authlib-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let jar = ensure_authlib_injector(&dir, None).unwrap();
         assert!(jar_is_valid(&jar));
