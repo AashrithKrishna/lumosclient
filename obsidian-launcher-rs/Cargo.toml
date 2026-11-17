@@ -17,6 +17,9 @@ sha1_smol = "1"
 sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 minisign-verify = "0.2"
+# mod_plan.rs: Horizon manifests (horizon-mod.toml) and their version requirements.
+toml = "0.8"
+semver = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = "0.15"

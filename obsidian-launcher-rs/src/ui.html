@@ -828,6 +828,7 @@
         </div>
         <div class="row" id="contentTools">
           <div class="search-box" style="width:200px"><svg class="i sm"><use href="#i-search"/></svg><input class="input" id="contentSearch" aria-label="Filter installed content" placeholder="Filter…" style="height:34px" /></div>
+          <button class="btn sm" id="modsCheckBtn" data-act="mods-check" title="Look for missing dependencies, incompatible mods and duplicates"><svg class="i sm"><use href="#i-check"/></svg>Check mods</button><!-- feat/deps -->
           <button class="btn sm icon" data-act="content-refresh" title="Refresh" aria-label="Refresh"><svg class="i sm"><use href="#i-refresh"/></svg></button>
           <button class="btn sm" data-act="content-folder"><svg class="i sm"><use href="#i-folder"/></svg>Folder</button>
           <button class="btn sm" data-act="content-import" title="Add .jar mods or .zip packs from your computer"><svg class="i sm"><use href="#i-plus"/></svg>Add files</button>
@@ -2265,6 +2266,8 @@
     const pid = profileId || state.activeProfileId;
     const btn = pid === state.activeProfileId ? document.getElementById('dl-' + slug) : null;
     if (status === 'installed') (ui.installed[pid] ||= new Set()).add(slug);
+    // feat/deps: the install plan has problems; the warning dialog (onModPlan) takes it from here.
+    if (status === 'blocked') { if (btn) { btn.disabled = false; btn.className = 'btn sm primary'; btn.innerHTML = icon('download') + 'Install'; } return; }
     if (btn) {
       btn.disabled = status !== 'error';
       btn.className = 'btn sm ' + (status === 'installed' ? 'ok' : 'primary');
@@ -3154,5 +3157,139 @@
 })();
 </script>
 <!-- ═════════════════ end feat/updater ═════════════════ -->
+<!-- ═════════════════ feat/deps: install plans and Check mods (mod_plan.rs) ═════════════════ -->
+<style>
+  .plan-card { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .plan-card h2 { margin: 0; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+  .plan-card h2 svg { color: var(--warn, #e5a50a); }
+  .plan-card p { margin: 0; color: var(--fg-2); font-size: 13px; line-height: 1.5; }
+  .plan-card ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .plan-card li { font-size: 13px; line-height: 1.45; padding: 8px 10px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); display: flex; gap: 8px; align-items: flex-start; }
+  .plan-card li .grow { flex: 1; min-width: 0; }
+  .plan-card li.bad { border-color: rgba(229, 72, 77, .45); }
+  .plan-card li.warn { border-color: rgba(229, 165, 10, .45); }
+  .plan-card .sub { font-size: 11.5px; color: var(--fg-3); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
+  .plan-card .acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+</style>
+<script>
+(() => {
+  'use strict';
+  const L = window.lumosUi;
+  if (!L) return;
+  const { $, esc, icon, toast, send } = L;
+  let pending = null; // the blocked install the dialog is about
+  let report = null;  // the last Check mods answer
+  function scrim() {
+    let el = $('planScrim');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'planScrim'; el.className = 'scrim';
+      el.innerHTML = '<div class="modal plan-card" role="dialog" aria-modal="true" aria-labelledby="planTitle" id="planCard"></div>';
+      el.addEventListener('click', e => { if (e.target === el) close(); });
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+  function close() { if ($('planScrim')) $('planScrim').classList.remove('open'); pending = null; }
+  const list = (items, cls) => items.length ? `<ul>${items.map(t => `<li class="${cls || ''}"><span class="grow">${t}</span></li>`).join('')}</ul>` : '';
+  const names = a => a.map(esc).join(', ');
+
+  // An install whose plan has problems: say what clashes with what and what's missing.
+  window.onModPlan = function (d) {
+    if (!d || !d.plan) return;
+    pending = d;
+    const p = d.plan;
+    const blocking = (p.problems || []).filter(x => x.blocking);
+    const notes = (p.problems || []).filter(x => !x.blocking);
+    const missing = blocking.filter(x => x.kind === 'missing');
+    const prof = (L.getState().profiles || []).find(x => x.id === d.profileId);
+    let html = `<h2 id="planTitle">${icon('alert', '')}${esc(p.title)} may not work in this instance</h2>`
+      + `<p>Lumos checked it against ${prof ? '<b>' + esc(prof.name) + '</b>' : 'this instance'} before installing and found ${blocking.length === 1 ? 'a problem' : blocking.length + ' problems'}. Nothing has been installed yet.</p>`
+      + list(blocking.map(x => esc(x.message)), 'bad');
+    if (missing.length) html += `<p>Lumos can't add a missing dependency for you: no build of it is available for this game version. If you install anyway, ${esc(p.title)} will probably stop the game from starting until that dependency is updated.</p>`;
+    if (notes.length) html += list(notes.map(x => esc(x.message)), 'warn');
+    if ((p.deps || []).length) html += `<div class="sub">Would also install</div><p>${names(p.deps)}</p>`;
+    if ((p.present || []).length) html += `<div class="sub">Already installed</div><p>${names(p.present)}</p>`;
+    if ((p.optional || []).length) html += `<div class="sub">Optional extras (not installed)</div><p>${names(p.optional)}</p>`;
+    html += `<div class="acts"><button class="btn sm primary" data-act="plan-cancel">Cancel</button><button class="btn sm danger" data-act="plan-force">${icon('download')}Install anyway</button></div>`;
+    $('planCard') || scrim();
+    $('planCard').innerHTML = html;
+    scrim().classList.add('open');
+  };
+
+  // Check mods: what's missing, what clashes, what's there twice.
+  window.onModCheck = function (d) {
+    const btn = $('modsCheckBtn'); if (btn) { btn.disabled = false; btn.innerHTML = icon('check') + 'Check mods'; }
+    if (!d) return;
+    if (d.error) { toast(d.error, 'err'); return; }
+    report = d;
+    const r = d.report || {};
+    const missing = r.missing || [], conflicts = r.conflicts || [], dups = r.duplicates || [], warns = r.warnings || [], unknown = r.unknown || [];
+    const bad = missing.length + conflicts.length + dups.length;
+    let html = `<h2 id="planTitle">${icon(bad ? 'alert' : 'check', '')}${bad ? `Found ${bad === 1 ? 'a problem' : bad + ' problems'}` : 'Your mods look fine'}</h2>`
+      + `<p>Checked ${r.checked || 0} file${r.checked === 1 ? '' : 's'} for missing dependencies, incompatible mods and duplicates.</p>`;
+    if (missing.length) {
+      html += `<div class="sub">Missing dependencies</div><ul>` + missing.map((m, i) => `<li class="bad"><span class="grow"><b>${esc(m.title)}</b> is needed by ${names(m.neededBy || [])}.${m.disabledFile ? ' It is installed but switched off.' : m.installable ? '' : ' It has no version for this game version, so it can\'t be installed here.'}</span>`
+        + (m.disabledFile ? `<button class="btn sm" data-act="check-enable" data-i="${i}">Switch on</button>` : m.installable ? `<button class="btn sm primary" data-act="check-install" data-i="${i}">${icon('download')}Install</button>` : '')
+        + `</li>`).join('') + `</ul>`;
+    }
+    if (conflicts.length) html += `<div class="sub">Incompatible</div>` + list(conflicts.map(esc), 'bad') + `<p>Switch one of each pair off in the Mods tab.</p>`;
+    if (dups.length) html += `<div class="sub">Duplicates</div>` + list(dups.map(esc), 'bad');
+    if (warns.length) html += `<div class="sub">Warnings</div>` + list(warns.map(esc), 'warn');
+    if (unknown.length) html += `<p class="faint">Not on Modrinth, so not checked: ${names(unknown)}.</p>`;
+    const installable = missing.filter(m => m.installable).length;
+    html += `<div class="acts">${installable > 1 ? `<button class="btn sm" data-act="check-install-all">${icon('download')}Install all missing</button>` : ''}<button class="btn sm primary" data-act="plan-close">Close</button></div>`;
+    pending = null;
+    $('planCard') || scrim();
+    $('planCard').innerHTML = html;
+    scrim().classList.add('open');
+  };
+
+  function installMissing(m) {
+    const pid = (report && report.profileId) || L.getState().activeProfileId;
+    send('download_modrinth', { slug: m.id, projectType: 'mod', profileId: pid });
+    toast(`Installing ${m.title}…`, 'info');
+  }
+  // The button only makes sense on the Mods tab.
+  function syncCheckBtn() {
+    const b = $('modsCheckBtn'), on = document.querySelector('#contentSeg button.active');
+    if (b) b.classList.toggle('hidden', !on || on.dataset.kind !== 'mods');
+  }
+  if ($('contentSeg')) new MutationObserver(syncCheckBtn).observe($('contentSeg'), { subtree: true, attributes: true, attributeFilter: ['class'] });
+  syncCheckBtn();
+
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-act]');
+    if (!el) return;
+    const missingAt = () => ((report && report.report && report.report.missing) || [])[+el.dataset.i];
+    switch (el.dataset.act) {
+      case 'plan-cancel': case 'plan-close': close(); break;
+      case 'plan-force': {
+        const d = pending; close();
+        if (!d) break;
+        send('download_modrinth', { slug: d.slug, projectType: d.projectType, profileId: d.profileId, force: true });
+        window.onInstallStatus(d.slug, 'installing', '', d.profileId);
+        break;
+      }
+      case 'mods-check': {
+        const pid = L.getState().activeProfileId;
+        el.disabled = true; el.innerHTML = '<span class="spinner" style="width:12px;height:12px"></span>Checking';
+        send('check_mods', { profileId: pid });
+        break;
+      }
+      case 'check-install': { const m = missingAt(); if (m) { installMissing(m); el.disabled = true; } break; }
+      case 'check-enable': {
+        const m = missingAt(); if (!m) break;
+        send('toggle_content', { profileId: report.profileId, kind: 'mods', file: m.disabledFile, enabled: true });
+        el.disabled = true; toast(`Switched on ${m.title}.`);
+        break;
+      }
+      case 'check-install-all': ((report && report.report && report.report.missing) || []).filter(m => m.installable).forEach(installMissing); close(); break;
+    }
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('planScrim') && $('planScrim').classList.contains('open')) close(); });
+})();
+</script>
+<!-- ═════════════════ end feat/deps ═════════════════ -->
 </body>
 </html>

@@ -26,6 +26,7 @@ mod forge;
 mod horizon_mods;
 mod hud_config;
 mod modpack;
+mod mod_plan;
 mod native_builds;
 mod installer;
 mod net;
@@ -1636,138 +1637,96 @@ fn installed_projects(dir: &Path) -> HashMap<String, String> {
     out
 }
 
-#[allow(clippy::too_many_arguments)]
-fn install_modrinth_project(
-    proxy: &EventLoopProxy<UserEvent>,
-    game_dir: &Path,
-    project: &str,
-    project_type: &str,
-    mc_ver: &str,
-    installed_loader: Option<(u64, u64, u64)>,
-    depth: u8,
-    loader: &str,
-) -> Result<String, String> {
-    let mut existing: Option<HashMap<String, String>> = None;
-    install_modrinth_inner(proxy, game_dir, project, project_type, mc_ver, installed_loader, depth, &mut existing, loader)
+// ── feat/deps: install plans (mod_plan.rs) ──
+
+/// How a planned install ended.
+enum PlanOutcome {
+    Installed(String),
+    /// Problems the player has to see first (nothing was saved).
+    Blocked(mod_plan::Summary),
+    Failed(String),
 }
 
+/// Plans a Modrinth install (required dependencies, conflicts, duplicates) and, when nothing
+/// stands in the way (or `force`), downloads and saves it all.
 #[allow(clippy::too_many_arguments)]
-fn install_modrinth_inner(
+fn plan_and_install_modrinth(
     proxy: &EventLoopProxy<UserEvent>,
     game_dir: &Path,
     project: &str,
     project_type: &str,
     mc_ver: &str,
-    installed_loader: Option<(u64, u64, u64)>,
-    depth: u8,
-    existing: &mut Option<HashMap<String, String>>,
     loader: &str,
-) -> Result<String, String> {
-    if depth > 3 {
-        return Ok(String::new());
-    }
-    if project.is_empty() || !project.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-        return Err("That Modrinth project name isn't valid.".into());
-    }
-    let game_versions = url_encode(&format!("[\"{mc_ver}\"]"));
-    let compat_url = if project_type == "mod" {
-        format!(
-            "https://api.modrinth.com/v2/project/{project}/version?game_versions={game_versions}&loaders={}",
-            url_encode(&format!("[{}]", forge::compatible_modrinth_loaders(loader).iter().map(|l| format!("\"{l}\"")).collect::<Vec<_>>().join(",")))
-        )
-    } else {
-        format!("https://api.modrinth.com/v2/project/{project}/version?game_versions={game_versions}")
-    };
-    let versions = net::get_json(&compat_url)?;
-    let mut candidates = versions.as_array().cloned().unwrap_or_default();
-    if candidates.is_empty() && project_type == "shader" {
-        // Shader packs rarely tag game versions; any release works with Iris.
-        candidates = net::get_json(&format!("https://api.modrinth.com/v2/project/{project}/version"))?.as_array().cloned().unwrap_or_default();
-    }
-    if candidates.is_empty() {
-        return Err(format!("No version of this works with Minecraft {mc_ver}."));
-    }
-    // Prefer releases, then betas, then alphas, keeping newest-first order within each.
-    candidates.sort_by_key(|v| match v.get("version_type").and_then(|t| t.as_str()) {
-        Some("release") => 0,
-        Some("beta") => 1,
-        _ => 2,
-    });
+    fabric_loader: Option<(u64, u64, u64)>,
+    force: bool,
+) -> PlanOutcome {
     let folder = match project_type {
         "resourcepack" => "resourcepacks",
         "shader" => "shaderpacks",
         _ => "mods",
     };
-    let dest_dir = game_dir.join(folder);
-    fs::create_dir_all(&dest_dir).map_err(|e| format!("Couldn't create {}: {e}", dest_dir.display()))?;
-    let known = existing.get_or_insert_with(|| installed_projects(&dest_dir));
-    let project_id = candidates.first().and_then(|v| v.get("project_id")).and_then(|p| p.as_str()).unwrap_or("").to_owned();
-    let old_file = known.get(&project_id).cloned();
-    // A dependency that's already there is left alone (whatever version the player has).
-    if depth > 0 {
-        if let Some(f) = &old_file {
-            return Ok(format!("{f} (already installed)"));
-        }
+    let dest = game_dir.join(folder);
+    let installed = match mod_plan::identify(&mod_plan::Live, mod_plan::scan_dir(&dest)) {
+        Ok(i) => i,
+        Err(e) => return PlanOutcome::Failed(e),
+    };
+    let plan = match mod_plan::plan_modrinth(&mod_plan::Live, project, project_type, mc_ver, loader, &installed) {
+        Ok(p) => p,
+        Err(e) => return PlanOutcome::Failed(e),
+    };
+    if plan.summary.blocked() && !force {
+        return PlanOutcome::Blocked(plan.summary);
     }
-
-    for ver in &candidates {
-        let Some(file_obj) = ver
-            .get("files")
-            .and_then(|f| f.as_array())
-            .and_then(|arr| arr.iter().find(|f| f.get("primary").and_then(|p| p.as_bool()) == Some(true)).or_else(|| arr.first()))
-        else {
-            continue;
-        };
-        let Some(dl_url) = file_obj.get("url").and_then(|u| u.as_str()) else { continue };
-        let Some(filename) = file_obj.get("filename").and_then(|f| f.as_str()) else { continue };
-        let safe_name = Path::new(filename).file_name().unwrap_or_default().to_string_lossy().into_owned();
-        if !safe_file_name(&safe_name) {
-            continue;
+    let download = |f: &mod_plan::FileRef, p: &Path| net::download_verified(&f.url, p, f.sha1.as_deref(), f.size);
+    let loader_ok = |p: &Path| project_type != "mod" || loader != "fabric" || jar_matches_fabric_loader(p, fabric_loader);
+    let log = |l: &str| push_log(proxy, &format!("[Modrinth] {l}"));
+    match mod_plan::execute_modrinth(&plan, &dest, force, &download, &loader_ok, &log) {
+        Ok(done) => PlanOutcome::Installed(plan.summary.success_message(&format!(" (Minecraft {mc_ver})"), &done.warnings)),
+        Err(mod_plan::ExecError::Blocked(problem)) => {
+            let mut s = plan.summary;
+            s.problems.push(problem);
+            PlanOutcome::Blocked(s)
         }
-        let sha1 = file_obj.pointer("/hashes/sha1").and_then(|h| h.as_str());
-        let size = file_obj.get("size").and_then(|s| s.as_u64());
-        let tmp_dest = dest_dir.join(format!(".tmp_{}_{}_{safe_name}", std::process::id(), now_millis()));
-        let final_dest = dest_dir.join(&safe_name);
-        if let Err(e) = net::download_verified(dl_url, &tmp_dest, sha1, size) {
-            push_log(proxy, &format!("[Modrinth] {e}"));
-            continue;
-        }
-        if project_type == "mod" && loader == "fabric" && !jar_matches_fabric_loader(&tmp_dest, installed_loader) {
-            push_log(proxy, &format!("[Modrinth] Skipped {filename} (needs a newer Fabric Loader)"));
-            let _ = fs::remove_file(&tmp_dest);
-            continue;
-        }
-        fs::rename(&tmp_dest, &final_dest).map_err(|e| format!("Couldn't save {safe_name}: {e}"))?;
-        // Replace the older copy of the same project so the game never loads it twice.
-        if let Some(old) = old_file.as_deref().filter(|o| *o != safe_name && safe_file_name(o)) {
-            let _ = fs::remove_file(dest_dir.join(old));
-            push_log(proxy, &format!("[Modrinth] Replaced {old}"));
-        }
-        if let Some(k) = existing.as_mut() {
-            k.insert(project_id.clone(), safe_name.clone());
-        }
-        push_log(proxy, &format!("[Modrinth] Installed {filename} -> {folder}/"));
-
-        // Required dependencies (e.g. Fabric API)
-        if project_type == "mod" {
-            for dep in ver.get("dependencies").and_then(|d| d.as_array()).into_iter().flatten() {
-                if dep.get("dependency_type").and_then(|t| t.as_str()) == Some("required") {
-                    if let Some(dep_id) = dep.get("project_id").and_then(|id| id.as_str()) {
-                        match install_modrinth_inner(proxy, game_dir, dep_id, "mod", mc_ver, installed_loader, depth + 1, existing, loader) {
-                            Ok(f) if !f.is_empty() => push_log(proxy, &format!("[Modrinth] Added required dependency {f}")),
-                            Ok(_) => {}
-                            Err(e) => push_log(proxy, &format!("[Modrinth] A required dependency couldn't be installed: {e}")),
-                        }
-                    }
-                }
-            }
-        }
-        return Ok(filename.to_owned());
+        Err(mod_plan::ExecError::Failed(e)) => PlanOutcome::Failed(e),
     }
-    Err(format!("No compatible file for Minecraft {mc_ver} could be installed."))
 }
 
-fn download_modrinth_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, slug: String, project_type: String, profile_id: String) {
+/// Shows the page's warning dialog for a plan that wasn't installed.
+fn send_plan(proxy: &EventLoopProxy<UserEvent>, summary: &mod_plan::Summary, slug: &str, project_type: &str, profile_id: &str) {
+    call_js(proxy, "onModPlan", json!({"slug": slug, "projectType": project_type, "profileId": profile_id, "plan": summary}));
+    push_install_status(proxy, slug, "blocked", "", profile_id);
+}
+
+/// "Check mods": missing dependencies, incompatible pairs and duplicates among installed mods.
+fn check_mods_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, profile_id: String) {
+    std::thread::spawn(move || {
+        let target = {
+            let st = shared.lock().unwrap();
+            st.target_instance(&profile_id).map(|(pid, dir, ver)| (pid, dir, ver, st.paths.clone()))
+        };
+        let Some((pid, game_dir, selected, paths)) = target else {
+            call_js(&proxy, "onModCheck", json!({"profileId": profile_id, "error": GONE_INSTANCE}));
+            return;
+        };
+        let result = if selected == HORIZON_ID {
+            let installed = mod_plan::scan_horizon(&game_dir);
+            Ok(mod_plan::check_horizon(&mod_plan::LiveHorizon, &installed, &native_builds::installed_ids(&game_dir)))
+        } else {
+            match mod_loader(&paths, &selected) {
+                None => Err("This instance has no mod loader, so it doesn't load mods.".to_owned()),
+                Some(loader) => mod_plan::identify(&mod_plan::Live, mod_plan::scan_dir(&game_dir.join("mods")))
+                    .and_then(|installed| mod_plan::check_modrinth(&mod_plan::Live, &installed, &mc_version_for(&paths, &selected), loader)),
+            }
+        };
+        match result {
+            Ok(report) => call_js(&proxy, "onModCheck", json!({"profileId": pid, "report": report})),
+            Err(e) => call_js(&proxy, "onModCheck", json!({"profileId": pid, "error": e})),
+        }
+    });
+}
+// ── end feat/deps ──
+
+fn download_modrinth_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, slug: String, project_type: String, profile_id: String, force: bool) {
     std::thread::spawn(move || {
         // Everything goes into the instance the player installed to, checked against its own version.
         let target = {
@@ -1791,10 +1750,17 @@ fn download_modrinth_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<A
             return;
         }
         if selected == HORIZON_ID {
-            push_install_status(&proxy, &slug, "installing", &format!("Installing {slug}..."));
-            match horizon_mods::install(&game_dir, &slug) {
-                Ok(file) => push_install_status(&proxy, &slug, "installed", &format!("Installed {file} (Horizon 26.3)")),
+            // feat/deps: content mods are planned against their manifest's dependencies and rules.
+            push_install_status(&proxy, &slug, "installing", &format!("Checking {slug}..."));
+            let installed = mod_plan::scan_horizon(&game_dir);
+            let natives = native_builds::installed_ids(&game_dir);
+            match mod_plan::plan_horizon(&mod_plan::LiveHorizon, &slug, &installed, &natives) {
                 Err(err) => push_install_status(&proxy, &slug, "error", &err),
+                Ok(plan) if plan.summary.blocked() && !force => send_plan(&proxy, &plan.summary, &slug, &project_type, &pid),
+                Ok(plan) => match mod_plan::execute_horizon(&plan, &game_dir) {
+                    Ok(()) => push_install_status(&proxy, &slug, "installed", &plan.summary.success_message(" (Horizon 26.3)", &[])),
+                    Err(err) => push_install_status(&proxy, &slug, "error", &err),
+                },
             }
             return;
         }
@@ -1812,9 +1778,10 @@ fn download_modrinth_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<A
         let mc_ver = mc_version_for(&paths, &selected);
         let fabric_loader = detect_fabric_loader_version(&paths, &selected);
         push_install_status(&proxy, &slug, "installing", &format!("Checking compatibility for {slug}..."));
-        match install_modrinth_project(&proxy, &game_dir, &slug, &project_type, &mc_ver, fabric_loader, 0, loader.unwrap_or("fabric")) {
-            Ok(filename) => push_install_status(&proxy, &slug, "installed", &format!("Installed {filename} (Minecraft {mc_ver})")),
-            Err(err) => push_install_status(&proxy, &slug, "error", &err),
+        match plan_and_install_modrinth(&proxy, &game_dir, &slug, &project_type, &mc_ver, loader.unwrap_or("fabric"), fabric_loader, force) {
+            PlanOutcome::Installed(msg) => push_install_status(&proxy, &slug, "installed", &msg),
+            PlanOutcome::Blocked(summary) => send_plan(&proxy, &summary, &slug, &project_type, &pid),
+            PlanOutcome::Failed(err) => push_install_status(&proxy, &slug, "error", &err),
         }
     });
 }
@@ -1853,6 +1820,7 @@ fn boost_instance_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppS
         let have = installed_projects(&game_dir.join("mods"));
         let mut added = Vec::new();
         let mut skipped = Vec::new();
+        let mut conflicted: Vec<String> = Vec::new();
         for slug in boost_mods() {
             // Modrinth answers by project id; ask for the slug's id to compare with what's there.
             let id = net::get_json(&format!("https://api.modrinth.com/v2/project/{slug}")).ok().and_then(|v| v.get("id").and_then(|i| i.as_str()).map(str::to_owned));
@@ -1860,10 +1828,10 @@ fn boost_instance_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppS
                 continue;
             }
             call_js(&proxy, "onNotice", json!({"message": format!("Adding {slug}..."), "kind": "info"}));
-            match install_modrinth_project(&proxy, &game_dir, slug, "mod", &mc_ver, loader, 0, "fabric") {
-                Ok(f) if !f.is_empty() => added.push(slug),
-                Ok(_) => {}
-                Err(_) => skipped.push(slug),
+            match plan_and_install_modrinth(&proxy, &game_dir, slug, "mod", &mc_ver, "fabric", loader, false) {
+                PlanOutcome::Installed(_) => added.push(slug),
+                PlanOutcome::Blocked(s) => conflicted.push(format!("{} ({})", s.title, s.problems.iter().find(|p| p.blocking).map(|p| p.message.as_str()).unwrap_or(""))),
+                PlanOutcome::Failed(_) => skipped.push(slug),
             }
         }
         {
@@ -1881,6 +1849,9 @@ fn boost_instance_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppS
         let mut msg = if added.is_empty() { "This instance already had every performance mod.".to_owned() } else { format!("Added {}.", added.join(", ")) };
         if !skipped.is_empty() {
             msg.push_str(&format!(" Not available for Minecraft {mc_ver}: {}.", skipped.join(", ")));
+        }
+        if !conflicted.is_empty() {
+            msg.push_str(&format!(" Left out because of conflicts: {}", conflicted.join(" ")));
         }
         msg.push_str(" Tuned Java settings are on for this instance.");
         call_js(&proxy, "onNotice", json!({"message": msg, "kind": "ok"}));
@@ -2784,8 +2755,10 @@ fn main() {
                         _ => "resourcepack",
                     }
                     .to_owned();
-                    download_modrinth_async(ipc_proxy.clone(), ipc_state.clone(), text("slug"), project_type, text("profileId"));
+                    let force = v.get("force").and_then(|f| f.as_bool()).unwrap_or(false);
+                    download_modrinth_async(ipc_proxy.clone(), ipc_state.clone(), text("slug"), project_type, text("profileId"), force);
                 }
+                "check_mods" => check_mods_async(ipc_proxy.clone(), ipc_state.clone(), text("profileId")),
                 "boost_instance" => boost_instance_async(ipc_proxy.clone(), ipc_state.clone(), text("profileId")),
                 "save_instance_settings" => {
                     // Each field: a value sets this instance's own setting, null goes back to the global one.

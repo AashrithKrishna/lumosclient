@@ -183,8 +183,35 @@ fn url_ok(url: &str) -> bool {
     url.starts_with("https://github.com/") && url.contains("/releases/download/") && !url.contains(char::is_whitespace)
 }
 
-/// Installs a registry project into the instance. Returns the saved file name.
+/// Installs a registry project into the instance, unplanned. Returns the saved file name.
+/// (The launcher plans installs through mod_plan.rs; kept for the live test.)
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn install(game_dir: &Path, id: &str) -> Result<String, String> {
+    let f = fetch(id)?;
+    save(game_dir, &f)?;
+    Ok(f.name)
+}
+
+/// A registry file downloaded and checked (size, SHA-256, signature, manifest id), not saved yet.
+pub struct Fetched {
+    pub id: String,
+    /// The registry's display name.
+    pub title: String,
+    /// Registry kind: `mod`, `shader` or `resourcepack`.
+    pub kind: String,
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// The registry kind of `id` (`mod`, `native-mod`, ...) and its display name, when listed.
+pub fn project_kind(id: &str) -> Option<(String, String)> {
+    let idx = index().ok()?;
+    let p = idx.get("projects")?.as_array()?.iter().find(|p| s(p, "id") == id)?;
+    Some((s(p, "kind").to_owned(), s(p, "name").to_owned()))
+}
+
+/// Downloads and checks a registry project's current file without touching the instance.
+pub fn fetch(id: &str) -> Result<Fetched, String> {
     let idx = index()?;
     let p = idx
         .get("projects")
@@ -198,7 +225,7 @@ pub fn install(game_dir: &Path, id: &str) -> Result<String, String> {
             s(p, "name")
         ));
     }
-    let folder = folder_for(kind).ok_or("Lumos can't install that kind of Horizon project yet.")?;
+    folder_for(kind).ok_or("Lumos can't install that kind of Horizon project yet.")?;
     let v = current_version(p).ok_or("This project has no version for Horizon 26.3.")?;
     let f = &v["file"];
     let (name, url, sha) = (s(f, "name"), s(f, "url"), s(f, "sha256").to_ascii_lowercase());
@@ -221,27 +248,34 @@ pub fn install(game_dir: &Path, id: &str) -> Result<String, String> {
     if let Some(key) = p.get("key").and_then(Value::as_str).filter(|k| !k.is_empty()) {
         verify_signature(key, s(f, "signature"), &bytes).map_err(|why| format!("{name}'s signature doesn't check out ({why}), so it wasn't installed."))?;
     }
-    let dir = game_dir.join(folder);
-    fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
     if kind == "mod" {
         let manifest_id = manifest_id_from_bytes(&bytes).ok_or(format!("{name} isn't a valid Horizon mod."))?;
         if manifest_id != id {
             return Err(format!("{name} says it is \"{manifest_id}\", not \"{id}\", so it wasn't installed."));
         }
     }
+    Ok(Fetched { id: id.to_owned(), title: s(p, "name").to_owned(), kind: kind.to_owned(), name: name.to_owned(), bytes })
+}
+
+/// Saves a fetched file into the instance (a content mod replaces its older copies and is turned on).
+pub fn save(game_dir: &Path, f: &Fetched) -> Result<(), String> {
+    let folder = folder_for(&f.kind).ok_or("Lumos can't install that kind of Horizon project yet.")?;
+    let name = f.name.as_str();
+    let dir = game_dir.join(folder);
+    fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
     let tmp = dir.join(format!(".{name}.part"));
-    fs::write(&tmp, &bytes).map_err(|e| format!("Couldn't save {name}: {e}"))?;
+    fs::write(&tmp, &f.bytes).map_err(|e| format!("Couldn't save {name}: {e}"))?;
     fs::rename(&tmp, dir.join(name)).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         format!("Couldn't save {name}: {e}")
     })?;
-    if kind == "mod" {
+    if f.kind == "mod" {
         // Only now that the new file is saved: older versions of the same mod go (two copies
         // of one id stop Horizon from loading mods).
-        remove_other_copies(&dir, id, name);
-        set_enabled(game_dir, id, true)?;
+        remove_other_copies(&dir, &f.id, name);
+        set_enabled(game_dir, &f.id, true)?;
     }
-    Ok(name.to_owned())
+    Ok(())
 }
 
 /// Checks a registry file's minisign signature against its project's public key.
