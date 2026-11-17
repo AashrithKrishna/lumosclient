@@ -11,6 +11,7 @@ Mods left out this way are added to work/applied.json's "failed" with the compil
 import argparse
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -50,7 +51,13 @@ def culprits(log, stage, mods_root, applied):
     files = {i: mod_files(mods_root, i) for i in applied}
     blame = {}
     for msg, path, line in errors:
-        path = path.split("/stage/", 1)[-1]
+        path = posixpath.normpath(path.split("/stage/", 1)[-1])  # e.g. crates/a/../b/src/x.rs
+        # A mod's own module named in the error (`crate::<mod id>`) is the plainest clue.
+        named = [i for i in applied if re.search(rf"\b{re.escape(i)}\b", msg)]
+        if named:
+            for i in named:
+                blame.setdefault(i, f"didn't compile with this Horizon version: {msg[:300]}")
+            continue
         touching = [i for i in applied if any(path == f or path.startswith(f + "/") or f.startswith(path) for f in files[i])]
         if path.startswith("native-crates/"):
             top = path.split("/")[1]
