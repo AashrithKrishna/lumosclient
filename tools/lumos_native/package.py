@@ -26,6 +26,15 @@ def add_tree(z, folder, arc):
             z.write(full, os.path.join(arc, os.path.relpath(full, folder)).replace(os.sep, "/"))
 
 
+def own_mod(folder, i):
+    """One of Lumos's own mods (lumos-mods/<id>/): not in Horizon's registry, so read its manifest."""
+    import re
+    text = open(os.path.join(folder, "horizon-mixin.toml"), encoding="utf-8").read()
+    ver = re.search(r'^version\s*=\s*"([^"]+)"', text, re.M)
+    name = " ".join(w.capitalize() for w in i.split("_")[1:]) or i
+    return {"version": ver.group(1) if ver else "1.0.0", "name": "Lumos " + name, "sha256": ""}
+
+
 def main():
     ap = argparse.ArgumentParser()
     for k in ("plan", "commit", "work", "bin", "exporters", "platform", "out"):
@@ -43,7 +52,7 @@ def main():
             for f in files:
                 if f.endswith(".rs"):
                     text += open(os.path.join(root, f), encoding="utf-8", errors="ignore").read()
-        m = by_id[i]
+        m = by_id.get(i) or own_mod(folder, i)
         # A built-in mod honours horizon-mods.txt only when its own hooks ask native_on().
         mods.append({"id": i, "version": m["version"], "name": m["name"], "sha256": m["sha256"], "can_turn_off": "native_on(" in text})
     native = {"schema": 1, "commit": g["commit"], "short": g["short"], "mixins": g["mixins"], "platform": a.platform,
