@@ -672,6 +672,9 @@
     <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
     <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/></symbol>
     <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10z"/></symbol>
   </defs>
 </svg>
@@ -903,66 +906,67 @@
     </div>
   </section>
 
-  <!-- DISCOVER -->
+  <!-- DISCOVER (feat/discover: Content Hub / Content Browser; styles and script at the end of the file) -->
   <section class="page" id="page-discover">
-    <div class="page-inner">
-      <div class="page-head">
-        <div><h1>Discover</h1><p id="discoverSub">Mods, resource packs and shaders from Modrinth, checked against your version.</p></div>
-        <div class="seg" id="typeSeg">
-          <button class="active" data-type="mod"><svg class="i sm"><use href="#i-box"/></svg>Mods</button>
-          <button data-type="resourcepack"><svg class="i sm"><use href="#i-image"/></svg>Resource Packs</button>
-          <button data-type="shader"><svg class="i sm"><use href="#i-sparkle"/></svg>Shaders</button>
-          <button data-type="modpack"><svg class="i sm"><use href="#i-library"/></svg>Modpacks</button>
-        </div>
-      </div>
-      <div class="discover">
-        <div class="col" style="gap:12px">
-          <div class="toolbar">
-            <div class="search-box"><svg class="i"><use href="#i-search"/></svg><input class="input" id="modQuery" aria-label="Search Modrinth" placeholder="Search Modrinth…" /></div>
-            <select class="select" id="modSort" style="width:170px;height:40px;border-radius:11px;background-color:var(--bg-2)">
-              <option value="downloads">Most downloads</option>
-              <option value="relevance">Relevance</option>
-              <option value="follows">Most followed</option>
-              <option value="newest">Newest</option>
-              <option value="updated">Recently updated</option>
-            </select>
+    <div class="page-inner disc-inner">
+      <div id="discListView">
+        <div class="disc-head">
+          <div>
+            <div class="seg disc-mode" id="discMode" role="tablist" aria-label="Discover mode">
+              <button role="tab" data-mode="hub"><svg class="i sm"><use href="#i-globe"/></svg>Content Hub</button>
+              <button role="tab" data-mode="browser"><svg class="i sm"><use href="#i-box"/></svg>Content Browser</button>
+            </div>
+            <p class="disc-sub" id="discoverSub">Install content into an instance, checked against its version and loader.</p>
           </div>
-          <div class="list" id="modResults"></div>
-          <div class="pager">
-            <span id="modCountInfo">–</span>
-            <div class="row">
-              <button class="btn sm" id="prevPageBtn" data-act="page" data-dir="-1" disabled><svg class="i sm" style="transform:rotate(180deg)"><use href="#i-chev-right"/></svg>Prev</button>
-              <span class="mono" id="pageLabel">1 / 1</span>
-              <button class="btn sm" id="nextPageBtn" data-act="page" data-dir="1">Next<svg class="i sm"><use href="#i-chev-right"/></svg></button>
+          <div class="disc-inst" id="discInst">
+            <span class="tile sm" id="discTile"></span>
+            <div class="disc-inst-meta">
+              <select class="select" id="discTarget" aria-label="Instance to browse for"></select>
+              <div class="faint" id="discVer"></div>
             </div>
           </div>
         </div>
-        <aside class="card filters">
-          <div>
-            <h4>Source</h4>
-            <div class="opt-grid" id="discSource">
-              <button class="opt active">Modrinth</button>
-              <button class="opt" data-act="url" data-url="https://www.curseforge.com/minecraft">CurseForge<svg class="i sm"><use href="#i-external"/></svg></button>
+        <div class="disc-suggest hidden" id="discSuggest">
+          <div class="section-title"><span>Recommended for this instance</span><button class="link" data-dx="suggest-hide">Hide</button></div>
+          <div class="sugg-row" id="discSuggestRow"></div>
+        </div>
+        <div class="discover">
+          <div class="col disc-main">
+            <div class="toolbar">
+              <div class="search-box"><svg class="i"><use href="#i-search"/></svg><input class="input" id="modQuery" aria-label="Search" placeholder="Search…" autocomplete="off" spellcheck="false" /></div>
+              <select class="select disc-sort" id="modSort" aria-label="Sort by">
+                <option value="relevance">Relevance</option>
+                <option value="downloads">Downloads</option>
+                <option value="follows">Follows</option>
+                <option value="newest">Newest</option>
+                <option value="updated">Updated</option>
+              </select>
+              <div class="seg disc-view" id="discView" role="group" aria-label="Layout">
+                <button data-view="grid" aria-label="Grid view" title="Grid view"><svg class="i sm"><use href="#i-grid"/></svg></button>
+                <button data-view="list" aria-label="List view" title="List view"><svg class="i sm"><use href="#i-list"/></svg></button>
+              </div>
             </div>
-          </div>
-          <div>
-            <h4>Installs into</h4>
-            <div class="col" style="gap:6px">
-              <div class="row"><span class="tile sm" id="discTile"></span><div style="flex:1;min-width:0"><select class="select" id="discTarget" aria-label="Instance to install into" style="width:100%;height:34px;border-radius:9px"></select><div class="faint" style="font-size:11.5px;margin-top:4px" id="discVer">1.21.11</div></div></div>
-              <div class="faint" style="font-size:11.5px">Only this instance gets what you install here.</div>
+            <div class="disc-countline">
+              <span id="modCountInfo">&nbsp;</span>
+              <button class="chip accent hidden" id="discUpdChip" data-dx="updates-toggle"><svg class="i sm"><use href="#i-refresh"/></svg><span>Updates</span></button>
             </div>
+            <div class="card disc-upd hidden" id="discUpdPanel"></div>
+            <div class="disc-results grid" id="modResults" aria-live="polite"></div>
+            <div class="disc-more" id="discSentinel"><button class="btn sm hidden" id="discMoreBtn" data-dx="more">Load more</button></div>
           </div>
-          <div>
-            <h4>Compatibility</h4>
-            <div class="col" style="gap:6px;font-size:12px;color:var(--fg-2)">
-              <div class="row" style="gap:7px"><svg class="i sm" style="color:var(--ok)"><use href="#i-check"/></svg><span id="compatVer">Filtered for 1.21.11</span></div>
-              <div class="row" style="gap:7px"><svg class="i sm" style="color:var(--ok)"><use href="#i-check"/></svg><span id="compat2">Fabric Loader checked on install</span></div>
-              <div class="row" style="gap:7px"><svg class="i sm" style="color:var(--ok)"><use href="#i-check"/></svg><span id="compat3">Required dependencies auto-installed</span></div>
-            </div>
-          </div>
-          <button class="btn" data-act="url" data-url="https://modrinth.com/mods" id="discSiteBtn"><svg class="i sm"><use href="#i-external"/></svg><span>Open Modrinth</span></button>
-        </aside>
+          <aside class="card filters" id="discFilters" aria-label="Filters">
+            <div class="filt-head"><h4>Filters</h4><button class="btn ghost sm" data-dx="clear">Clear</button></div>
+            <div><h4>Source</h4><div class="opt-grid" id="discSource"></div></div>
+            <div><h4>Content type</h4><div class="opt-grid" id="discTypes"></div></div>
+            <div id="fGameVer"><h4>Game version</h4><select class="select" id="discGameVer" aria-label="Game version"></select></div>
+            <div id="fLoaders"><h4>Mod loaders</h4><div class="opt-grid" id="discLoaders"></div></div>
+            <div id="fEnv"><h4>Environment</h4><div class="opt-grid" id="discEnv"></div></div>
+            <label class="disc-switch" id="fOpen"><span>Open source only</span><span class="switch"><input type="checkbox" id="discOpenSrc" /><span></span></span></label>
+            <div id="fCats"><h4>Categories</h4><div id="discCats"></div></div>
+          </aside>
+        </div>
       </div>
+      <div class="hidden" id="discProjectView"></div>
     </div>
   </section>
 
@@ -1134,6 +1138,7 @@
       <button class="nav" data-sec="hud"><svg class="i"><use href="#i-hud"/></svg>LumosHUD</button>
       <button class="nav" data-sec="appearance"><svg class="i"><use href="#i-palette"/></svg>Appearance</button>
       <button class="nav" data-sec="horizon"><svg class="i"><use href="#i-engine"/></svg>Horizon engine</button>
+      <button class="nav" data-sec="discover"><svg class="i"><use href="#i-compass"/></svg>Discover</button>
       <button class="nav" data-sec="storage"><svg class="i"><use href="#i-drive"/></svg>Storage</button>
       <button class="nav" data-sec="about"><svg class="i"><use href="#i-info"/></svg>About &amp; shortcuts</button>
       <div class="foot"><span id="footVersion">LumosClient</span><br/>Not affiliated with Mojang or Microsoft</div>
@@ -1262,6 +1267,27 @@
             <div class="set-row" data-k="prepare repair setup download">
               <div class="txt"><b>Set up or repair</b><span>Downloads Minecraft 26.3's files and Java into LumosClient's folder, then prepares the engine. Safe to run again: it only redoes what's missing.</span></div>
               <button class="btn primary" data-act="prepare"><svg class="i sm"><use href="#i-engine"/></svg>Set up now</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- DISCOVER (feat/discover) -->
+        <div class="sec col hidden" data-sec="discover" style="gap:12px">
+          <div class="set-group">
+            <div class="set-row stack" data-k="curseforge api key discover source">
+              <div class="row" style="justify-content:space-between">
+                <div class="txt"><b>CurseForge API key</b><span>Lets Discover search and install from CurseForge. Get a key at <a href="#" data-dx="url" data-url="https://console.curseforge.com/">console.curseforge.com</a>. It's kept only in this computer's launcher settings.</span></div>
+                <span class="chip" id="cfKeyChip">Not set</span>
+              </div>
+              <div class="row">
+                <input class="input" id="setCfKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your API key" aria-label="CurseForge API key" />
+                <button class="btn primary" data-dx="cf-key-save">Save</button>
+                <button class="btn danger hidden" id="cfKeyRemove" data-dx="cf-key-remove">Remove</button>
+              </div>
+            </div>
+            <div class="set-row" data-k="modrinth source discover">
+              <div class="txt"><b>Modrinth</b><span>Always on. No account or key needed.</span></div>
+              <span class="chip ok">Ready</span>
             </div>
           </div>
         </div>
@@ -2180,101 +2206,14 @@
   }
 
   // ───────────────────────── Discover ─────────────────────────
-  function renderDiscoverSide() {
-    const p = activeProfile();
-    $('discTile').stableHTML = pxSvg(profileIcon(p));
-    $('discTarget').stableHTML = (state.profiles || []).map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
-    $('discTarget').value = state.activeProfileId;
-    $('discVer').textContent = state.selectedVersion;
-    const hz = /horizon/i.test(state.selectedVersion);
-    $('discSource').stableHTML = hz
-      ? `<button class="opt active">Horizon registry</button><button class="opt" data-act="url" data-url="https://playhorizon.dev/mods">Website${icon('external')}</button>`
-      : `<button class="opt active">Modrinth</button><button class="opt" data-act="url" data-url="https://www.curseforge.com/minecraft">CurseForge${icon('external')}</button>`;
-    $('compat2').textContent = hz ? 'Size and checksum checked on install' : ui.modType === 'modpack' ? 'Every file checked (SHA-512) on install' : `${modLoaderName(state.selectedVersion)} builds only`;
-    $('compat3').textContent = hz ? 'Native Rust mods arrive as a ready-made Horizon build' : 'Required dependencies auto-installed';
-    $('discSiteBtn').dataset.url = hz ? 'https://playhorizon.dev/mods' : 'https://modrinth.com/mods';
-    $('discSiteBtn').querySelector('span').textContent = hz ? 'Open Horizon mods' : 'Open Modrinth';
-    $('compatVer').textContent = hz ? 'Horizon 26.3: Horizon’s own mods, shaders and packs'
-      : ui.modType === 'mod' ? `Filtered for ${modFilterVersion(state.selectedVersion)} + ${modLoaderName(state.selectedVersion)}` : ui.modType === 'shader' ? 'Shaders need Fabric + Iris' : ui.modType === 'modpack' ? 'Each modpack becomes a new instance' : `Filtered for ${modFilterVersion(state.selectedVersion)}`;
-  }
-  function skeletonRows(n, h = 64) {
-    return Array.from({ length: n }, () => `<div class="row" style="padding:12px;gap:14px"><div class="skeleton" style="width:${h}px;height:${h}px;border-radius:12px"></div><div class="col" style="flex:1;gap:8px"><div class="skeleton" style="height:13px;width:40%"></div><div class="skeleton" style="height:11px;width:85%"></div></div></div>`).join('');
-  }
-  function searchMods(force) {
-    const q = { profileId: state.activeProfileId, query: $('modQuery').value.trim(), projectType: ui.modType, sortBy: $('modSort').value, offset: ui.modOffset };
-    // The same search twice in a row (typing pause, then Enter or leaving the box) runs once:
-    // the results stay put instead of flashing back to loading.
-    const key = JSON.stringify(q);
-    if (!force && key === ui.lastSearchKey) return;
-    ui.lastSearchKey = key;
-    $('modResults').innerHTML = `<div class="card">${skeletonRows(5)}</div>`;
-    send('search_modrinth', { ...q, seq: ++ui.modSeq });
-  }
-  window.renderModResults = function (data) {
-    if (typeof data.seq === 'number' && data.seq !== ui.modSeq) return; // an older search finished late
-    const items = Array.isArray(data) ? data : (data.hits || []);
-    ui.modTotal = data.total_hits || items.length;
-    const page = Math.floor(ui.modOffset / 20) + 1, pages = Math.max(1, Math.ceil(ui.modTotal / 20));
-    $('pageLabel').textContent = `${page} / ${pages.toLocaleString()}`;
-    const srcName = data.source === 'horizon' ? 'Horizon’s mod registry' : 'Modrinth';
-    $('modCountInfo').textContent = ui.modTotal ? `${ui.modTotal.toLocaleString()} results on ${srcName}` : '';
-    $('prevPageBtn').disabled = ui.modOffset <= 0;
-    $('nextPageBtn').disabled = ui.modOffset + 20 >= ui.modTotal;
-    if (data.notice) {
-      $('modResults').innerHTML = `<div class="card empty">${icon('engine', '')}<b>Not available for this version</b><span>${esc(data.notice)}</span><button class="btn sm" data-act="version-menu">${icon('box')}Choose a version</button></div>`;
-      $('modCountInfo').textContent = '';
-      return;
-    }
-    if (data.error) {
-      $('modResults').innerHTML = `<div class="card empty">${icon('alert', '')}<b>Couldn’t load ${srcName}</b><span>${esc(data.error)}</span><button class="btn sm" data-act="mod-retry">${icon('refresh')}Try again</button></div>`;
-      $('modCountInfo').textContent = '';
-      return;
-    }
-    if (!items.length) {
-      $('modResults').innerHTML = `<div class="card empty">${icon('search', '')}<b>No results</b><span>Try a different search, or check your connection. ${ui.modType === 'mod' ? `Mods are filtered for ${esc(modFilterVersion(state.selectedVersion))} + ${esc(modLoaderName(state.selectedVersion))}.` : ''}</span></div>`;
-      return;
-    }
-    $('modResults').innerHTML = items.map(m => {
-      const slug = m.slug || m.project_id;
-      // The backend reads the instance's folder: trust it; this session's installs fill in otherwise.
-      const done = typeof m.installed === 'boolean' ? m.installed : !!(ui.installed[state.activeProfileId] && ui.installed[state.activeProfileId].has(slug));
-      const viewUrl = m.view_url || `https://modrinth.com/${m.project_type}/${slug}`;
-      const action = m.native && !m.native_ready && !done
-        ? `<button class="btn sm" disabled title="Lumos's cloud builds don't have this native mod for your computer yet.">${icon('engine')}Not built yet</button>`
-        : `<button class="btn sm ${done ? 'ok' : 'primary'}" data-act="install" data-slug="${esc(slug)}" data-type="${esc(m.project_type)}" id="dl-${esc(slug)}" ${done ? 'disabled' : ''}>${done ? icon('check') + 'Installed' : icon('download') + 'Install'}</button>`;
-      const cats = (m.categories || []).filter(c => !['fabric', 'forge', 'quilt', 'neoforge', 'minecraft'].includes(c)).slice(0, 3);
-      const iconEl = m.icon_url ? `<img src="${esc(m.icon_url)}" alt="" loading="lazy" />` : `<div class="noicon">${icon('box', 'lg')}</div>`;
-      return `<div class="mod-row">
-        ${iconEl}
-        <div class="meta">
-          <div class="title">${esc(m.title)} ${m.author ? `<small>by ${esc(m.author)}</small>` : ''}</div>
-          <div class="desc">${esc(m.description)}</div>
-          <div class="tags">${m.native ? '<span class="chip">native Rust</span>' : m.source === 'horizon' ? '<span class="chip accent">Horizon</span>' : ''}${cats.map(c => `<span class="chip">${esc(c.replace(/-/g, ' '))}</span>`).join('')}</div>
-        </div>
-        <div class="side">
-          <div class="stats-line"><span>${icon('download')}${fmtNum(m.downloads)}</span>${m.date_modified ? `<span>${icon('clock')}${fmtAgo(Date.parse(m.date_modified))}</span>` : ''}</div>
-          <div class="row" style="gap:6px">
-            <button class="btn sm" data-act="url" data-url="${esc(viewUrl)}">${icon('external')}View</button>
-            ${action}
-          </div>
-        </div>
-      </div>`;
-    }).join('');
-    $('modResults').scrollIntoView({ block: 'nearest' });
-  };
+  // feat/discover: the Content Hub / Content Browser lives in its own block at the end of the file.
+  function renderDiscoverSide() { if (window.lumosDiscover) window.lumosDiscover.onState(); }
+  function searchMods(force) { if (window.lumosDiscover) window.lumosDiscover.search(force); }
   window.onInstallStatus = function (slug, status, msg, profileId) {
     const pid = profileId || state.activeProfileId;
-    const btn = pid === state.activeProfileId ? document.getElementById('dl-' + slug) : null;
     if (status === 'installed') (ui.installed[pid] ||= new Set()).add(slug);
-    // feat/deps: the install plan has problems; the warning dialog (onModPlan) takes it from here.
-    if (status === 'blocked') { if (btn) { btn.disabled = false; btn.className = 'btn sm primary'; btn.innerHTML = icon('download') + 'Install'; } return; }
-    if (btn) {
-      btn.disabled = status !== 'error';
-      btn.className = 'btn sm ' + (status === 'installed' ? 'ok' : 'primary');
-      btn.innerHTML = status === 'installing' ? '<span class="spinner" style="width:12px;height:12px"></span>Installing'
-        : status === 'installed' ? icon('check') + 'Installed' : icon('refresh') + 'Retry';
-    }
-    if (status !== 'installing') toast(msg, status === 'error' ? 'err' : 'ok');
+    if (window.lumosDiscover) window.lumosDiscover.onInstallStatus(slug, status, msg, pid);
+    if (status !== 'installing' && status !== 'blocked' && msg) toast(msg, status === 'error' ? 'err' : 'ok');
     if (status === 'installed' && ui.libDetail && pid === state.activeProfileId) loadContent();
   };
 
@@ -2308,7 +2247,7 @@
   const SECTIONS = {
     game: ['Game', 'Memory, resolution and what happens on launch'], java: ['Java', 'Runtime and JVM flags'],
     hud: ['LumosHUD', 'The built-in in-game overlay'], appearance: ['Appearance', 'Theme, accent colour and motion'],
-    horizon: ['Horizon engine', 'Native Rust 26.3 setup'], storage: ['Storage', 'Where everything lives on disk'],
+    horizon: ['Horizon engine', 'Native Rust 26.3 setup'], discover: ['Discover', 'Where Discover finds content'], storage: ['Storage', 'Where everything lives on disk'],
     about: ['About & shortcuts', 'Version info and keyboard shortcuts']
   };
   function openSettings(sec) {
@@ -2518,7 +2457,6 @@
     closePopovers(); renderHome(); renderLibrary(); renderStatus(); renderDiscoverSide();
     const entry = catalogEntries().find(e => e.id === v);
     toast(entry && !entry.installed && entry.kind !== 'horizon' ? `${activeProfile().name} now uses ${v}. It downloads when you press Launch.` : `${activeProfile().name} now uses ${v}`);
-    if (ui.modLoaded) { ui.modOffset = 0; searchMods(); }
   }
   function reanchorAccount() { if ($('acctPop').classList.contains('open')) placePopover($('acctPop'), $('railAvatar'), 'right-of'); }
   function openAccount(tab) {
@@ -2558,7 +2496,7 @@
   function renderPalette() {
     const q = $('palInput').value.trim().toLowerCase();
     let items = paletteItems().filter(it => !q || (it.label + ' ' + it.group + ' ' + it.hint).toLowerCase().includes(q));
-    if (q) items.push({ group: 'Discover', label: `Search Modrinth for “${$('palInput').value.trim()}”`, ic: 'compass', run: () => { $('modQuery').value = $('palInput').value.trim(); ui.modOffset = 0; ui.modLoaded = true; go('discover'); searchMods(); } });
+    if (q) items.push({ group: 'Discover', label: `Search Discover for “${$('palInput').value.trim()}”`, ic: 'compass', run: () => { ui.modLoaded = true; window.lumosDiscover.searchFor($('palInput').value.trim()); } });
     ui.palItems = items; ui.palSel = Math.min(ui.palSel, Math.max(0, items.length - 1));
     let html = '', last = '';
     items.forEach((it, i) => {
@@ -2578,7 +2516,7 @@
     if (p && p.version) state.selectedVersion = p.version;
     send('select_profile', { id });
     ui.content = {};
-    if (ui.modLoaded) { ui.modOffset = 0; setTimeout(searchMods, 60); }
+    renderDiscoverSide();
     ['mods', 'resourcepacks', 'shaderpacks'].forEach(k => { const c = $('cnt-' + k); if (c) c.textContent = '–'; });
     if (ui.libDetail) loadContent(); // never leave one instance's files under another's name
   }
@@ -2688,15 +2626,11 @@
         ui.contentKind = 'mods';
         document.querySelectorAll('#contentSeg button').forEach(x => x.classList.toggle('active', x.dataset.kind === 'mods'));
         showLibDetail(true); break;
-      case 'content-add': ui.modType = { mods: 'mod', resourcepacks: 'resourcepack', shaderpacks: 'shader' }[ui.contentKind];
-        document.querySelectorAll('#typeSeg button').forEach(b => b.classList.toggle('active', b.dataset.type === ui.modType));
-        ui.modOffset = 0; ui.modLoaded = true; go('discover'); searchMods(); break;
+      case 'content-add': ui.modLoaded = true; window.lumosDiscover.openBrowser({ mods: 'mod', resourcepacks: 'resourcepack', shaderpacks: 'shader' }[ui.contentKind] || 'mod'); break;
       case 'toggle-content': send('toggle_content', { profileId: state.activeProfileId, kind: ui.contentKind, file: d.file, enabled: el.checked }); break;
       case 'trash-content':
         if (!confirmClick(el, icon('trash'))) { el.title = `Click again to move to ${TRASH}`; break; }
         send('trash_content', { profileId: state.activeProfileId, kind: ui.contentKind, file: d.file }); break;
-      case 'install': send('download_modrinth', { slug: d.slug, projectType: d.type, profileId: state.activeProfileId }); window.onInstallStatus(d.slug, 'installing', '', state.activeProfileId); break;
-      case 'page': { const next = Math.max(0, ui.modOffset + (+d.dir) * 20); if (next >= ui.modTotal && +d.dir > 0) break; ui.modOffset = next; searchMods(); break; }
       case 'join': e.stopPropagation(); join(d.addr); break;
       case 'direct-join': join($('quickAddr').value); break;
       case 'add-server': {
@@ -2728,7 +2662,6 @@
       case 'ely-logout': send('ely_logout'); ui.skin = null; ui.acctTab = 'elyby'; toast('Signed out of Ely.by'); break;
       case 'open-ely': send('open_ely', { path: d.url || '' }); break;
       case 'skin-refresh': send('refresh_skin'); toast('Refreshing your skin…', 'info'); break;
-      case 'mod-retry': searchMods(true); break;
       case 'refresh-versions': e.stopPropagation(); send('refresh_versions'); toast('Checking for versions…', 'info'); break;
     }
   });
@@ -2816,23 +2749,7 @@
     e.preventDefault(); $('contentList').classList.remove('dropping');
     if (e.dataTransfer?.files?.length) importFiles([...e.dataTransfer.files]);
   });
-  $('discTarget').addEventListener('change', e => {
-    selectProfile(e.target.value);
-    renderDiscoverSide(); renderHome();
-    ui.modOffset = 0; searchMods();
-  });
-
-  // Discover
-  let modTimer = null;
-  $('modQuery').addEventListener('input', () => { clearTimeout(modTimer); modTimer = setTimeout(() => { ui.modOffset = 0; searchMods(); }, 400); });
-  $('modQuery').addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(modTimer); ui.modOffset = 0; searchMods(); } });
-  $('modSort').addEventListener('change', () => { ui.modOffset = 0; searchMods(); });
-  document.querySelectorAll('#typeSeg button').forEach(b => b.addEventListener('click', () => {
-    ui.modType = b.dataset.type; ui.modOffset = 0;
-    document.querySelectorAll('#typeSeg button').forEach(x => x.classList.toggle('active', x === b));
-    $('modQuery').placeholder = 'Search Modrinth ' + b.textContent.trim().toLowerCase() + '…';
-    renderDiscoverSide(); searchMods();
-  }));
+  // Discover inputs: see the feat/discover block.
 
   // Servers inputs
   $('quickAddr').addEventListener('keydown', e => { if (e.key === 'Enter') join(e.target.value); });
@@ -2962,11 +2879,9 @@
       document.querySelectorAll('#contentSeg button').forEach(x => x.classList.toggle('active', x.dataset.kind === 'settings'));
       showInstSettings(true);
     },
-    findMod(q) {
-      ui.modType = 'mod'; ui.modOffset = 0; ui.modLoaded = true;
-      document.querySelectorAll('#typeSeg button').forEach(b => b.classList.toggle('active', b.dataset.type === 'mod'));
-      $('modQuery').value = q; go('discover'); searchMods();
-    },
+    findMod(q) { ui.modLoaded = true; window.lumosDiscover.openBrowser('mod', q); },
+    // feat/discover
+    fmtNum, fmtAgo, pxSvg, profileIcon, selectProfile, ui,
   };
   send('init', {});
 })();
@@ -3267,7 +3182,9 @@
       case 'plan-force': {
         const d = pending; close();
         if (!d) break;
-        send('download_modrinth', { slug: d.slug, projectType: d.projectType, profileId: d.profileId, force: true });
+        // feat/discover: installs from Discover say how to try again (a version, CurseForge…).
+        if (d.retry && d.retry.action) send(d.retry.action, { ...d.retry, force: true });
+        else send('download_modrinth', { slug: d.slug, projectType: d.projectType, profileId: d.profileId, force: true });
         window.onInstallStatus(d.slug, 'installing', '', d.profileId);
         break;
       }
@@ -3291,5 +3208,850 @@
 })();
 </script>
 <!-- ═════════════════ end feat/deps ═════════════════ -->
+<!-- ═════════════════ feat/discover: Content Hub / Content Browser (discover.rs, curseforge.rs) ═════════════════ -->
+<style>
+  .disc-inner { gap: 16px; }
+  .set-row .txt a { color: var(--accent); text-decoration: none; }
+  .disc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .disc-mode button { height: 32px; padding: 0 14px; font-size: 13px; }
+  .disc-sub { color: var(--fg-2); margin-top: 8px; font-size: 13px; min-height: 19px; }
+  .disc-inst { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--line); min-width: 260px; }
+  .disc-inst-meta { flex: 1; min-width: 0; }
+  .disc-inst .select { height: 32px; border-radius: 8px; }
+  .disc-inst .faint { font-size: 11.5px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .disc-sort { width: 150px; height: 40px; border-radius: 11px; background-color: var(--bg-2); flex: none; }
+  .disc-view { flex: none; }
+  .disc-view button { padding: 0 9px; height: 32px; }
+  .disc-countline { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 24px; font-size: 13px; font-weight: 650; color: var(--fg-2); }
+  .disc-countline .chip { cursor: pointer; }
+  .disc-results.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+  .disc-results.list { display: flex; flex-direction: column; gap: 8px; }
+  .disc-results > .empty { grid-column: 1 / -1; }
+  .dcard { display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; background: var(--bg-2); border: 1px solid var(--line); cursor: pointer; transition: border-color .15s, transform .15s var(--ease); text-align: left; min-width: 0; }
+  .dcard:hover, .dcard:focus-visible { border-color: rgba(var(--accent-rgb), .45); }
+  .dcard .bn { position: relative; aspect-ratio: 16 / 7; background: var(--bg-3); overflow: hidden; }
+  .dcard .bn img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .dcard .bd { position: relative; padding: 0 12px 12px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .dcard .ic { width: 48px; height: 48px; border-radius: 11px; margin-top: -24px; background: var(--bg-3); border: 2px solid var(--bg-2); object-fit: cover; display: grid; place-items: center; color: var(--fg-3); }
+  .dcard .t { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px; }
+  .dcard .by { font-size: 11.5px; color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dcard .ds { color: var(--fg-2); font-size: 12.5px; line-height: 1.4; height: 35px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .dcard .ft { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 6px; }
+  .stats-mini { display: flex; gap: 10px; font-size: 11.5px; color: var(--fg-3); min-width: 0; }
+  .stats-mini span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+  .drow { display: flex; gap: 14px; padding: 12px; border-radius: 14px; background: var(--bg-2); border: 1px solid var(--line); cursor: pointer; transition: border-color .15s; align-items: center; min-height: 90px; }
+  .drow:hover, .drow:focus-visible { border-color: rgba(var(--accent-rgb), .45); }
+  .drow .ic { width: 64px; height: 64px; border-radius: 12px; object-fit: cover; flex: none; background: var(--bg-3); border: 1px solid var(--line); display: grid; place-items: center; color: var(--fg-3); }
+  .drow .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .drow .t { font-weight: 700; font-size: 14.5px; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .drow .t small { font-weight: 500; font-size: 12px; color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .drow .ds { color: var(--fg-2); font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .drow .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .drow .side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: none; }
+  .disc-more { min-height: 40px; display: grid; place-items: center; }
+  .filters { max-height: calc(100vh - 52px - 44px); overflow-y: auto; }
+  .filt-head { display: flex; align-items: center; justify-content: space-between; }
+  .filt-head h4 { margin: 0 !important; }
+  .filters .opt { height: 28px; padding: 0 10px; font-size: 12px; }
+  .filters .opt:disabled { opacity: .4; cursor: default; }
+  .filters .select { height: 34px; border-radius: 9px; }
+  .disc-switch { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; font-weight: 600; color: var(--fg-2); cursor: pointer; }
+  .cat-h { font-size: 11px; color: var(--fg-3); font-weight: 650; margin: 10px 0 6px; }
+  .cat-h:first-child { margin-top: 0; }
+  .disc-suggest { display: flex; flex-direction: column; gap: 10px; }
+  .disc-suggest .link { font-size: 12px; color: var(--fg-3); }
+  .sugg-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(270px, 1fr); gap: 10px; overflow-x: auto; padding-bottom: 4px; min-height: 76px; }
+  .sugg-card { display: flex; gap: 10px; align-items: center; padding: 10px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--line); cursor: pointer; min-width: 0; }
+  .sugg-card:hover, .sugg-card:focus-visible { border-color: rgba(var(--accent-rgb), .45); }
+  .sugg-card img, .sugg-card .ic { width: 40px; height: 40px; border-radius: 9px; object-fit: cover; flex: none; background: var(--bg-3); display: grid; place-items: center; color: var(--fg-3); }
+  .sugg-card .meta { flex: 1; min-width: 0; }
+  .sugg-card .t { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sugg-card .r { font-size: 11.5px; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .disc-upd { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .disc-upd .row { justify-content: space-between; }
+  .upd-item { display: flex; align-items: center; gap: 10px; font-size: 12.5px; padding: 6px 0; border-top: 1px solid var(--line); }
+  .upd-item .grow { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ch { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: capitalize; border: 1px solid; }
+  .ch-release { color: var(--ok); border-color: rgba(var(--ok-rgb), .3); background: rgba(var(--ok-rgb), .08); }
+  .ch-beta { color: var(--warn); border-color: rgba(245, 184, 61, .3); background: rgba(245, 184, 61, .08); }
+  .ch-alpha { color: var(--bad); border-color: rgba(240, 90, 95, .3); background: rgba(240, 90, 95, .08); }
+  /* Project page */
+  .pv { display: flex; flex-direction: column; gap: 16px; }
+  .pv-hero { position: relative; border-radius: 18px; overflow: hidden; border: 1px solid var(--line-2); background: var(--bg-2); isolation: isolate; }
+  .pv-hero .bg { position: absolute; inset: 0; z-index: -1; background-size: cover; background-position: center; filter: blur(2px) brightness(.35) saturate(1.1); transform: scale(1.05); }
+  .pv-hero .in { display: flex; gap: 18px; align-items: center; padding: 22px; flex-wrap: wrap; }
+  .pv-hero .ic { width: 88px; height: 88px; border-radius: 18px; object-fit: cover; background: var(--bg-3); border: 1px solid var(--line-2); flex: none; display: grid; place-items: center; color: var(--fg-3); }
+  .pv-hero .meta { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 6px; }
+  .pv-hero h1 { font-size: 24px; font-weight: 750; letter-spacing: -.02em; }
+  .pv-hero p { color: var(--fg-2); font-size: 13.5px; }
+  .pv-hero .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+  .pv-grid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 18px; align-items: start; }
+  .pv-info { padding: 16px; display: flex; flex-direction: column; gap: 14px; position: sticky; top: 0; }
+  .pv-info h4 { font-size: 11px; font-weight: 750; letter-spacing: .08em; color: var(--fg-3); text-transform: uppercase; margin-bottom: 6px; }
+  .pv-info dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 12.5px; }
+  .pv-info dt { color: var(--fg-3); }
+  .pv-info dd { color: var(--fg-1); text-align: right; min-width: 0; overflow-wrap: anywhere; }
+  .pv-body { padding: 18px 20px; min-height: 200px; }
+  .md { font-size: 13.5px; line-height: 1.65; color: var(--fg-1); overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+  .md > * + * { margin-top: 10px; }
+  .md h1, .md h2, .md h3, .md h4 { font-weight: 720; line-height: 1.3; margin-top: 18px; }
+  .md h1 { font-size: 21px; } .md h2 { font-size: 18px; } .md h3 { font-size: 15.5px; } .md h4, .md h5, .md h6 { font-size: 14px; }
+  .md a { color: var(--accent); text-decoration: none; cursor: pointer; }
+  .md a:hover { text-decoration: underline; }
+  .md img { max-width: 100%; height: auto; border-radius: 6px; vertical-align: middle; }
+  .md ul, .md ol { padding-left: 22px; }
+  .md li + li { margin-top: 3px; }
+  .md code { font-family: var(--mono); font-size: 12px; background: var(--bg-3); padding: 1px 5px; border-radius: 5px; }
+  .md pre { background: #08080a; border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow-x: auto; }
+  .md pre code { background: none; padding: 0; }
+  .md blockquote { border-left: 3px solid var(--line-2); padding-left: 12px; color: var(--fg-2); }
+  .md hr { border: none; border-top: 1px solid var(--line-2); }
+  .md table { border-collapse: collapse; display: block; overflow-x: auto; }
+  .md th, .md td { border: 1px solid var(--line-2); padding: 5px 9px; }
+  .md details { background: var(--bg-3); border-radius: 8px; padding: 8px 10px; }
+  .md summary { cursor: pointer; font-weight: 650; }
+  .gal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .gal-grid button { aspect-ratio: 16 / 10; border-radius: 10px; overflow: hidden; background: var(--bg-3); border: 1px solid var(--line); padding: 0; }
+  .gal-grid img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .vbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; font-size: 12.5px; color: var(--fg-2); }
+  .vrow { display: grid; grid-template-columns: minmax(0, 1.6fr) 70px minmax(0, 1fr) 90px 70px auto; gap: 10px; align-items: center; padding: 9px 4px; border-top: 1px solid var(--line); font-size: 12.5px; }
+  .vrow .n { min-width: 0; }
+  .vrow .n b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vrow .n span, .vrow .gv { color: var(--fg-3); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+  .vrow.off { opacity: .55; }
+  .lightbox { position: fixed; inset: 0; z-index: 120; background: rgba(0,0,0,.86); display: none; align-items: center; justify-content: center; flex-direction: column; gap: 10px; padding: 30px 70px; }
+  .lightbox.open { display: flex; }
+  .lightbox img { max-width: 100%; max-height: calc(100vh - 130px); border-radius: 10px; object-fit: contain; }
+  .lightbox .cap { color: var(--fg-2); font-size: 13px; text-align: center; max-width: 700px; }
+  .lightbox .nav { position: absolute; top: 50%; transform: translateY(-50%); }
+  .lightbox .nav.prev { left: 16px; } .lightbox .nav.next { right: 16px; }
+  .lightbox .close { position: absolute; top: 16px; right: 16px; }
+  .disc-pick { width: min(440px, calc(100vw - 32px)); padding: 20px; display: flex; flex-direction: column; gap: 12px; max-height: calc(100vh - 64px); overflow: auto; }
+  .disc-pick h2 { font-size: 17px; font-weight: 750; }
+  .disc-pick p { color: var(--fg-2); font-size: 13px; }
+  .pick-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg-2); text-align: left; width: 100%; }
+  .pick-item:hover, .pick-item:focus-visible { border-color: rgba(var(--accent-rgb), .5); }
+  .pick-item .grow { flex: 1; min-width: 0; }
+  .pick-item small { display: block; color: var(--fg-3); font-size: 11.5px; }
+  @media (max-width: 1080px) { .pv-grid { grid-template-columns: 1fr; } .pv-info { position: static; } .filters { max-height: none; } }
+</style>
+<div class="lightbox" id="discLightbox" role="dialog" aria-modal="true" aria-label="Gallery">
+  <button class="btn icon close" data-dx="lb-close" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
+  <button class="btn icon nav prev" data-dx="lb-prev" aria-label="Previous image"><svg class="i" style="transform:rotate(180deg)"><use href="#i-chev-right"/></svg></button>
+  <img id="discLbImg" alt="" />
+  <div class="cap" id="discLbCap"></div>
+  <button class="btn icon nav next" data-dx="lb-next" aria-label="Next image"><svg class="i"><use href="#i-chev-right"/></svg></button>
+</div>
+<div class="scrim" id="discPickScrim"><div class="modal disc-pick" role="dialog" aria-modal="true" id="discPick"></div></div>
+<script>
+(() => {
+  'use strict';
+  const L = window.lumosUi;
+  if (!L) return;
+  const { $, esc, icon, toast, send } = L;
+  const st = () => L.getState();
+  const store = {
+    get(k, d) { try { return localStorage.getItem('lumos.discover.' + k) || d; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem('lumos.discover.' + k, v); } catch (e) { /* private mode */ } },
+  };
+  const TYPES = [['modpack', 'Modpack', 'Modpacks'], ['mod', 'Mod', 'Mods'], ['resourcepack', 'Resource Pack', 'Resource Packs'], ['shader', 'Shader', 'Shaders'], ['datapack', 'Data Pack', 'Data Packs'], ['world', 'World', 'Worlds']];
+  const typeName = t => (TYPES.find(x => x[0] === t) || TYPES[1])[1];
+  const typePlural = t => (TYPES.find(x => x[0] === t) || TYPES[1])[2];
+  const SRC = { modrinth: 'Modrinth', curseforge: 'CurseForge', horizon: 'Horizon registry' };
+  const LOADERS = [['fabric', 'Fabric'], ['forge', 'Forge'], ['neoforge', 'NeoForge'], ['quilt', 'Quilt']];
+  const fresh = (mode) => ({ source: 'modrinth', type: mode === 'hub' ? 'modpack' : 'mod', gameVersion: 'any', loaders: [], categories: [], env: '', openSource: false });
+
+  const D = {
+    mode: store.get('mode', 'browser') === 'hub' ? 'hub' : 'browser',
+    view: store.get('view', 'grid') === 'list' ? 'list' : 'grid',
+    f: { hub: fresh('hub'), browser: fresh('browser') },
+    ctx: null, ctxFor: '', ctxPending: '', worldReq: null,
+    tags: {}, tagsPending: {},
+    seq: 0, items: [], total: 0, next: 0, loading: false, done: true, lastKey: '', started: false,
+    cards: {}, installing: {}, installedKeys: new Set(), manual: {},
+    updates: {}, updatingAll: null, updOpen: false, suggest: {}, suggestHidden: store.get('suggest', '') === 'hidden',
+    proj: null, projSeq: 0, verSeq: 0, scrollTop: 0, lb: { list: [], i: 0 },
+  };
+  const cur = () => D.f[D.mode];
+  const pid = () => st().activeProfileId;
+  const hzInst = () => !!(D.ctx && D.ctx.horizon);
+  const keyOf = c => c.source === 'curseforge' ? 'cf-' + c.id : (c.slug || c.id);
+  const idOf = c => c.source === 'curseforge' ? String(c.id) : (c.slug || c.id);
+
+  // ───────── Instance context (Content Browser defaults) ─────────
+  function instanceKey() { const p = L.activeProfile(); return `${pid()}|${(p && p.version) || st().selectedVersion}`; }
+  function requestContext() {
+    const k = instanceKey();
+    if (D.ctxPending === k) return;
+    D.ctxPending = k;
+    send('discover_context', { profileId: pid() });
+  }
+  window.onDiscoverContext = function (c) {
+    if (D.worldReq && D.worldReq.profileId === c.profileId && D.worldReq.waiting) { const r = D.worldReq; r.waiting = false; r.cb(c); }
+    if (c.profileId !== pid() || c.error) return;
+    const changed = !D.ctx || D.ctx.profileId !== c.profileId || D.ctx.mc !== c.mc || D.ctx.loader !== c.loader;
+    D.ctx = c; D.ctxFor = D.ctxPending;
+    if (changed) {
+      const f = D.f.browser;
+      f.gameVersion = c.horizon ? 'any' : (c.mc || 'any');
+      f.loaders = c.loader === 'quilt' ? ['quilt', 'fabric'] : c.loader ? [c.loader] : [];
+      f.categories = [];
+      if (c.horizon) { f.source = 'horizon'; if (!['mod', 'resourcepack', 'shader'].includes(f.type)) f.type = 'mod'; }
+      else if (f.source === 'horizon') f.source = 'modrinth';
+      if (D.mode === 'browser') { closeProject(); loadTags(); renderFilters(); search(); }
+      send('discover_updates', { profileId: c.profileId });
+      loadSuggest(true);
+    }
+    renderHead();
+  };
+
+  // ───────── Head: mode + instance switcher ─────────
+  function renderHead() {
+    document.querySelectorAll('#discMode button').forEach(b => b.classList.toggle('active', b.dataset.mode === D.mode));
+    const hub = D.mode === 'hub';
+    $('discInst').classList.toggle('hidden', hub);
+    $('discoverSub').textContent = hub ? 'Everything on Modrinth and CurseForge. Modpacks install as a new instance.'
+      : hzInst() ? 'Horizon’s own mods, shaders and packs for this Horizon 26.3 instance.'
+      : D.ctx ? `Filtered for ${D.ctx.mc}${D.ctx.loader ? ' + ' + (LOADERS.find(l => l[0] === D.ctx.loader) || ['', D.ctx.loader])[1] : ''}. Installs go into this instance with their dependencies.` : 'Install content into an instance, checked against its version and loader.';
+    const p = L.activeProfile();
+    $('discTile').stableHTML = L.pxSvg(L.profileIcon(p));
+    $('discTarget').stableHTML = (st().profiles || []).map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
+    $('discTarget').value = pid();
+    $('discVer').textContent = (p && p.version) || st().selectedVersion;
+    renderUpdChip();
+    renderSuggest();
+  }
+
+  // ───────── Tags and the filter sidebar ─────────
+  function loadTags() {
+    const s = cur().source;
+    if (D.tags[s] || D.tagsPending[s]) return;
+    D.tagsPending[s] = true;
+    send('discover_tags', { source: s });
+  }
+  window.onDiscoverTags = function (t) {
+    D.tagsPending[t.source] = false;
+    if (!t.error) D.tags[t.source] = t;
+    if (!t.error && t.source !== 'modrinth' && !D.tags.modrinth) { /* game versions come from Modrinth */ }
+    renderFilters();
+  };
+  function gameVersions() {
+    const list = ((D.tags.modrinth || D.tags.curseforge || {}).gameVersions || []).slice();
+    const f = cur();
+    if (f.gameVersion && f.gameVersion !== 'any' && !list.includes(f.gameVersion)) list.unshift(f.gameVersion);
+    return list;
+  }
+  function opt(dx, val, label, on, extra = '') { return `<button class="opt ${on ? 'active' : ''}" data-dx="${dx}" data-v="${esc(val)}" aria-pressed="${on}" ${extra}>${label}</button>`; }
+  function renderFilters() {
+    const f = cur(), hz = D.mode === 'browser' && hzInst();
+    $('discSource').stableHTML = hz
+      ? opt('source', 'horizon', 'Horizon registry', true) + `<button class="opt" data-dx="url" data-url="https://playhorizon.dev/mods">Website${icon('external')}</button>`
+      : opt('source', 'modrinth', 'Modrinth', f.source === 'modrinth') + opt('source', 'curseforge', 'CurseForge', f.source === 'curseforge');
+    const types = hz ? TYPES.filter(t => ['mod', 'resourcepack', 'shader'].includes(t[0])) : TYPES;
+    $('discTypes').stableHTML = types.map(([v, n]) => opt('type', v, n, f.type === v, f.source === 'modrinth' && v === 'world' ? 'disabled title="Modrinth doesn’t host worlds. Use CurseForge."' : '')).join('');
+    const showVer = !hz, showLoaders = !hz && (f.type === 'mod' || f.type === 'modpack');
+    $('fGameVer').classList.toggle('hidden', !showVer);
+    if (showVer) {
+      const list = gameVersions();
+      $('discGameVer').stableHTML = `<option value="any">Any version</option>` + list.map(v => `<option value="${esc(v)}">${esc(v)}${D.mode === 'browser' && D.ctx && v === D.ctx.mc ? ' (this instance)' : ''}</option>`).join('');
+      $('discGameVer').value = f.gameVersion || 'any';
+    }
+    $('fLoaders').classList.toggle('hidden', !showLoaders);
+    if (showLoaders) {
+      const runnable = LOADERS.filter(([k]) => k !== 'quilt' || (D.ctx && D.ctx.loader === 'quilt' && D.mode === 'browser'));
+      $('discLoaders').stableHTML = runnable.map(([k, n]) => opt('loader', k, `<span class="loader-${k}">●</span>${n}`, f.loaders.includes(k))).join('');
+    }
+    const mr = f.source === 'modrinth' && !hz;
+    $('fEnv').classList.toggle('hidden', !mr || ['resourcepack', 'shader', 'world'].includes(f.type));
+    $('discEnv').stableHTML = opt('env', 'client', 'Client', f.env === 'client') + opt('env', 'server', 'Server', f.env === 'server');
+    $('fOpen').classList.toggle('hidden', !mr);
+    $('discOpenSrc').checked = !!f.openSource;
+    const tags = D.tags[hz ? 'horizon' : f.source];
+    const groups = tags && tags.categories ? (tags.categories[f.type] || []) : null;
+    let cats;
+    if (f.source === 'curseforge' && !st().curseforgeKeySet && !hz) cats = `<div class="hint-text">Add a CurseForge API key to see its categories.</div>`;
+    else if (!groups) cats = D.tagsPending[hz ? 'horizon' : f.source] ? `<div class="skeleton" style="height:60px"></div>` : `<div class="hint-text">Categories couldn’t load. <button class="btn ghost sm" data-dx="tags-retry">Retry</button></div>`;
+    else if (!groups.length) cats = `<div class="hint-text">No categories for ${esc(typePlural(f.type).toLowerCase())}.</div>`;
+    else cats = groups.map(g => `<div class="cat-h">${esc(g.header)}</div><div class="opt-grid">${g.items.map(i => opt('cat', i.value, esc(i.label), f.categories.includes(String(i.value)))).join('')}</div>`).join('');
+    $('discCats').stableHTML = cats;
+    $('modQuery').placeholder = `Search ${SRC[hz ? 'horizon' : f.source]} ${typePlural(f.type).toLowerCase()}…`;
+    document.querySelectorAll('#discView button').forEach(b => b.classList.toggle('active', b.dataset.view === D.view));
+  }
+
+  // ───────── Search and results ─────────
+  function query() {
+    const f = cur(), hub = D.mode === 'hub';
+    return { hub, profileId: hub ? '' : pid(), source: hub || !hzInst() ? f.source : 'horizon', query: $('modQuery').value.trim(), projectType: f.type, sortBy: $('modSort').value,
+      gameVersion: f.gameVersion || 'any', loaders: (f.type === 'mod' || f.type === 'modpack') ? f.loaders : [], categories: f.categories, environment: f.env, openSource: f.openSource, limit: 24 };
+  }
+  function ready() { return D.mode === 'hub' || (D.ctx && D.ctxFor === instanceKey()); }
+  function search(force) {
+    if (!D.started) { D.started = true; renderHead(); renderFilters(); }
+    if (D.mode === 'browser' && !ready()) { requestContext(); showSkeleton(); return; }
+    loadTags();
+    const q = query();
+    // The same search twice in a row (typing pause, then Enter or leaving the box) runs once.
+    const key = JSON.stringify(q);
+    if (!force && key === D.lastKey) return;
+    D.lastKey = key; D.items = []; D.next = 0; D.done = false; D.loading = true;
+    showSkeleton();
+    send('discover_search', { ...q, offset: 0, seq: ++D.seq });
+  }
+  function loadMore() {
+    if (D.loading || D.done || !D.lastKey) return;
+    D.loading = true;
+    $('modResults').insertAdjacentHTML('beforeend', skeletons(D.view === 'grid' ? 4 : 2, true));
+    send('discover_search', { ...JSON.parse(D.lastKey), offset: D.next, seq: ++D.seq });
+  }
+  function skeletons(n, more) {
+    const one = D.view === 'grid'
+      ? `<div class="dcard sk"><div class="bn skeleton" style="border-radius:0"></div><div class="bd"><div class="skeleton ic" style="border-radius:11px"></div><div class="skeleton" style="height:13px;width:60%;margin-top:8px"></div><div class="skeleton" style="height:11px;width:90%"></div><div class="skeleton" style="height:11px;width:70%"></div><div class="skeleton" style="height:26px;width:40%;margin-top:6px"></div></div></div>`
+      : `<div class="drow sk"><div class="skeleton ic"></div><div class="meta"><div class="skeleton" style="height:13px;width:40%"></div><div class="skeleton" style="height:11px;width:85%"></div></div></div>`;
+    return Array.from({ length: n }, () => one).join('').replace(/class="(dcard|drow) sk"/g, `class="$1 sk${more ? ' more' : ''}"`);
+  }
+  function showSkeleton() {
+    $('modResults').className = 'disc-results ' + D.view;
+    $('modResults').innerHTML = skeletons(D.view === 'grid' ? 8 : 5);
+    $('discMoreBtn').classList.add('hidden');
+  }
+  function emptyState(ic, title, text, btn) { return `<div class="card empty">${icon(ic, '')}<b>${esc(title)}</b><span>${esc(text)}</span>${btn || ''}</div>`; }
+  window.onDiscoverResults = function (data) {
+    if (data.seq !== D.seq) return; // an older search finished late
+    D.loading = false;
+    document.querySelectorAll('#modResults .sk').forEach(e => e.remove());
+    const hits = data.hits || [];
+    const first = !data.offset;
+    const f = cur();
+    if (first) D.total = data.total_hits || 0;
+    $('modCountInfo').textContent = data.error || data.notice ? ' ' : `${typeName(f.type)} (${(D.total || 0).toLocaleString()} result${D.total === 1 ? '' : 's'})`;
+    if (first && (data.error || data.notice || !hits.length)) {
+      D.done = true;
+      $('modResults').innerHTML = data.needKey
+        ? emptyState('key', 'CurseForge needs an API key', data.notice, `<button class="btn sm primary" data-dx="cf-key-open">${icon('key')}Add API key</button>`)
+        : data.notice ? emptyState('info', 'Nothing here', data.notice)
+        : data.error ? emptyState('alert', `Couldn’t load ${SRC[data.source] || 'results'}`, data.error, `<button class="btn sm" data-dx="retry">${icon('refresh')}Try again</button>`)
+        : emptyState('search', 'No results', 'Try another search, or loosen the filters.', `<button class="btn sm" data-dx="clear">Clear filters</button>`);
+      $('discMoreBtn').classList.add('hidden');
+      return;
+    }
+    hits.forEach(h => { D.cards[keyOf(h)] = h; });
+    D.items = D.items.concat(hits);
+    D.next = (data.offset || 0) + hits.length;
+    D.done = !hits.length || D.next >= D.total;
+    const html = hits.map(cardHtml).join('');
+    if (first) $('modResults').innerHTML = html; else $('modResults').insertAdjacentHTML('beforeend', html);
+    $('discMoreBtn').classList.toggle('hidden', D.done);
+    requestAnimationFrame(checkSentinel);
+  };
+  function isInstalled(c) { return c.installed === true || D.installedKeys.has(pid() + '|' + keyOf(c)); }
+  function updateFor(c) {
+    if (D.mode !== 'browser' || c.source !== 'modrinth') return null;
+    return (D.updates[pid()] || []).find(u => u.projectId === c.id) || null;
+  }
+  function actionBtn(c, big) {
+    const k = keyOf(c), sz = big ? '' : 'sm';
+    const a = `data-key="${esc(k)}"`;
+    if (D.installing[k]) return `<button class="btn ${sz} primary" ${a} data-dx="noop" disabled><span class="spinner" style="width:12px;height:12px"></span>Installing</button>`;
+    if (D.manual[k]) return `<button class="btn ${sz}" ${a} data-dx="url" data-url="${esc(D.manual[k])}">${icon('external')}Open on CurseForge</button>`;
+    const up = updateFor(c);
+    if (up) return `<button class="btn ${sz} primary" ${a} data-dx="update" title="${esc(up.current)} → ${esc(up.version)}">${icon('refresh')}Update</button>`;
+    if (D.mode === 'browser' && isInstalled(c) && c.project_type !== 'modpack') return `<button class="btn ${sz} ok" ${a} data-dx="noop" disabled>${icon('check')}Installed</button>`;
+    if (c.native && !c.native_ready) return `<button class="btn ${sz}" ${a} disabled title="Lumos's cloud builds don't have this native mod for your computer yet.">${icon('engine')}Not built yet</button>`;
+    if (c.source === 'curseforge' && c.allowDownload === false) return `<button class="btn ${sz}" ${a} data-dx="url" data-url="${esc(c.view_url)}">${icon('external')}Open on CurseForge</button>`;
+    return `<button class="btn ${sz} primary" ${a} data-dx="install">${icon('download')}Install</button>`;
+  }
+  function iconImg(c, cls) { return c.icon_url ? `<img class="${cls}" src="${esc(c.icon_url)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" />` : `<div class="${cls}">${icon('box', 'lg')}</div>`; }
+  function bannerStyle(c) { return typeof c.color === 'number' ? ` style="background:#${c.color.toString(16).padStart(6, '0')}"` : ''; }
+  function cardHtml(c) {
+    const k = esc(keyOf(c));
+    const stats = `<div class="stats-mini"><span title="Downloads">${icon('download')}${L.fmtNum(c.downloads)}</span>${c.follows ? `<span title="${c.source === 'curseforge' ? 'Likes' : 'Followers'}">${icon('heart')}${L.fmtNum(c.follows)}</span>` : ''}</div>`;
+    if (D.view === 'grid') {
+      return `<article class="dcard" tabindex="0" role="button" data-dx="open" data-card="${k}" aria-label="${esc(c.title)}">
+        <div class="bn"${bannerStyle(c)}>${c.banner ? `<img src="${esc(c.banner)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" />` : ''}</div>
+        <div class="bd">${iconImg(c, 'ic')}<div class="t">${esc(c.title)}</div><div class="by">${c.author ? 'by ' + esc(c.author) : '&nbsp;'}</div>
+        <div class="ds">${esc(c.description)}</div><div class="ft">${stats}${actionBtn(c)}</div></div></article>`;
+    }
+    const cats = (c.categories || []).slice(0, 3).map(x => `<span class="chip">${esc(String(x).replace(/-/g, ' '))}</span>`).join('');
+    return `<article class="drow" tabindex="0" role="button" data-dx="open" data-card="${k}" aria-label="${esc(c.title)}">${iconImg(c, 'ic')}
+      <div class="meta"><div class="t">${esc(c.title)} ${c.author ? `<small>by ${esc(c.author)}</small>` : ''}</div><div class="ds">${esc(c.description)}</div>
+      <div class="tags">${c.native ? '<span class="chip">native Rust</span>' : ''}${cats}</div></div>
+      <div class="side">${stats}<div class="row" style="gap:6px">${actionBtn(c)}</div></div></article>`;
+  }
+  function refreshButtons(key) {
+    const c = D.cards[key];
+    if (!c) return;
+    document.querySelectorAll(`button[data-key="${CSS.escape(key)}"]`).forEach(b => {
+      const big = !b.classList.contains('sm');
+      const t = document.createElement('div'); t.innerHTML = actionBtn(c, big);
+      b.replaceWith(t.firstElementChild);
+    });
+  }
+  // Infinite scroll, with "Load more" as a fallback.
+  function checkSentinel() {
+    if (L.ui.page !== 'discover' || D.proj || D.done || D.loading) return;
+    const r = $('discSentinel').getBoundingClientRect();
+    if (r.top < window.innerHeight + 700) loadMore();
+  }
+  $('page-discover').addEventListener('scroll', () => { if (!D.scrollRaf) D.scrollRaf = requestAnimationFrame(() => { D.scrollRaf = 0; checkSentinel(); }); }, { passive: true });
+
+  // ───────── Installing ─────────
+  function installCard(c, extra = {}) {
+    const k = keyOf(c);
+    const go = (profileId, world) => {
+      send('discover_install', { source: c.source, id: idOf(c), key: k, projectType: c.project_type, profileId, world: world || '', title: c.title, ...extra });
+      D.installing[k] = true; refreshButtons(k);
+    };
+    if (c.project_type === 'modpack') return go('');
+    const needWorld = c.project_type === 'datapack';
+    const withWorld = (profileId, worlds) => {
+      if (!needWorld) return go(profileId);
+      pickWorld(worlds, c, w => go(profileId, w));
+    };
+    if (D.mode === 'hub' || c.source === 'horizon' && !hzInst()) {
+      pickInstance(c, p => {
+        if (!needWorld) return go(p);
+        D.worldReq = { profileId: p, waiting: true, cb: ctx => withWorld(p, ctx.worlds || []) };
+        send('discover_context', { profileId: p });
+      });
+      return;
+    }
+    withWorld(pid(), (D.ctx && D.ctx.worlds) || []);
+  }
+  function openPick(html) { $('discPick').innerHTML = html; $('discPickScrim').classList.add('open'); const f = $('discPick').querySelector('button.pick-item, button.primary'); if (f) f.focus(); }
+  function closePick() { $('discPickScrim').classList.remove('open'); D.pickCb = null; }
+  function pickInstance(c, cb) {
+    D.pickCb = cb;
+    const profs = st().profiles || [];
+    openPick(`<h2>Install ${esc(c.title)} into…</h2><p>Lumos checks it against the instance's version and loader and adds what it needs.</p>
+      <div class="col" style="gap:6px">${profs.map(p => `<button class="pick-item" data-dx="pick" data-v="${esc(p.id)}"><span class="tile xs">${L.pxSvg(L.profileIcon(p))}</span><span class="grow"><b>${esc(p.name)}</b><small>${esc(p.version || st().selectedVersion)}</small></span>${icon('chev-right')}</button>`).join('')}</div>
+      <div class="row" style="justify-content:flex-end"><button class="btn sm" data-dx="pick-cancel">Cancel</button></div>`);
+  }
+  function pickWorld(worlds, c, cb) {
+    if (!worlds.length) { toast('This instance has no worlds yet. Play once and create a world, then add the data pack.', 'err'); return; }
+    D.pickCb = cb;
+    openPick(`<h2>Add ${esc(c.title)} to which world?</h2><p>Data packs belong to a world. They load the next time it opens.</p>
+      <div class="col" style="gap:6px">${worlds.map(w => `<button class="pick-item" data-dx="pick" data-v="${esc(w)}">${icon('globe')}<span class="grow"><b>${esc(w)}</b></span>${icon('chev-right')}</button>`).join('')}</div>
+      <div class="row" style="justify-content:flex-end"><button class="btn sm" data-dx="pick-cancel">Cancel</button></div>`);
+  }
+  function startUpdate(u) {
+    const c = Object.values(D.cards).find(x => x.source === 'modrinth' && x.id === u.projectId);
+    const k = c ? keyOf(c) : u.projectId;
+    if (!c) D.cards[k] = { source: 'modrinth', id: u.projectId, slug: u.projectId, title: u.file, project_type: u.projectType };
+    send('discover_install', { source: 'modrinth', id: u.projectId, key: k, versionId: u.versionId, projectType: u.projectType, profileId: pid() });
+    D.installing[k] = true; refreshButtons(k);
+  }
+  const api = {
+    onInstallStatus(key, status, msg, profileId) {
+      if (status === 'installing') D.installing[key] = true; else delete D.installing[key];
+      const c = D.cards[key];
+      if (status === 'installed') {
+        D.installedKeys.add((profileId || pid()) + '|' + key);
+        if (c && D.updates[profileId]) { D.updates[profileId] = D.updates[profileId].filter(u => u.projectId !== c.id); renderUpdChip(); renderUpdPanel(); }
+        if (c && D.suggest[profileId]) { D.suggest[profileId].cards = (D.suggest[profileId].cards || []).filter(x => keyOf({ ...x, source: 'modrinth' }) !== key); renderSuggest(); }
+      }
+      refreshButtons(key);
+      if (D.proj && D.proj.key === key) renderProjectHead();
+    },
+    onState() {
+      $('cfKeyChip').className = 'chip ' + (st().curseforgeKeySet ? 'ok' : '');
+      $('cfKeyChip').textContent = st().curseforgeKeySet ? 'Saved' : 'Not set';
+      $('cfKeyRemove').classList.toggle('hidden', !st().curseforgeKeySet);
+      if (D.cfKeySet !== undefined && D.cfKeySet !== !!st().curseforgeKeySet) { D.tags.curseforge = null; if (D.started && cur().source === 'curseforge') { renderFilters(); search(true); } }
+      D.cfKeySet = !!st().curseforgeKeySet;
+      if (!D.started) return;
+      renderHead();
+      if (D.ctxFor !== instanceKey()) requestContext();
+    },
+    search(force) { search(force); },
+    openBrowser(type, q) {
+      setMode('browser', true);
+      if (type) { cur().type = type; cur().categories = []; }
+      if (typeof q === 'string') $('modQuery').value = q;
+      closeProject(); L.go('discover'); renderFilters(); search();
+    },
+    searchFor(q) { $('modQuery').value = q || ''; closeProject(); L.go('discover'); search(); },
+  };
+  window.lumosDiscover = api;
+  window.onDiscoverManual = function (d) {
+    D.manual[d.key] = d.url; refreshButtons(d.key);
+    if (D.proj && D.proj.key === d.key) renderProjectHead();
+    toast(`${d.title} can only be downloaded on CurseForge's website. Use “Open on CurseForge”.`, 'info');
+  };
+
+  // ───────── Updates ─────────
+  window.onDiscoverUpdates = function (d) {
+    D.updates[d.profileId] = d.updates || [];
+    if (d.finished) { D.updatingAll = null; search(true); }
+    renderUpdChip(); renderUpdPanel();
+    if (d.profileId === pid()) (d.updates || []).forEach(u => { const c = Object.values(D.cards).find(x => x.id === u.projectId); if (c) refreshButtons(keyOf(c)); });
+  };
+  window.onDiscoverUpdateProgress = function (d) { D.updatingAll = d; renderUpdPanel(); };
+  function renderUpdChip() {
+    const n = D.mode === 'browser' ? (D.updates[pid()] || []).length : 0;
+    $('discUpdChip').classList.toggle('hidden', !n);
+    $('discUpdChip').querySelector('span').textContent = `Updates (${n})`;
+    if (!n && !D.updatingAll) { D.updOpen = false; $('discUpdPanel').classList.add('hidden'); }
+  }
+  function renderUpdPanel() {
+    const list = D.updates[pid()] || [];
+    $('discUpdPanel').classList.toggle('hidden', !D.updOpen || D.mode !== 'browser');
+    if (!D.updOpen) return;
+    const prog = D.updatingAll ? `<span class="faint"><span class="spinner" style="width:11px;height:11px;display:inline-block;vertical-align:-1px"></span> Updating ${D.updatingAll.done + 1} of ${D.updatingAll.total}…</span>` : '';
+    $('discUpdPanel').innerHTML = `<div class="row"><b>${list.length} update${list.length === 1 ? '' : 's'} for this instance</b>${prog || `<button class="btn sm primary" data-dx="update-all" ${list.length ? '' : 'disabled'}>${icon('refresh')}Update all</button>`}</div>`
+      + list.map((u, i) => `<div class="upd-item"><span class="grow"><b>${esc(u.file)}</b> <span class="faint">${esc(u.current)} → ${esc(u.version)}</span></span><span class="ch ch-${esc(u.channel)}">${esc(u.channel)}</span><button class="btn sm" data-dx="update-one" data-i="${i}" ${D.updatingAll ? 'disabled' : ''}>Update</button></div>`).join('');
+  }
+
+  // ───────── Suggestions ─────────
+  function loadSuggest(force) {
+    if (D.mode !== 'browser' || hzInst() || !D.ctx || !D.ctx.loader) return renderSuggest();
+    if (!force && D.suggest[pid()]) return renderSuggest();
+    D.suggest[pid()] = { loading: true, cards: [] };
+    renderSuggest();
+    send('discover_suggest', { profileId: pid() });
+  }
+  window.onDiscoverSuggest = function (d) { D.suggest[d.profileId] = { cards: d.cards || [] }; renderSuggest(); };
+  function renderSuggest() {
+    const s = D.suggest[pid()];
+    const show = D.mode === 'browser' && !D.suggestHidden && !hzInst() && D.ctx && D.ctx.loader && s && (s.loading || s.cards.length) && cur().type === 'mod' && cur().source === 'modrinth';
+    $('discSuggest').classList.toggle('hidden', !show);
+    if (!show) return;
+    if (s.loading) { $('discSuggestRow').stableHTML = Array.from({ length: 4 }, () => `<div class="sugg-card"><div class="skeleton ic"></div><div class="meta"><div class="skeleton" style="height:12px;width:70%"></div><div class="skeleton" style="height:10px;width:50%;margin-top:6px"></div></div></div>`).join(''); return; }
+    s.cards.forEach(c => { c.source = 'modrinth'; D.cards[keyOf(c)] = D.cards[keyOf(c)] || c; });
+    $('discSuggestRow').stableHTML = s.cards.map(c => `<div class="sugg-card" tabindex="0" role="button" data-dx="open" data-card="${esc(keyOf(c))}" aria-label="${esc(c.title)}">${iconImg(c, 'ic')}<div class="meta"><div class="t">${esc(c.title)}</div><div class="r">${esc(c.reason)}</div></div>${actionBtn(c)}</div>`).join('');
+  }
+
+  // ───────── Project page ─────────
+  function openProject(c) {
+    D.scrollTop = $('page-discover').scrollTop;
+    D.proj = { key: keyOf(c), card: c, data: null, tab: 'overview', versions: null, showAll: D.mode === 'hub', seq: ++D.projSeq };
+    $('discListView').classList.add('hidden');
+    $('discProjectView').classList.remove('hidden');
+    $('page-discover').scrollTop = 0;
+    renderProject();
+    if (c.source === 'horizon') return;
+    const base = { source: c.source, id: c.source === 'curseforge' ? String(c.id) : (c.id || c.slug), hub: D.mode === 'hub', profileId: D.mode === 'hub' ? '' : pid() };
+    send('discover_project', { ...base, seq: D.proj.seq });
+    send('discover_versions', { ...base, projectType: c.project_type, seq: D.proj.seq });
+    L.ui.discProject = true;
+  }
+  function closeProject() {
+    if (!D.proj) return;
+    D.proj = null;
+    $('discProjectView').classList.add('hidden');
+    $('discProjectView').innerHTML = '';
+    $('discListView').classList.remove('hidden');
+    $('page-discover').scrollTop = D.scrollTop; // the list never left the DOM, so its height is already there
+  }
+  window.onDiscoverProject = function (d) {
+    if (!D.proj || d.seq !== D.proj.seq) return;
+    if (d.error) { D.proj.error = d.error; renderProject(); return; }
+    const p = d.project;
+    // The page's card for this project carries the newest flags (installed, update).
+    const c = { ...D.proj.card, ...p, installed: p.installed ?? D.proj.card.installed, source: p.source, project_type: D.proj.card.project_type || p.project_type };
+    D.cards[D.proj.key] = c; D.proj.card = c; D.proj.data = p;
+    renderProject();
+  };
+  window.onDiscoverVersions = function (d) {
+    if (!D.proj || d.seq !== D.proj.seq) return;
+    D.proj.versions = d.error ? { error: d.error } : (d.versions || []).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    renderProject();
+  };
+  function renderProjectHead() {
+    const el = $('pvActs'); if (!el || !D.proj) return;
+    const c = D.proj.card;
+    el.innerHTML = actionBtn(c, true) + (c.view_url ? `<button class="btn" data-dx="url" data-url="${esc(c.view_url)}">${icon('external')}${c.source === 'curseforge' ? 'CurseForge' : c.source === 'horizon' ? 'Website' : 'Modrinth'}</button>` : '');
+  }
+  function renderProject() {
+    const P = D.proj, c = P.card, p = P.data || {};
+    const gallery = p.gallery || [];
+    const banner = p.banner || c.banner;
+    const cats = (p.categories || c.categories || []).slice(0, 8);
+    const tabs = [['overview', 'Overview'], ...(gallery.length ? [['gallery', `Gallery (${gallery.length})`]] : []), ...(c.source !== 'horizon' ? [['versions', `Versions${Array.isArray(P.versions) ? ` (${P.versions.length})` : ''}`]] : [])];
+    $('discProjectView').innerHTML = `<div class="pv">
+      <div><button class="btn ghost sm" data-dx="back">${icon('arrow-left')}Back to results</button></div>
+      <div class="pv-hero">${banner ? `<div class="bg" style="background-image:url('${esc(banner)}')"></div>` : ''}<div class="in">${iconImg(c, 'ic')}
+        <div class="meta"><h1>${esc(c.title)}</h1><p>${esc(p.description || c.description)}</p><div class="row wrap" style="gap:6px">${cats.map(x => `<span class="chip">${esc(String(x).replace(/-/g, ' '))}</span>`).join('')}</div></div>
+        <div class="acts" id="pvActs"></div></div></div>
+      <div class="pv-grid"><div class="col" style="gap:12px">
+        <div class="seg" id="pvTabs" role="tablist">${tabs.map(([k, n]) => `<button role="tab" data-dx="tab" data-v="${k}" class="${P.tab === k ? 'active' : ''}">${esc(n)}</button>`).join('')}</div>
+        <div class="card pv-body" id="pvBody"></div></div>
+        <aside class="card pv-info" id="pvInfo"></aside></div></div>`;
+    renderProjectHead();
+    renderTab();
+    renderInfo();
+  }
+  function renderTab() {
+    const P = D.proj, body = $('pvBody'); if (!body) return;
+    const p = P.data;
+    if (P.tab === 'overview') {
+      if (P.error) { body.innerHTML = emptyState('alert', 'Couldn’t load this project', P.error); return; }
+      if (P.card.source === 'horizon') { body.innerHTML = `<div class="md"><p>${esc(P.card.description)}</p><p><a data-dx="url" data-url="${esc(P.card.view_url)}">Read more on Horizon’s website</a></p></div>`; return; }
+      if (!p) { body.innerHTML = `<div class="col" style="gap:10px">${[90, 70, 85, 60, 75].map(w => `<div class="skeleton" style="height:12px;width:${w}%"></div>`).join('')}</div>`; return; }
+      const md = document.createElement('div'); md.className = 'md';
+      md.appendChild(sanitize(p.bodyFormat === 'html' ? p.body : mdToHtml(p.body)));
+      if (!md.textContent.trim() && !md.querySelector('img')) md.innerHTML = `<p class="faint">${esc(p.description || 'No description.')}</p>`;
+      body.innerHTML = ''; body.appendChild(md);
+    } else if (P.tab === 'gallery') {
+      const g = (p && p.gallery) || [];
+      body.innerHTML = `<div class="gal-grid">${g.map((x, i) => `<button data-dx="lb-open" data-i="${i}" aria-label="${esc(x.title || 'Image ' + (i + 1))}"><img src="${esc(x.url)}" alt="${esc(x.title || '')}" loading="lazy" referrerpolicy="no-referrer" /></button>`).join('')}</div>`;
+    } else renderVersions();
+  }
+  function renderVersions() {
+    const P = D.proj, body = $('pvBody'); if (!body) return;
+    if (!P.versions) { body.innerHTML = skeletons(0) + `<div class="col" style="gap:10px">${[1, 2, 3, 4].map(() => `<div class="skeleton" style="height:28px"></div>`).join('')}</div>`; return; }
+    if (P.versions.error) { body.innerHTML = emptyState('alert', 'Couldn’t load versions', P.versions.error); return; }
+    const all = P.versions, fit = all.filter(v => v.compatible);
+    const list = (P.showAll ? all : fit).slice(0, 200);
+    const canFilter = D.mode === 'browser';
+    body.innerHTML = `<div class="vbar"><span>${canFilter ? `${fit.length} of ${all.length} work with this instance` : `${all.length} versions`}</span>${canFilter ? `<label class="disc-switch" style="gap:8px"><span>Show all versions</span><span class="switch"><input type="checkbox" data-dx="ver-all" ${P.showAll ? 'checked' : ''} /><span></span></span></label>` : ''}</div>`
+      + (list.length ? list.map(v => {
+        const gv = v.gameVersions || [];
+        const gvText = gv.length > 3 ? `${gv[gv.length - 1]} … ${gv[0]} (${gv.length})` : gv.join(', ');
+        const btn = P.card.source === 'curseforge' && v.downloadable === false
+          ? `<button class="btn sm" data-dx="url" data-url="${esc(P.card.view_url + '/files/' + v.id)}">${icon('external')}Site</button>`
+          : `<button class="btn sm ${v.compatible ? 'primary' : ''}" data-dx="install-version" data-v="${esc(v.id)}">${icon('download')}Install</button>`;
+        return `<div class="vrow ${v.compatible ? '' : 'off'}"><div class="n"><b>${esc(v.name || v.number)}</b><span>${esc(v.number)}${v.deps ? ` · ${v.deps} dependenc${v.deps === 1 ? 'y' : 'ies'}` : ''}</span></div>
+          <span class="ch ch-${esc(v.channel)}">${esc(v.channel)}</span>
+          <div class="n"><b style="font-weight:600">${esc((v.loaders || []).map(l => (LOADERS.find(x => x[0] === l) || [l, l])[1]).join(', ') || '—')}</b><span class="gv" title="${esc(gv.join(', '))}">${esc(gvText)}</span></div>
+          <span class="faint">${v.date ? L.fmtAgo(Date.parse(v.date)) : ''}</span><span class="faint">${L.fmtNum(v.downloads)}</span>${btn}</div>`;
+      }).join('') : emptyState('info', 'No version fits this instance', 'Turn on “Show all versions” to pick one anyway. Lumos will warn you before installing.'));
+  }
+  function verRange(list) {
+    const rel = (list || []).filter(v => /^\d+\.\d+(\.\d+)?$/.test(v));
+    if (!rel.length) return '—';
+    const sorted = rel.slice().sort((a, b) => { const k = s => s.split('.').map(Number); const x = k(a), y = k(b); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); } return 0; });
+    return sorted.length === 1 ? sorted[0] : `${sorted[0]} – ${sorted[sorted.length - 1]}`;
+  }
+  function renderInfo() {
+    const P = D.proj, c = P.card, p = P.data || {}, el = $('pvInfo'); if (!el) return;
+    const latest = Array.isArray(P.versions) ? (P.versions.find(v => v.compatible) || P.versions[0]) : null;
+    const who = p.organization ? esc(p.organization) : (p.team || []).slice(0, 4).map(t => esc(t.name)).join(', ') || esc(c.author || '—');
+    const lic = p.license && (p.license.name || p.license.id) ? (p.license.url ? `<a class="md" data-dx="url" data-url="${esc(p.license.url)}" style="color:var(--accent);cursor:pointer">${esc(p.license.name || p.license.id)}</a>` : esc(p.license.name || p.license.id)) : '—';
+    const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
+    el.innerHTML = `<div><h4>Information</h4><dl>
+      ${row(p.organization ? 'Team' : 'Author', who)}
+      ${row('Source', SRC[c.source] || '—')}${row('Type', typeName(c.project_type))}
+      ${row('Downloads', (p.downloads ?? c.downloads ?? 0).toLocaleString())}
+      ${p.followers || c.follows ? row(c.source === 'curseforge' ? 'Likes' : 'Followers', (p.followers ?? c.follows ?? 0).toLocaleString()) : ''}
+      ${latest ? row(D.mode === 'browser' && latest.compatible ? 'Latest for you' : 'Latest', `${esc(latest.number || latest.name)} <span class="ch ch-${esc(latest.channel)}">${esc(latest.channel)}</span>`) : ''}
+      ${latest && latest.date ? row('Published', esc(new Date(latest.date).toLocaleDateString())) : ''}
+      ${(p.loaders || c.loaders || []).length ? row('Loaders', esc((p.loaders || c.loaders).map(l => (LOADERS.find(x => x[0] === l) || [l, l.charAt(0).toUpperCase() + l.slice(1)])[1]).join(', '))) : ''}
+      ${p.gameVersions ? row('Game versions', esc(verRange(p.gameVersions))) : ''}
+      ${p.updated ? row('Updated', esc(L.fmtAgo(Date.parse(p.updated)))) : ''}
+      ${row('License', lic)}
+      </dl></div>
+      ${(p.categories || c.categories || []).length ? `<div><h4>Categories</h4><div class="row wrap" style="gap:6px">${(p.categories || c.categories).map(x => `<span class="chip">${esc(String(x).replace(/-/g, ' '))}</span>`).join('')}</div></div>` : ''}
+      ${(p.links || []).length ? `<div><h4>Links</h4><div class="col" style="gap:6px">${p.links.map(l => `<button class="btn sm" style="justify-content:flex-start" data-dx="url" data-url="${esc(l.url)}">${icon('external')}${esc(l.label)}</button>`).join('')}</div></div>` : ''}`;
+  }
+
+  // ───────── Markdown → HTML, then sanitised ─────────
+  function inlineMd(s) {
+    const codes = [];
+    s = s.replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000'; });
+    s = s.replace(/&(?!#?\w+;)/g, '&amp;').replace(/<(?!\/?[a-zA-Z][^<>]*>)/g, '&lt;');
+    s = s.replace(/!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g, (_, a, u) => `<img src="${u.replace(/"/g, '%22')}" alt="${a.replace(/"/g, '&quot;')}">`);
+    s = s.replace(/\[([^\]]+)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g, (_, t, u) => `<a href="${u.replace(/"/g, '%22')}">${t}</a>`);
+    s = s.replace(/&lt;(https?:\/\/[^\s>]+)>/g, '<a href="$1">$1</a>');
+    s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2">$2</a>');
+    s = s.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>').replace(/(^|[^\w])__([^_\n]+?)__(?=[^\w]|$)/g, '$1<strong>$2</strong>');
+    s = s.replace(/(^|[^*\w])\*([^*\s][^*\n]*?)\*(?=[^*\w]|$)/g, '$1<em>$2</em>').replace(/(^|[^\w])_([^_\s][^_\n]*?)_(?=[^\w]|$)/g, '$1<em>$2</em>');
+    s = s.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+    s = s.replace(/( {2,}|\\)\n/g, '<br>');
+    return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${esc(codes[+i])}</code>`);
+  }
+  const LIST_RE = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+  function isBlockStart(l) { return /^\s{0,3}(#{1,6}\s|>|```|~~~)/.test(l) || LIST_RE.test(l) || /^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(l) || /^\s*<\/?(p|div|center|h\d|ul|ol|table|details|img|br|hr|blockquote|pre)\b/i.test(l); }
+  function mdToHtml(src) {
+    const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
+    const out = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const fence = line.match(/^\s*(```|~~~)/);
+      if (fence) { const buf = []; i++; while (i < lines.length && !lines[i].trim().startsWith(fence[1])) buf.push(lines[i++]); i++; out.push(`<pre><code>${esc(buf.join('\n'))}</code></pre>`); continue; }
+      if (!line.trim()) { i++; continue; }
+      let m = line.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/);
+      if (m) { out.push(`<h${m[1].length}>${inlineMd(m[2])}</h${m[1].length}>`); i++; continue; }
+      if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { out.push('<hr>'); i++; continue; }
+      if (/^\s{0,3}>/.test(line)) { const buf = []; while (i < lines.length && /^\s{0,3}>/.test(lines[i])) buf.push(lines[i++].replace(/^\s{0,3}>\s?/, '')); out.push(`<blockquote>${mdToHtml(buf.join('\n'))}</blockquote>`); continue; }
+      if (/^\s*<\/?[a-zA-Z][^>]*>\s*$/.test(line) || /^\s*<(p|div|center|h\d|table|details|img|picture|a)\b/i.test(line)) {
+        const buf = []; while (i < lines.length && lines[i].trim()) buf.push(lines[i++]);
+        out.push(buf.map(l => /^\s*</.test(l) ? l : inlineMd(l)).join('\n')); continue;
+      }
+      if (line.includes('|') && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1])) {
+        const cells = l => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(x => inlineMd(x.trim()));
+        const head = cells(line); i += 2;
+        const rows = []; while (i < lines.length && lines[i].includes('|') && lines[i].trim()) rows.push(cells(lines[i++]));
+        out.push(`<table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(x => `<td>${x}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
+        continue;
+      }
+      if (LIST_RE.test(line)) {
+        const base = line.match(LIST_RE)[1].length, ordered = /\d/.test(line.match(LIST_RE)[2]);
+        const items = [];
+        while (i < lines.length) {
+          const l = lines[i], lm = l.match(LIST_RE);
+          if (lm && lm[1].length <= base + 1) { items.push([lm[3]]); i++; continue; }
+          if (!l.trim()) { if (i + 1 < lines.length && (/^\s{2,}\S/.test(lines[i + 1]) || (LIST_RE.test(lines[i + 1]) && lines[i + 1].match(LIST_RE)[1].length <= base + 1))) { i++; if (items.length) items[items.length - 1].push(''); continue; } break; }
+          if (/^\s{2,}/.test(l) || (items.length && !isBlockStart(l))) { if (items.length) items[items.length - 1].push(l.replace(new RegExp('^\\s{0,' + (base + 4) + '}'), '')); i++; continue; }
+          break;
+        }
+        out.push(`<${ordered ? 'ol' : 'ul'}>${items.map(it => { const [first, ...rest] = it; const sub = rest.join('\n'); return `<li>${inlineMd(first)}${sub.trim() ? (LIST_RE.test(rest.find(x => x.trim()) || '') ? mdToHtml(sub) : ' ' + inlineMd(sub.trim())) : ''}</li>`; }).join('')}</${ordered ? 'ol' : 'ul'}>`);
+        continue;
+      }
+      const buf = [];
+      while (i < lines.length && lines[i].trim() && !(buf.length && isBlockStart(lines[i]))) buf.push(lines[i++]);
+      out.push(`<p>${inlineMd(buf.join('\n'))}</p>`);
+    }
+    return out.join('\n');
+  }
+  const ALLOWED = new Set(['a', 'b', 'strong', 'i', 'em', 'u', 's', 'del', 'strike', 'ins', 'code', 'pre', 'kbd', 'sub', 'sup', 'mark', 'small', 'br', 'hr', 'p', 'div', 'span', 'center', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'img', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'details', 'summary', 'figure', 'figcaption', 'picture', 'dl', 'dt', 'dd', 'abbr']);
+  const DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'option', 'noscript', 'template', 'svg', 'math', 'link', 'meta', 'base', 'video', 'audio', 'canvas', 'frame', 'frameset', 'title', 'head', 'source', 'track']);
+  const KEEP_ATTR = new Set(['alt', 'title', 'width', 'height', 'align', 'colspan', 'rowspan', 'open']);
+  function sanitize(html) {
+    const tpl = document.createElement('template');
+    tpl.innerHTML = String(html || '');
+    (function clean(parent) {
+      for (const node of [...parent.childNodes]) {
+        if (node.nodeType === 3) continue;
+        if (node.nodeType !== 1) { node.remove(); continue; }
+        const tag = node.tagName.toLowerCase();
+        if (DROP.has(tag)) { node.remove(); continue; }
+        clean(node);
+        if (!ALLOWED.has(tag)) { node.replaceWith(...node.childNodes); continue; }
+        for (const a of [...node.attributes]) {
+          const n = a.name.toLowerCase(), v = a.value.trim();
+          const keep = (n === 'href' && tag === 'a' && /^(https?:\/\/|#)/i.test(v)) || (n === 'src' && tag === 'img' && /^https?:\/\//i.test(v)) || KEEP_ATTR.has(n);
+          if (!keep) node.removeAttribute(a.name);
+        }
+        for (const k of ['width', 'height']) if (node.hasAttribute(k) && !/^\d{1,4}%?$/.test(node.getAttribute(k))) node.removeAttribute(k);
+        if (tag === 'img') {
+          if (!node.getAttribute('src')) { node.remove(); continue; }
+          node.setAttribute('src', node.getAttribute('src').replace(/^http:/i, 'https:'));
+          node.setAttribute('loading', 'lazy'); node.setAttribute('decoding', 'async'); node.setAttribute('referrerpolicy', 'no-referrer');
+        }
+        if (tag === 'a' && node.getAttribute('href')) node.dataset.ext = '1';
+      }
+    })(tpl.content);
+    return document.importNode(tpl.content, true);
+  }
+
+  // ───────── Lightbox ─────────
+  function lbShow(i) {
+    const g = D.lb.list; if (!g.length) return;
+    D.lb.i = (i + g.length) % g.length;
+    const x = g[D.lb.i];
+    $('discLbImg').src = x.raw_url || x.url; $('discLbImg').alt = x.title || '';
+    $('discLbCap').textContent = [x.title, x.description].filter(Boolean).join(' — ') + `  (${D.lb.i + 1}/${g.length})`;
+    $('discLightbox').classList.add('open');
+  }
+  function lbClose() { $('discLightbox').classList.remove('open'); $('discLbImg').removeAttribute('src'); }
+
+  // ───────── Mode / events ─────────
+  function setMode(m, quiet) {
+    if (D.mode === m) return;
+    D.mode = m; store.set('mode', m);
+    closeProject();
+    $('page-discover').scrollTop = 0;
+    renderHead(); renderFilters(); renderUpdPanel();
+    if (!quiet) search();
+  }
+  function changed() { renderFilters(); renderSuggest(); search(); }
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-dx], .md a[data-ext]');
+    if (!el) return;
+    if (el.matches('.md a[data-ext]')) {
+      e.preventDefault();
+      const href = el.getAttribute('href') || '';
+      if (/^https?:\/\//i.test(href)) send('open_url', { url: href.replace(/^http:/i, 'https:') });
+      return;
+    }
+    const f = cur(), v = el.dataset.v;
+    switch (el.dataset.dx) {
+      case 'mode': break;
+      case 'noop': break;
+      case 'url': e.preventDefault(); e.stopPropagation(); send('open_url', { url: el.dataset.url }); break;
+      case 'source': if (f.source !== v) { f.source = v; f.categories = []; if (v === 'modrinth' && f.type === 'world') f.type = 'mod'; loadTags(); changed(); } break;
+      case 'type': if (f.type !== v) { f.type = v; f.categories = []; changed(); } break;
+      case 'loader': f.loaders = f.loaders.includes(v) ? f.loaders.filter(x => x !== v) : f.loaders.concat(v); changed(); break;
+      case 'env': f.env = f.env === v ? '' : v; changed(); break;
+      case 'cat': f.categories = f.categories.includes(v) ? f.categories.filter(x => x !== v) : f.categories.concat(v); changed(); break;
+      case 'clear': {
+        const keep = { source: f.source, type: f.type };
+        Object.assign(f, fresh(D.mode), keep);
+        if (D.mode === 'browser' && D.ctx) { f.gameVersion = D.ctx.horizon ? 'any' : D.ctx.mc; f.loaders = D.ctx.loader === 'quilt' ? ['quilt', 'fabric'] : D.ctx.loader ? [D.ctx.loader] : []; }
+        changed(); break;
+      }
+      case 'tags-retry': D.tags[f.source] = null; loadTags(); renderFilters(); break;
+      case 'retry': search(true); break;
+      case 'more': loadMore(); break;
+      case 'open': if (e.target.closest('button')) break; { const c = D.cards[el.dataset.card]; if (c) openProject(c); } break;
+      case 'install': { e.stopPropagation(); const c = D.cards[el.dataset.key]; if (c) installCard(c); break; }
+      case 'update': { e.stopPropagation(); const c = D.cards[el.dataset.key]; const u = c && updateFor(c); if (u) startUpdate(u); break; }
+      case 'install-version': {
+        const c = D.proj && D.proj.card; if (!c) break;
+        installCard({ ...c, id: c.source === 'modrinth' ? (D.proj.data && D.proj.data.id) || c.id : c.id }, { versionId: v });
+        toast(`Installing ${c.title} (${(D.proj.versions || []).find(x => x.id === v)?.number || 'chosen version'})…`, 'info');
+        break;
+      }
+      case 'back': closeProject(); break;
+      case 'ver-all': D.proj.showAll = el.checked; renderVersions(); break;
+      case 'tab': D.proj.tab = v; document.querySelectorAll('#pvTabs button').forEach(b => b.classList.toggle('active', b.dataset.v === v)); renderTab(); break;
+      case 'lb-open': D.lb.list = (D.proj.data && D.proj.data.gallery) || []; lbShow(+el.dataset.i); break;
+      case 'lb-prev': lbShow(D.lb.i - 1); break;
+      case 'lb-next': lbShow(D.lb.i + 1); break;
+      case 'lb-close': lbClose(); break;
+      case 'pick': { const cb = D.pickCb; closePick(); if (cb) cb(v); break; }
+      case 'pick-cancel': closePick(); break;
+      case 'updates-toggle': D.updOpen = !D.updOpen; renderUpdPanel(); break;
+      case 'update-one': { const u = (D.updates[pid()] || [])[+el.dataset.i]; if (u) { startUpdate(u); el.disabled = true; } break; }
+      case 'update-all': D.updatingAll = { done: 0, total: (D.updates[pid()] || []).length }; renderUpdPanel(); send('discover_update_all', { profileId: pid() }); break;
+      case 'suggest-hide': D.suggestHidden = true; store.set('suggest', 'hidden'); renderSuggest(); toast('Recommendations hidden. Clear filters to bring them back.', 'info'); break;
+      case 'cf-key-open': L.openSettings('discover'); setTimeout(() => $('setCfKey').focus(), 50); break;
+      case 'cf-key-save': {
+        const k = $('setCfKey').value.trim();
+        if (!k) { $('setCfKey').classList.add('invalid'); $('setCfKey').focus(); break; }
+        send('save_settings', { curseforgeApiKey: k }); $('setCfKey').value = ''; toast('CurseForge API key saved.'); break;
+      }
+      case 'cf-key-remove': send('save_settings', { curseforgeApiKey: '' }); toast('CurseForge API key removed.', 'info'); break;
+    }
+  });
+  $('discPickScrim').addEventListener('click', e => { if (e.target === $('discPickScrim')) closePick(); });
+  $('discLightbox').addEventListener('click', e => { if (e.target === $('discLightbox')) lbClose(); });
+  document.querySelectorAll('#discMode button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+  document.querySelectorAll('#discView button').forEach(b => b.addEventListener('click', () => {
+    if (D.view === b.dataset.view) return;
+    D.view = b.dataset.view; store.set('view', D.view);
+    renderFilters();
+    $('modResults').className = 'disc-results ' + D.view;
+    if (D.items.length) $('modResults').innerHTML = D.items.map(cardHtml).join(''); else if (D.loading) showSkeleton();
+  }));
+  $('discTarget').addEventListener('change', e => { L.selectProfile(e.target.value); renderHead(); L.go('discover'); });
+  $('discGameVer').addEventListener('change', e => { cur().gameVersion = e.target.value; changed(); });
+  $('discOpenSrc').addEventListener('change', e => { cur().openSource = e.target.checked; changed(); });
+  $('setCfKey').addEventListener('input', e => e.target.classList.remove('invalid'));
+  $('setCfKey').addEventListener('keydown', e => { if (e.key === 'Enter') document.querySelector('[data-dx="cf-key-save"]').click(); });
+  let timer = null;
+  $('modQuery').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => search(), 350); });
+  $('modQuery').addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(timer); search(); } });
+  $('modSort').addEventListener('change', () => search());
+  document.addEventListener('keydown', (e) => {
+    if ($('discLightbox').classList.contains('open')) {
+      if (e.key === 'Escape') { e.stopImmediatePropagation(); lbClose(); }
+      else if (e.key === 'ArrowLeft') lbShow(D.lb.i - 1);
+      else if (e.key === 'ArrowRight') lbShow(D.lb.i + 1);
+      return;
+    }
+    if ($('discPickScrim').classList.contains('open')) { if (e.key === 'Escape') { e.stopImmediatePropagation(); closePick(); } return; }
+    if (L.ui.page !== 'discover' || document.querySelector('.scrim.open')) return;
+    const typing = e.target.closest && e.target.closest('input, textarea, select, [contenteditable]');
+    if (e.key === 'Escape' && D.proj && !typing) { closeProject(); return; }
+    if (e.key === '/' && !typing && !D.proj) { e.preventDefault(); $('modQuery').focus(); return; }
+    if ((e.key === 'Enter' || e.key === ' ') && !typing && e.target.matches && e.target.matches('[data-dx="open"]')) { e.preventDefault(); const c = D.cards[e.target.dataset.card]; if (c) openProject(c); }
+  }, true);
+  renderHead();
+  if (L.ui.modLoaded) search();
+})();
+</script>
+<!-- ═════════════════ end feat/discover ═════════════════ -->
 </body>
 </html>

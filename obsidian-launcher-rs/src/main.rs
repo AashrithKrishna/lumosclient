@@ -34,6 +34,9 @@ mod net;
 mod crash_help;
 mod repair;
 mod updater;
+// feat/discover: Content Hub / Content Browser (Modrinth filters, CurseForge, updates, suggestions)
+mod curseforge;
+mod discover;
 
 const HORIZON_ID: &str = "Horizon 26.3 (Rust)";
 const LAUNCHER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -160,6 +163,10 @@ struct LauncherConfig {
     profiles: Vec<Profile>,
     #[serde(default)]
     servers: Vec<ServerEntry>,
+    /// feat/discover: the player's own CurseForge API key (only ever in launcher.json, which is
+    /// owner-only; never sent to the page or logged).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    curseforge_api_key: String,
 }
 
 fn default_player_name() -> String {
@@ -592,6 +599,7 @@ impl AppState {
                     ..Default::default()
                 }],
                 servers: vec![],
+                curseforge_api_key: String::new(),
             });
         // Older builds pinned a Homebrew Java; LumosClient now downloads the right Java itself.
         if config.java_home.contains("/opt/homebrew/opt/openjdk") {
@@ -743,6 +751,8 @@ impl AppState {
                 "elyUuid": ely.map(|s| elyby::dashed_uuid(&s.uuid)),
             },
             "launcherVersion": LAUNCHER_VERSION,
+            // feat/discover: only whether a key is saved, never the key.
+            "curseforgeKeySet": !self.config.curseforge_api_key.trim().is_empty(),
         })
         .to_string()
     }
@@ -1409,7 +1419,7 @@ fn search_modrinth_async(proxy: EventLoopProxy<UserEvent>, paths: installer::Pat
         };
         // Horizon 26.3 can't run Java mods: its instances browse Horizon's own registry instead.
         if selected == HORIZON_ID {
-            let mut payload = horizon_mods::search(&game_dir, &query, &project_type, &sort_by, offset as usize);
+            let mut payload = horizon_mods::search(&game_dir, &query, &project_type, &sort_by, offset as usize, &[]);
             payload["seq"] = json!(seq);
             call_js(&proxy, "renderModResults", payload);
             return;
@@ -1786,6 +1796,593 @@ fn download_modrinth_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<A
     });
 }
 
+// ───────────────────────── feat/discover: Content Hub / Content Browser ─────────────────────────
+// Search, tags, project pages, versions, installs (any source, any version, all through install
+// plans), updates and suggestions. Logic lives in discover.rs and curseforge.rs; this block only
+// finds the instance and talks to the page.
+use mod_plan::Modrinth as _;
+
+/// The instance a Discover request is about: (id, folder, version, paths).
+fn discover_target(shared: &Arc<Mutex<AppState>>, profile_id: &str) -> Option<(String, PathBuf, String, installer::Paths)> {
+    let st = shared.lock().unwrap();
+    st.target_instance(profile_id).map(|(pid, dir, ver)| (pid, dir, ver, st.paths.clone()))
+}
+
+fn discover_folder(project_type: &str) -> &'static str {
+    match project_type {
+        "resourcepack" => "resourcepacks",
+        "shader" => "shaderpacks",
+        _ => "mods",
+    }
+}
+
+fn cf_key(shared: &Arc<Mutex<AppState>>) -> Option<String> {
+    Some(shared.lock().unwrap().config.curseforge_api_key.trim().to_owned()).filter(|k| !k.is_empty())
+}
+
+/// What the Content Browser filters an instance for: its Minecraft version, loader and worlds.
+fn discover_context(proxy: &EventLoopProxy<UserEvent>, shared: &Arc<Mutex<AppState>>, profile_id: &str) {
+    let Some((pid, dir, selected, paths)) = discover_target(shared, profile_id) else {
+        call_js(proxy, "onDiscoverContext", json!({"profileId": profile_id, "error": GONE_INSTANCE}));
+        return;
+    };
+    let horizon = selected == HORIZON_ID;
+    call_js(
+        proxy,
+        "onDiscoverContext",
+        json!({"profileId": pid, "mc": mc_version_for(&paths, &selected), "loader": mod_loader(&paths, &selected), "horizon": horizon, "worlds": curseforge::worlds(&dir)}),
+    );
+}
+
+fn discover_search_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, v: serde_json::Value) {
+    std::thread::spawn(move || {
+        let seq = v.get("seq").and_then(|x| x.as_u64()).unwrap_or(0);
+        let hub = v.get("hub").and_then(|x| x.as_bool()).unwrap_or(false);
+        let source = v.get("source").and_then(|x| x.as_str()).unwrap_or("modrinth").to_owned();
+        let q = discover::Query::from_json(&v);
+        let target = if hub { None } else { discover_target(&shared, v.get("profileId").and_then(|x| x.as_str()).unwrap_or("")) };
+        let mut payload = if !hub && target.is_none() {
+            json!({"hits": [], "total_hits": 0, "error": GONE_INSTANCE})
+        } else {
+            match source.as_str() {
+                "horizon" => match &target {
+                    Some((_, dir, sel, _)) if sel == HORIZON_ID => horizon_mods::search(dir, &q.text, &q.project_type, &q.sort, q.offset as usize, &q.categories),
+                    _ => json!({"hits": [], "total_hits": 0, "source": "horizon", "notice": "Horizon's registry is for Horizon 26.3 instances."}),
+                },
+                "curseforge" => match cf_key(&shared) {
+                    None => json!({"hits": [], "total_hits": 0, "source": "curseforge", "needKey": true, "notice": curseforge::NO_KEY}),
+                    Some(key) => {
+                        let mut p = curseforge::search(&curseforge::Live { key }, &q);
+                        if let Some((_, dir, _, _)) = &target {
+                            let have = curseforge::installed_ids(&dir.join(discover_folder(&q.project_type)));
+                            for h in p.get_mut("hits").and_then(|h| h.as_array_mut()).into_iter().flatten() {
+                                let on = h.get("id").and_then(|i| i.as_str()).and_then(|i| i.parse::<u64>().ok()).is_some_and(|i| have.contains(&i));
+                                h["installed"] = json!(on);
+                            }
+                        }
+                        p
+                    }
+                },
+                _ => {
+                    let mut p = discover::modrinth_search(&q);
+                    if let Some((_, dir, _, _)) = &target {
+                        if matches!(q.project_type.as_str(), "mod" | "resourcepack" | "shader") {
+                            let have = installed_projects_cached(&dir.join(discover_folder(&q.project_type)));
+                            for h in p.get_mut("hits").and_then(|h| h.as_array_mut()).into_iter().flatten() {
+                                let on = h.get("id").and_then(|i| i.as_str()).is_some_and(|i| have.contains_key(i));
+                                h["installed"] = json!(on);
+                            }
+                        }
+                    }
+                    p
+                }
+            }
+        };
+        payload["seq"] = json!(seq);
+        payload["offset"] = json!(q.offset);
+        call_js(&proxy, "onDiscoverResults", payload);
+    });
+}
+
+fn discover_tags_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, source: String) {
+    std::thread::spawn(move || {
+        let res = match source.as_str() {
+            "horizon" => horizon_mods::categories(),
+            "curseforge" => match cf_key(&shared) {
+                None => Err(curseforge::NO_KEY.to_owned()),
+                Some(key) => curseforge::categories(&curseforge::Live { key }).map(|mut c| {
+                    // CurseForge uses the same Minecraft versions.
+                    c["gameVersions"] = discover::modrinth_tags().map(|t| t["gameVersions"].clone()).unwrap_or(json!([]));
+                    c
+                }),
+            },
+            _ => discover::modrinth_tags(),
+        };
+        match res {
+            Ok(mut t) => {
+                t["source"] = json!(source);
+                call_js(&proxy, "onDiscoverTags", t);
+            }
+            Err(e) => call_js(&proxy, "onDiscoverTags", json!({"source": source, "error": e})),
+        }
+    });
+}
+
+/// (Minecraft version, loaders) a Browser request is checked against; nothing for the Hub.
+fn discover_fit(shared: &Arc<Mutex<AppState>>, v: &serde_json::Value) -> Option<(PathBuf, String, Vec<&'static str>)> {
+    if v.get("hub").and_then(|x| x.as_bool()).unwrap_or(false) {
+        return None;
+    }
+    let (_, dir, sel, paths) = discover_target(shared, v.get("profileId").and_then(|x| x.as_str()).unwrap_or(""))?;
+    let loaders = mod_loader(&paths, &sel).map(forge::compatible_modrinth_loaders).unwrap_or_default();
+    Some((dir, mc_version_for(&paths, &sel), loaders))
+}
+
+fn discover_project_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, v: serde_json::Value) {
+    std::thread::spawn(move || {
+        let seq = v.get("seq").and_then(|x| x.as_u64()).unwrap_or(0);
+        let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_owned();
+        let source = v.get("source").and_then(|x| x.as_str()).unwrap_or("modrinth");
+        let fit = discover_fit(&shared, &v);
+        let res = match source {
+            "curseforge" => match cf_key(&shared) {
+                None => Err(curseforge::NO_KEY.to_owned()),
+                Some(key) => curseforge::project(&curseforge::Live { key }, &id).map(|mut p| {
+                    if let Some((dir, _, _)) = &fit {
+                        let t = p["project_type"].as_str().unwrap_or("mod").to_owned();
+                        p["installed"] = json!(id.parse::<u64>().is_ok_and(|i| curseforge::installed_ids(&dir.join(discover_folder(&t))).contains(&i)));
+                    }
+                    p
+                }),
+            },
+            _ => discover::modrinth_project(&id).map(|mut p| {
+                if let Some((dir, _, _)) = &fit {
+                    let t = p["project_type"].as_str().unwrap_or("mod").to_owned();
+                    if matches!(t.as_str(), "mod" | "resourcepack" | "shader") {
+                        let pid = p["id"].as_str().unwrap_or("").to_owned();
+                        p["installed"] = json!(installed_projects_cached(&dir.join(discover_folder(&t))).contains_key(&pid));
+                    }
+                }
+                p
+            }),
+        };
+        match res {
+            Ok(p) => call_js(&proxy, "onDiscoverProject", json!({"seq": seq, "project": p})),
+            Err(e) => call_js(&proxy, "onDiscoverProject", json!({"seq": seq, "error": e})),
+        }
+    });
+}
+
+fn discover_versions_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, v: serde_json::Value) {
+    std::thread::spawn(move || {
+        let seq = v.get("seq").and_then(|x| x.as_u64()).unwrap_or(0);
+        let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_owned();
+        let source = v.get("source").and_then(|x| x.as_str()).unwrap_or("modrinth");
+        let ptype = v.get("projectType").and_then(|x| x.as_str()).unwrap_or("mod");
+        let fit = discover_fit(&shared, &v);
+        let mc = fit.as_ref().filter(|_| ptype != "shader" && ptype != "modpack" && ptype != "world").map(|f| f.1.clone());
+        let loaders: Vec<&str> = if ptype == "mod" { fit.as_ref().map(|f| f.2.clone()).unwrap_or_default() } else { Vec::new() };
+        let res = match source {
+            "curseforge" => match cf_key(&shared) {
+                None => Err(curseforge::NO_KEY.to_owned()),
+                Some(key) => curseforge::files(&curseforge::Live { key }, &id, mc.as_deref(), &loaders),
+            },
+            _ => discover::modrinth_versions(&id, mc.as_deref(), &loaders),
+        };
+        match res {
+            Ok(list) => call_js(&proxy, "onDiscoverVersions", json!({"seq": seq, "id": id, "versions": list, "mc": mc, "loaders": loaders})),
+            Err(e) => call_js(&proxy, "onDiscoverVersions", json!({"seq": seq, "id": id, "error": e})),
+        }
+    });
+}
+
+/// A plan that needs the player's say: the warning dialog, with what to send for "Install anyway".
+fn send_discover_plan(proxy: &EventLoopProxy<UserEvent>, summary: &mod_plan::Summary, key: &str, project_type: &str, profile_id: &str, retry: serde_json::Value) {
+    call_js(proxy, "onModPlan", json!({"slug": key, "projectType": project_type, "profileId": profile_id, "plan": summary, "retry": retry}));
+    push_install_status(proxy, key, "blocked", "", profile_id);
+}
+
+/// Routes an install from Discover. Modrinth's newest compatible version keeps going through
+/// download_modrinth_async; a specific version, data packs, worlds and CurseForge have their own
+/// paths below, all planned (dependencies, conflicts, replaced copies) before anything is saved.
+fn discover_install(proxy: &EventLoopProxy<UserEvent>, shared: &Arc<Mutex<AppState>>, v: &serde_json::Value) {
+    let text = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_owned();
+    let source = text("source");
+    let id = text("id");
+    let key = Some(text("key")).filter(|k| !k.is_empty()).unwrap_or_else(|| id.clone());
+    let version_id = Some(text("versionId")).filter(|x| !x.is_empty());
+    let profile_id = text("profileId");
+    let force = v.get("force").and_then(|f| f.as_bool()).unwrap_or(false);
+    let ptype = match text("projectType").as_str() {
+        t @ ("mod" | "resourcepack" | "shader" | "modpack" | "datapack" | "world") => t.to_owned(),
+        _ => "mod".to_owned(),
+    };
+    let retry = json!({"action": "discover_install", "source": source, "id": id, "key": key, "versionId": version_id, "projectType": ptype, "profileId": profile_id, "world": text("world"), "title": text("title")});
+    match (source.as_str(), ptype.as_str()) {
+        ("curseforge", "modpack") => install_cf_modpack_async(proxy.clone(), shared.clone(), key, id, version_id),
+        ("curseforge", _) => install_cf_async(proxy.clone(), shared.clone(), key, id, version_id, ptype, profile_id, force, text("world"), retry),
+        (_, "modpack") => install_modpack_async(
+            proxy.clone(),
+            shared.clone(),
+            match version_id {
+                Some(ver) => PackSource::ModrinthVersion(id, ver),
+                None => PackSource::Modrinth(id),
+            },
+        ),
+        ("horizon", _) => download_modrinth_async(proxy.clone(), shared.clone(), id, ptype, profile_id, force),
+        (_, "world") => push_install_status(proxy, &key, "error", "Modrinth doesn't host worlds.", &profile_id),
+        (_, "datapack") => install_modrinth_version_async(proxy.clone(), shared.clone(), key, id, version_id, ptype, profile_id, force, text("world"), retry),
+        (_, _) if version_id.is_some() => install_modrinth_version_async(proxy.clone(), shared.clone(), key, id, version_id, ptype, profile_id, force, String::new(), retry),
+        (_, _) => download_modrinth_async(proxy.clone(), shared.clone(), id, ptype, profile_id, force),
+    }
+}
+
+/// `saves/<world>/datapacks` of an instance, for a world the player picked.
+fn datapack_dir(game_dir: &Path, world: &str) -> Result<PathBuf, String> {
+    if world.is_empty() || !safe_file_name(world) || !game_dir.join("saves").join(world).join("level.dat").is_file() {
+        return Err("Pick a world of this instance to add the data pack to.".into());
+    }
+    Ok(game_dir.join("saves").join(world).join("datapacks"))
+}
+
+/// Plans and installs one specific Modrinth version (the Versions tab, or an update).
+#[allow(clippy::too_many_arguments)]
+fn plan_and_install_pinned(proxy: &EventLoopProxy<UserEvent>, game_dir: &Path, version: serde_json::Value, project_type: &str, mc_ver: &str, loader: &str, fabric_loader: Option<(u64, u64, u64)>, force: bool) -> PlanOutcome {
+    let dest = game_dir.join(discover_folder(project_type));
+    let installed = match mod_plan::identify(&mod_plan::Live, mod_plan::scan_dir(&dest)) {
+        Ok(i) => i,
+        Err(e) => return PlanOutcome::Failed(e),
+    };
+    let loaders = forge::compatible_modrinth_loaders(loader);
+    let extra = discover::pinned_problem(&version, project_type, mc_ver, &loaders);
+    let pinned = discover::Pinned { inner: &mod_plan::Live, version };
+    let project = pinned.project_id().to_owned();
+    let mut plan = match mod_plan::plan_modrinth(&pinned, &project, project_type, mc_ver, loader, &installed) {
+        Ok(p) => p,
+        Err(e) => return PlanOutcome::Failed(e),
+    };
+    if let Some(p) = extra {
+        plan.summary.problems.insert(0, p);
+    }
+    if plan.summary.blocked() && !force {
+        return PlanOutcome::Blocked(plan.summary);
+    }
+    let download = |f: &mod_plan::FileRef, p: &Path| net::download_verified(&f.url, p, f.sha1.as_deref(), f.size);
+    let loader_ok = |p: &Path| project_type != "mod" || loader != "fabric" || jar_matches_fabric_loader(p, fabric_loader);
+    let log = |l: &str| push_log(proxy, &format!("[Modrinth] {l}"));
+    match mod_plan::execute_modrinth(&plan, &dest, force, &download, &loader_ok, &log) {
+        Ok(done) => PlanOutcome::Installed(plan.summary.success_message(&format!(" (Minecraft {mc_ver})"), &done.warnings)),
+        Err(mod_plan::ExecError::Blocked(problem)) => {
+            let mut s = plan.summary;
+            s.problems.push(problem);
+            PlanOutcome::Blocked(s)
+        }
+        Err(mod_plan::ExecError::Failed(e)) => PlanOutcome::Failed(e),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn install_modrinth_version_async(
+    proxy: EventLoopProxy<UserEvent>,
+    shared: Arc<Mutex<AppState>>,
+    key: String,
+    project: String,
+    version_id: Option<String>,
+    project_type: String,
+    profile_id: String,
+    force: bool,
+    world: String,
+    retry: serde_json::Value,
+) {
+    std::thread::spawn(move || {
+        let Some((pid, game_dir, selected, paths)) = discover_target(&shared, &profile_id) else {
+            push_install_status(&proxy, &key, "error", GONE_INSTANCE, &profile_id);
+            return;
+        };
+        let status = |state: &str, msg: &str| push_install_status(&proxy, &key, state, msg, &pid);
+        if selected == HORIZON_ID {
+            status("error", "Horizon 26.3 instances install from Horizon's own registry.");
+            return;
+        }
+        let mc_ver = mc_version_for(&paths, &selected);
+        let loader = mod_loader(&paths, &selected);
+        if project_type == "mod" && loader.is_none() {
+            status("error", &format!("Mods need a mod loader. Switch this instance to \"Fabric {mc_ver}\" or \"NeoForge {mc_ver}\" first (version menu next to Launch)."));
+            return;
+        }
+        status("installing", "Checking compatibility...");
+        let version = match &version_id {
+            Some(vid) => mod_plan::Live.version(vid),
+            None => mod_plan::Live
+                .versions(&project, Some(&mc_ver), &["datapack"])
+                .and_then(|list| list.into_iter().find(|v| v.get("version_type").and_then(|t| t.as_str()) == Some("release")).ok_or_else(|| format!("No version of this works with Minecraft {mc_ver}."))),
+        };
+        let version = match version {
+            Ok(v) => v,
+            Err(e) => return status("error", &e),
+        };
+        if project_type == "datapack" {
+            let dir = match datapack_dir(&game_dir, &world) {
+                Ok(d) => d,
+                Err(e) => return status("error", &e),
+            };
+            let file = version.get("files").and_then(|f| f.as_array()).and_then(|a| a.iter().find(|f| f.get("primary").and_then(|p| p.as_bool()) == Some(true)).or_else(|| a.first()).cloned());
+            let Some(file) = file else { return status("error", "This version has no file to download.") };
+            let name = file.get("filename").and_then(|n| n.as_str()).and_then(|n| Path::new(n).file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let url = file.get("url").and_then(|u| u.as_str()).unwrap_or("");
+            if !safe_file_name(&name) || !url.starts_with("https://cdn.modrinth.com/") {
+                return status("error", "Modrinth listed a file Lumos can't use.");
+            }
+            let dest = dir.join(&name);
+            return match net::download_verified(url, &dest, file.pointer("/hashes/sha1").and_then(|h| h.as_str()), file.get("size").and_then(|s| s.as_u64())) {
+                Ok(()) => status("installed", &format!("Added {name} to the world \"{world}\".")),
+                Err(e) => status("error", &e),
+            };
+        }
+        let fabric_loader = detect_fabric_loader_version(&paths, &selected);
+        match plan_and_install_pinned(&proxy, &game_dir, version, &project_type, &mc_ver, loader.unwrap_or("fabric"), fabric_loader, force) {
+            PlanOutcome::Installed(msg) => {
+                status("installed", &msg);
+                push_content(&proxy, &game_dir, discover_folder(&project_type), &pid, false);
+            }
+            PlanOutcome::Blocked(summary) => send_discover_plan(&proxy, &summary, &key, &project_type, &pid, retry),
+            PlanOutcome::Failed(err) => status("error", &err),
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn install_cf_async(
+    proxy: EventLoopProxy<UserEvent>,
+    shared: Arc<Mutex<AppState>>,
+    key: String,
+    id: String,
+    file_id: Option<String>,
+    project_type: String,
+    profile_id: String,
+    force: bool,
+    world: String,
+    retry: serde_json::Value,
+) {
+    std::thread::spawn(move || {
+        let Some(api_key) = cf_key(&shared) else {
+            push_install_status(&proxy, &key, "error", curseforge::NO_KEY, &profile_id);
+            return;
+        };
+        let api = curseforge::Live { key: api_key };
+        let Some((pid, game_dir, selected, paths)) = discover_target(&shared, &profile_id) else {
+            push_install_status(&proxy, &key, "error", GONE_INSTANCE, &profile_id);
+            return;
+        };
+        let status = |state: &str, msg: &str| push_install_status(&proxy, &key, state, msg, &pid);
+        let (Ok(mod_id), file_id) = (id.parse::<u64>(), file_id.and_then(|f| f.parse::<u64>().ok())) else {
+            return status("error", "That CurseForge project id isn't valid.");
+        };
+        if selected == HORIZON_ID {
+            return status("error", "Horizon 26.3 instances install from Horizon's own registry.");
+        }
+        let mc_ver = mc_version_for(&paths, &selected);
+        let loader = mod_loader(&paths, &selected);
+        if project_type == "mod" && loader.is_none() {
+            return status("error", &format!("Mods need a mod loader. Switch this instance to \"Fabric {mc_ver}\" or \"NeoForge {mc_ver}\" first."));
+        }
+        let dest = match project_type.as_str() {
+            "datapack" => match datapack_dir(&game_dir, &world) {
+                Ok(d) => d,
+                Err(e) => return status("error", &e),
+            },
+            "world" => paths.cache.join("worlds"),
+            t => game_dir.join(discover_folder(t)),
+        };
+        status("installing", "Checking compatibility...");
+        let installed = if project_type == "world" { Default::default() } else { curseforge::read_sidecar(&dest) };
+        let plan = match curseforge::plan(&api, mod_id, file_id, &project_type, &mc_ver, loader, &installed) {
+            Ok(p) => p,
+            Err(curseforge::PlanError::Manual(title, url)) => {
+                call_js(&proxy, "onDiscoverManual", json!({"key": key, "title": title, "url": url, "profileId": pid}));
+                return status("blocked", "");
+            }
+            Err(curseforge::PlanError::Failed(e)) => return status("error", &e),
+        };
+        if plan.summary.blocked() && !force {
+            return send_discover_plan(&proxy, &plan.summary, &key, &project_type, &pid, retry);
+        }
+        let download = |url: &str, p: &Path, sha1: Option<&str>, size: Option<u64>| net::download_verified(url, p, sha1, size);
+        let log = |l: &str| push_log(&proxy, &format!("[CurseForge] {l}"));
+        if project_type == "world" {
+            let res = curseforge::execute(&plan, &dest, &download, &log).and_then(|_| {
+                let zip = dest.join(&plan.main.file_name);
+                let r = curseforge::install_world(&zip, &game_dir.join("saves"), &plan.summary.title);
+                let _ = fs::remove_file(&zip);
+                r
+            });
+            return match res {
+                Ok(folder) => status("installed", &format!("Added the world \"{folder}\" to this instance.")),
+                Err(e) => status("error", &e),
+            };
+        }
+        match curseforge::execute(&plan, &dest, &download, &log) {
+            Ok(warnings) => {
+                status("installed", &plan.summary.success_message(&format!(" (Minecraft {mc_ver})"), &warnings));
+                if project_type != "datapack" {
+                    push_content(&proxy, &game_dir, discover_folder(&project_type), &pid, false);
+                }
+            }
+            Err(e) => status("error", &e),
+        }
+    });
+}
+
+/// Makes a new instance from a CurseForge modpack (manifest.json + overrides).
+fn install_cf_modpack_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, key: String, id: String, file_id: Option<String>) {
+    let Some(api_key) = cf_key(&shared) else {
+        push_install_status(&proxy, &key, "error", curseforge::NO_KEY, "");
+        return;
+    };
+    {
+        let mut st = lock(&shared);
+        if st.task.is_some() {
+            push_install_status(&proxy, &key, "error", "LumosClient is busy. Try again in a moment.", "");
+            return;
+        }
+        st.task = Some(("Reading the modpack".into(), -1.0));
+        push_state(&proxy, &st);
+    }
+    std::thread::spawn(move || {
+        let api = curseforge::Live { key: api_key };
+        let reporter = TaskReporter::new(&proxy, &shared);
+        let report = |l: &str, f: f64| reporter.report(l, f);
+        let (base_dir, paths) = {
+            let st = lock(&shared);
+            (st.base_dir.clone(), st.paths.clone())
+        };
+        let mut manual_page = None;
+        let mut done_msg = String::new();
+        let result = run_guarded(|| {
+            let mod_id = id.parse::<u64>().map_err(|_| "That CurseForge project id isn't valid.".to_owned())?;
+            let plan = match curseforge::plan(&api, mod_id, file_id.and_then(|f| f.parse().ok()), "modpack", "", None, &Default::default()) {
+                Ok(p) => p,
+                Err(curseforge::PlanError::Manual(title, url)) => {
+                    manual_page = Some(url);
+                    return Err(format!("{title} can only be downloaded on CurseForge's website."));
+                }
+                Err(curseforge::PlanError::Failed(e)) => return Err(e),
+            };
+            let downloads = paths.cache.join("modpacks");
+            report(&format!("Downloading {}", plan.summary.title), -1.0);
+            curseforge::execute(&plan, &downloads, &|u: &str, p: &Path, h: Option<&str>, s: Option<u64>| net::download_verified(u, p, h, s), &|_| {})?;
+            let zip = downloads.join(&plan.main.file_name);
+            let outcome = (|| {
+                let m = curseforge::read_manifest(&zip)?;
+                let version = curseforge::version_spec(&m)?;
+                let mut pid = format!("prof-{}", now_millis());
+                while lock(&shared).config.profiles.iter().any(|p| p.id == pid) {
+                    pid.push('x');
+                }
+                let dir = base_dir.join("instances").join(&pid);
+                let filled = fs::create_dir_all(&dir).map_err(|e| e.to_string()).and_then(|_| {
+                    let manual = curseforge::download_pack_files(&api, &m, &dir, &report)?;
+                    report(&format!("Unpacking {}", m.name), -1.0);
+                    modpack::extract_overrides(&zip, &dir)?;
+                    Ok(manual)
+                });
+                let manual = match filled {
+                    Ok(m) => m,
+                    Err(e) => {
+                        let _ = fs::remove_dir_all(&dir);
+                        return Err(e);
+                    }
+                };
+                let name: String = m.name.chars().take(40).collect();
+                let mut st = lock(&shared);
+                st.config.profiles.push(Profile { id: pid.clone(), name: name.clone(), version: version.clone(), ..Default::default() });
+                st.config.active_profile_id = pid;
+                st.config.selected_version = version.clone();
+                st.save_config();
+                let mut msg = format!("{name} is ready as a new instance ({version}). Press Play to finish setting it up.");
+                if !manual.is_empty() {
+                    reporter.log(&format!("[CurseForge] Download these on CurseForge's website and add them to the instance: {}", manual.join(", ")));
+                    msg.push_str(&format!(" {} file(s) can only be downloaded on CurseForge's website: see Logs.", manual.len()));
+                }
+                Ok(msg)
+            })();
+            let _ = fs::remove_file(&zip);
+            done_msg = outcome?;
+            Ok(())
+        });
+        {
+            let mut st = lock(&shared);
+            st.task = None;
+            push_state(&proxy, &st);
+        }
+        match result {
+            Ok(()) => push_install_status(&proxy, &key, "installed", &done_msg, ""),
+            Err(e) => {
+                push_log(&proxy, &format!("[LumosClient] modpack: {e}"));
+                if let Some(url) = manual_page {
+                    call_js(&proxy, "onDiscoverManual", json!({"key": key, "title": e, "url": url, "profileId": ""}));
+                    push_install_status(&proxy, &key, "blocked", "", "");
+                } else {
+                    push_install_status(&proxy, &key, "error", &e, "");
+                }
+            }
+        }
+        call_js(&proxy, "onTask", json!({"done": true}));
+    });
+}
+
+fn discover_updates_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, profile_id: String) {
+    std::thread::spawn(move || {
+        let Some((pid, dir, sel, paths)) = discover_target(&shared, &profile_id) else {
+            return call_js(&proxy, "onDiscoverUpdates", json!({"profileId": profile_id, "updates": []}));
+        };
+        if sel == HORIZON_ID {
+            return call_js(&proxy, "onDiscoverUpdates", json!({"profileId": pid, "updates": []}));
+        }
+        match discover::check_updates(&dir, &mc_version_for(&paths, &sel), mod_loader(&paths, &sel)) {
+            Ok(u) => call_js(&proxy, "onDiscoverUpdates", json!({"profileId": pid, "updates": u})),
+            Err(e) => call_js(&proxy, "onDiscoverUpdates", json!({"profileId": pid, "updates": [], "error": e})),
+        }
+    });
+}
+
+/// Updates every file that has a newer compatible version, one at a time (each one replaces
+/// its old file only once the new one and its dependencies are saved).
+fn discover_update_all_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, profile_id: String) {
+    std::thread::spawn(move || {
+        let Some((pid, dir, sel, paths)) = discover_target(&shared, &profile_id) else {
+            return call_js(&proxy, "onNotice", json!({"message": GONE_INSTANCE, "kind": "err"}));
+        };
+        let mc = mc_version_for(&paths, &sel);
+        let loader = mod_loader(&paths, &sel);
+        let updates = match discover::check_updates(&dir, &mc, loader) {
+            Ok(u) => u,
+            Err(e) => return call_js(&proxy, "onNotice", json!({"message": e, "kind": "err"})),
+        };
+        let fabric_loader = detect_fabric_loader_version(&paths, &sel);
+        let (mut done, mut held) = (Vec::new(), Vec::new());
+        for (i, u) in updates.iter().enumerate() {
+            call_js(&proxy, "onDiscoverUpdateProgress", json!({"profileId": pid, "done": i, "total": updates.len(), "file": u.file}));
+            let outcome = match mod_plan::Live.version(&u.version_id) {
+                Ok(v) => plan_and_install_pinned(&proxy, &dir, v, &u.project_type, &mc, loader.unwrap_or("fabric"), fabric_loader, false),
+                Err(e) => PlanOutcome::Failed(e),
+            };
+            match outcome {
+                PlanOutcome::Installed(_) => done.push(u.file.clone()),
+                PlanOutcome::Blocked(s) => held.push(format!("{} ({})", s.title, s.problems.iter().find(|p| p.blocking).map(|p| p.message.as_str()).unwrap_or("needs a look"))),
+                PlanOutcome::Failed(e) => held.push(format!("{} ({e})", u.file)),
+            }
+        }
+        for f in ["mods", "resourcepacks", "shaderpacks"] {
+            push_content(&proxy, &dir, f, &pid, false);
+        }
+        let mut msg = if done.is_empty() { "Nothing was updated.".to_owned() } else { format!("Updated {} file{}.", done.len(), if done.len() == 1 { "" } else { "s" }) };
+        if !held.is_empty() {
+            msg.push_str(&format!(" Left alone: {}", held.join("; ")));
+        }
+        call_js(&proxy, "onNotice", json!({"message": msg, "kind": if held.is_empty() { "ok" } else { "info" }}));
+        let left = discover::check_updates(&dir, &mc, loader).unwrap_or_default();
+        call_js(&proxy, "onDiscoverUpdates", json!({"profileId": pid, "updates": left, "finished": true}));
+    });
+}
+
+fn discover_suggest_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, profile_id: String) {
+    std::thread::spawn(move || {
+        let Some((pid, dir, sel, paths)) = discover_target(&shared, &profile_id) else { return };
+        let Some(loader) = mod_loader(&paths, &sel).filter(|_| sel != HORIZON_ID) else {
+            return call_js(&proxy, "onDiscoverSuggest", json!({"profileId": pid, "cards": []}));
+        };
+        match discover::suggest(&dir, &mc_version_for(&paths, &sel), loader) {
+            Ok(mut v) => {
+                v["profileId"] = json!(pid);
+                call_js(&proxy, "onDiscoverSuggest", v);
+            }
+            Err(e) => call_js(&proxy, "onDiscoverSuggest", json!({"profileId": pid, "cards": [], "error": e})),
+        }
+    });
+}
+// ───────────────────────── end feat/discover ─────────────────────────
+
 /// Performance mods "Boost FPS" adds to a Fabric instance (each only when Modrinth has it for
 /// the instance's version). RetiNO stops a Retina Mac from rendering at 4x the pixels.
 fn boost_mods() -> Vec<&'static str> {
@@ -1865,6 +2462,8 @@ enum PackSource {
     File(String, String),
     /// A Modrinth modpack project (slug or id) from Discover.
     Modrinth(String),
+    /// feat/discover: one version of a Modrinth modpack (project, version id).
+    ModrinthVersion(String, String),
 }
 
 /// Makes a new instance from a Modrinth modpack: its version, every file it lists, its overrides.
@@ -1873,7 +2472,7 @@ fn install_modpack_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<App
         let mut st = lock(&shared);
         if st.task.is_some() {
             call_js(&proxy, "onNotice", json!({"message": "LumosClient is busy getting a game ready. Try again in a moment.", "kind": "err"}));
-            if let PackSource::Modrinth(slug) = &source {
+            if let PackSource::Modrinth(slug) | PackSource::ModrinthVersion(slug, _) = &source {
                 push_install_status(&proxy, slug, "error", "LumosClient is busy. Try again in a moment.", "");
             }
             return;
@@ -1889,7 +2488,7 @@ fn install_modpack_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<App
             (st.base_dir.clone(), st.paths.clone())
         };
         let slug = match &source {
-            PackSource::Modrinth(s) => Some(s.clone()),
+            PackSource::Modrinth(s) | PackSource::ModrinthVersion(s, _) => Some(s.clone()),
             PackSource::File(..) => None,
         };
         let downloads = paths.cache.join("modpacks");
@@ -1898,6 +2497,7 @@ fn install_modpack_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<App
             fs::create_dir_all(&downloads).map_err(|e| format!("Couldn't create {}: {e}", downloads.display()))?;
             let mrpack = match &source {
                 PackSource::Modrinth(slug) => modpack::download_from_modrinth(slug, &downloads, &report)?,
+                PackSource::ModrinthVersion(slug, ver) => modpack::download_version_from_modrinth(slug, ver, &downloads, &report)?,
                 PackSource::File(name, data) => {
                     use base64::Engine as _;
                     if !name.to_lowercase().ends_with(".mrpack") {
@@ -2736,6 +3336,17 @@ fn main() {
                         v.get("seq").and_then(|x| x.as_u64()).unwrap_or(0),
                     );
                 }
+                // ── feat/discover: Content Hub / Content Browser (discover.rs, curseforge.rs) ──
+                "discover_context" => discover_context(&ipc_proxy, &ipc_state, &text("profileId")),
+                "discover_search" => discover_search_async(ipc_proxy.clone(), ipc_state.clone(), v.clone()),
+                "discover_tags" => discover_tags_async(ipc_proxy.clone(), ipc_state.clone(), text("source")),
+                "discover_project" => discover_project_async(ipc_proxy.clone(), ipc_state.clone(), v.clone()),
+                "discover_versions" => discover_versions_async(ipc_proxy.clone(), ipc_state.clone(), v.clone()),
+                "discover_install" => discover_install(&ipc_proxy, &ipc_state, &v),
+                "discover_updates" => discover_updates_async(ipc_proxy.clone(), ipc_state.clone(), text("profileId")),
+                "discover_update_all" => discover_update_all_async(ipc_proxy.clone(), ipc_state.clone(), text("profileId")),
+                "discover_suggest" => discover_suggest_async(ipc_proxy.clone(), ipc_state.clone(), text("profileId")),
+                // ── end feat/discover ──
                 // ── Modpacks (modpack.rs) ──
                 "download_modrinth" if text("projectType") == "modpack" => {
                     install_modpack_async(ipc_proxy.clone(), ipc_state.clone(), PackSource::Modrinth(text("slug")));
@@ -2831,6 +3442,13 @@ fn main() {
                     }
                     if let Some(h) = v.get("hideOnLaunch").and_then(|x| x.as_bool()) {
                         st.config.hide_on_launch = h;
+                    }
+                    // feat/discover: CurseForge API key (empty clears it). Never echoed or logged.
+                    if let Some(k) = v.get("curseforgeApiKey").and_then(|x| x.as_str()) {
+                        let k = k.trim();
+                        if k.len() <= 200 && k.chars().all(|c| c.is_ascii_graphic()) {
+                            st.config.curseforge_api_key = k.to_owned();
+                        }
                     }
                     st.save_config();
                     push_state(&ipc_proxy, &st);

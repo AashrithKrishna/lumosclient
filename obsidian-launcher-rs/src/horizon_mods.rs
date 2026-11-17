@@ -96,9 +96,44 @@ fn current_version(p: &Value) -> Option<&Value> {
     p.get("versions")?.as_array()?.iter().find(|v| s(v, "game") == GAME)
 }
 
+// ── feat/discover: category filters for Horizon instances ──
+
+/// True when a registry project is in every one of `cats` (none = everything).
+pub fn in_categories(p: &Value, cats: &[String]) -> bool {
+    let have: Vec<&str> = p.get("categories").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    cats.iter().all(|c| have.iter().any(|h| h.eq_ignore_ascii_case(c)))
+}
+
+/// The categories the registry uses for a Discover tab, as the sidebar shows them.
+pub fn categories_in(idx: &Value, tab: &str) -> Value {
+    let kinds = kinds_for(tab);
+    let mut names: Vec<String> = idx
+        .get("projects")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|p| kinds.contains(&s(p, "kind")))
+        .flat_map(|p| p.get("categories").and_then(Value::as_array).cloned().unwrap_or_default())
+        .filter_map(|c| c.as_str().map(str::to_owned))
+        .collect();
+    names.sort();
+    names.dedup();
+    if names.is_empty() {
+        return json!([]);
+    }
+    json!([{"header": "Categories", "items": names.iter().map(|n| json!({"value": n, "label": crate::discover::pretty_tag(n)})).collect::<Vec<_>>()}])
+}
+
+/// Sidebar categories for every tab, from the live registry.
+pub fn categories() -> Result<Value, String> {
+    let idx = index()?;
+    Ok(json!({"source": "horizon", "categories": {"mod": categories_in(&idx, "mod"), "resourcepack": categories_in(&idx, "resourcepack"), "shader": categories_in(&idx, "shader")}}))
+}
+// ── end feat/discover ──
+
 /// Discover results in the shape the page already renders for Modrinth, plus `source`,
 /// `native` (listed, not installable) and `installed` for this instance.
-pub fn search(game_dir: &Path, query: &str, tab: &str, sort: &str, offset: usize) -> Value {
+pub fn search(game_dir: &Path, query: &str, tab: &str, sort: &str, offset: usize, cats: &[String]) -> Value {
     let idx = match index() {
         Ok(i) => i,
         Err(e) => return json!({"hits": [], "total_hits": 0, "error": e, "source": "horizon"}),
@@ -118,6 +153,7 @@ pub fn search(game_dir: &Path, query: &str, tab: &str, sort: &str, offset: usize
         .filter(|p| kinds.contains(&s(p, "kind")))
         .filter_map(|p| current_version(p).map(|v| (p, v)))
         .filter(|(p, v)| revoked(&idx, s(p, "id"), s(&v["file"], "sha256")).is_none())
+        .filter(|(p, _)| in_categories(p, cats))
         .filter(|(p, _)| {
             q.is_empty()
                 || [s(p, "id"), s(p, "name"), s(p, "summary")].iter().any(|t| t.to_lowercase().contains(&q))
@@ -143,6 +179,7 @@ pub fn search(game_dir: &Path, query: &str, tab: &str, sort: &str, offset: usize
             let file = s(&v["file"], "name");
             let authors: Vec<&str> = p.get("authors").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
             json!({
+                "id": s(p, "id"),
                 "slug": s(p, "id"),
                 "title": s(p, "name"),
                 "description": s(p, "summary"),
@@ -483,6 +520,21 @@ mod tests {
     }
 
     #[test]
+    fn categories_filter_and_list() {
+        let idx = json!({"projects": [
+            {"id": "a", "kind": "mod", "categories": ["utility", "hud"]},
+            {"id": "b", "kind": "native-mod", "categories": ["utility"]},
+            {"id": "c", "kind": "shader", "categories": ["realistic"]}
+        ]});
+        let p = &idx["projects"][0];
+        assert!(in_categories(p, &[]) && in_categories(p, &["HUD".into()]) && in_categories(p, &["utility".into(), "hud".into()]));
+        assert!(!in_categories(p, &["realistic".into()]));
+        let mods = categories_in(&idx, "mod");
+        assert_eq!(mods[0]["items"], json!([{"value": "hud", "label": "Hud"}, {"value": "utility", "label": "Utility"}]));
+        assert_eq!(categories_in(&idx, "resourcepack"), json!([]));
+    }
+
+    #[test]
     fn revoked_files_and_projects_are_refused() {
         let idx = json!({"revoked": [{"id": "a", "reason": "gone"}, {"id": "b", "sha256": "ff", "reason": "bad file"}]});
         assert_eq!(revoked(&idx, "a", "00").as_deref(), Some("gone"));
@@ -496,18 +548,18 @@ mod tests {
     #[ignore]
     fn live_search_and_install() {
         let dir = std::env::temp_dir().join(format!("lumos-hlive-{}", std::process::id()));
-        let mods = search(&dir, "", "mod", "downloads", 0);
+        let mods = search(&dir, "", "mod", "downloads", 0, &[]);
         let hits = mods["hits"].as_array().expect("hits");
         assert!(mods["total_hits"].as_u64().unwrap() > 50, "{mods}");
         assert!(hits.iter().any(|h| h["native"] == true) && hits.iter().all(|h| h["source"] == "horizon"));
-        let shaders = search(&dir, "", "shader", "downloads", 0);
+        let shaders = search(&dir, "", "shader", "downloads", 0, &[]);
         assert!(!shaders["hits"].as_array().unwrap().is_empty());
-        let found = search(&dir, "leather", "mod", "relevance", 0);
+        let found = search(&dir, "leather", "mod", "relevance", 0, &[]);
         assert_eq!(found["hits"][0]["slug"], "flesh_to_leather", "{found}");
         assert_eq!(install(&dir, "flesh_to_leather").unwrap(), "flesh_to_leather-1.0.0.hmod");
         assert!(dir.join("horizon-mods/flesh_to_leather-1.0.0.hmod").is_file());
         assert!(is_enabled(&dir, "flesh_to_leather"));
-        assert_eq!(search(&dir, "leather", "mod", "relevance", 0)["hits"][0]["installed"], true);
+        assert_eq!(search(&dir, "leather", "mod", "relevance", 0, &[])["hits"][0]["installed"], true);
         assert!(install(&dir, "zoom").unwrap_err().contains("native Rust mod"));
         // A signed project: its minisign signature is checked against the author's key.
         assert!(install(&dir, "compass_bar").is_ok());

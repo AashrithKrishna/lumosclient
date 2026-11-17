@@ -294,6 +294,21 @@ pub fn download_from_modrinth(project: &str, dest_dir: &Path, report: Report) ->
         .find(|v| v.get("version_type").and_then(Value::as_str) == Some("release"))
         .or_else(|| list.first())
         .ok_or("This modpack has no downloads.")?;
+    download_pack_version(project, pick, dest_dir, report)
+}
+
+/// feat/discover: one specific version (by id) of a Modrinth modpack, from its Versions tab.
+pub fn download_version_from_modrinth(project: &str, version_id: &str, dest_dir: &Path, report: Report) -> Result<PathBuf, String> {
+    let ok = |s: &str| !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !ok(project) || !ok(version_id) {
+        return Err("That Modrinth version isn't valid.".into());
+    }
+    report("Finding the modpack on Modrinth", -1.0);
+    let pick = net::get_json(&format!("https://api.modrinth.com/v2/version/{version_id}"))?;
+    download_pack_version(project, &pick, dest_dir, report)
+}
+
+fn download_pack_version(project: &str, pick: &Value, dest_dir: &Path, report: Report) -> Result<PathBuf, String> {
     let files = pick.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
     let file = files
         .iter()
