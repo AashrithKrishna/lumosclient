@@ -31,6 +31,17 @@ def mod_files(mods_root, mod_id):
     return found
 
 
+def mod_names(mods_root, mod_id):
+    """Every quoted name a mod's manifests use (module names, injection ids, crate names...)."""
+    found = {mod_id}
+    for root, _, files in os.walk(os.path.join(mods_root, mod_id)):
+        for f in files:
+            if f.endswith(".toml"):
+                text = open(os.path.join(root, f), encoding="utf-8", errors="ignore").read()
+                found.update(s for s in re.findall(r'"([A-Za-z_][A-Za-z0-9_]{3,})"', text))
+    return found
+
+
 def culprits(log, stage, mods_root, applied):
     """Which applied mods the compile errors point at, each with the first error naming them."""
     errors = []  # (message, file)
@@ -49,11 +60,17 @@ def culprits(log, stage, mods_root, applied):
                 rel = path.split("/stage/", 1)[-1]
                 errors.append((msg, rel, 0))
     files = {i: mod_files(mods_root, i) for i in applied}
+    names = {i: mod_names(mods_root, i) for i in applied}
     blame = {}
     for msg, path, line in errors:
         path = posixpath.normpath(path.split("/stage/", 1)[-1])  # e.g. crates/a/../b/src/x.rs
         # A mod's own module named in the error (`crate::<mod id>`) is the plainest clue.
-        named = [i for i in applied if re.search(rf"\b{re.escape(i)}\b", msg)]
+        idents = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", msg))
+        named = [i for i in applied if i in idents]
+        if not named:
+            # `crate::some_module` named in the error: the mod whose manifest declares that module.
+            mods_in = set(re.findall(r"(?:crate|super|self)::([A-Za-z_][A-Za-z0-9_]*)", msg))
+            named = [i for i in applied if mods_in & names[i]] if mods_in else []
         if named:
             for i in named:
                 blame.setdefault(i, f"didn't compile with this Horizon version: {msg[:300]}")
@@ -71,6 +88,14 @@ def culprits(log, stage, mods_root, applied):
                 named = [i for i in touching if i in near]
                 if named:
                     touching = named
+            except OSError:
+                pass
+        if not touching and line:
+            # No manifest names the file: look for a mod's names in the code around the error.
+            try:
+                src = open(os.path.join(stage, path), encoding="utf-8", errors="ignore").read().splitlines()
+                near = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", "\n".join(src[max(0, line - 40):line + 10])))
+                touching = [i for i in applied if i in near] or [i for i in applied if len(names[i] & near - {"self", "game"}) >= 2]
             except OSError:
                 pass
         if len(touching) > 6:
@@ -91,6 +116,14 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     excluded = {}
     tried_without_crates = False
+    # Mods earlier builds already found broken: leave them out up front instead of re-learning it.
+    known = json.load(open(os.path.join(here, "known-bad.json"))) if os.path.exists(os.path.join(here, "known-bad.json")) else {}
+    applied0 = json.load(open(os.path.join(work, "applied.json")))["applied"]
+    excluded.update({i: why for i, why in known.items() if i in applied0})
+    if excluded:
+        json.dump(excluded, open(os.path.join(work, "excluded.json"), "w"), indent=1)
+        subprocess.run([sys.executable, os.path.join(here, "apply.py"), "--tool", a.tool, "--work", work,
+                        "--exclude", ",".join(sorted(excluded))], check=True)
     for rnd in range(1, ROUNDS + 1):
         cmd = ["cargo", "build", "--locked", "--profile", a.profile, "--manifest-path", os.path.join(stage, "Cargo.toml"),
                "-p", a.package, "--bin", "horizon-client", "-p", "horizon-prepare", "--bin", "horizon-prepare"]
