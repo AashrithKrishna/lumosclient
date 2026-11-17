@@ -1,0 +1,236 @@
+# Builds Horizon's native Rust mods into ready-to-play games for Lumos Client.
+# Every native mod in Horizon's registry patches one exact Horizon commit (tools/lumos_native/plan.py
+# groups them by it). For each group: the commit's source, the mods applied with horizon-mixins, the game
+# and its preparer compiled for macOS (Apple silicon) and Windows x64, and that commit's exporters compiled
+# once on Linux. Each group/platform becomes lumos-native-<commit>-<platform>.zip on the "native-builds"
+# release, and native-index.json there lists them all for the launcher.
+name: lumos native
+
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: Commit prefixes to build, comma-separated (empty = every group)
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  RELEASE: native-builds
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: plan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          python3 tools/lumos_native/plan.py --out plan.json --only "$ONLY" --matrix > matrix.json
+          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: plan
+          path: plan.json
+
+  exporters:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: plan
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
+        with:
+          toolchain: stable
+      - name: Stage the commit's source
+        run: python3 tools/lumos_native/stage.py --plan plan.json --commit "${{ matrix.commit }}" --work work
+      - name: Build its preparer
+        working-directory: work/src
+        run: cargo build --locked --release -p horizon-prepare --bin horizon-prepare
+      - name: Fetch the pinned Minecraft from Mojang (stays in this job)
+        run: python3 tools/lumos_native/fetch_mc.py --lock work/src/research-lock.json --out work/mc
+      - name: Import it and compile the exporters
+        working-directory: work/src
+        run: |
+          set -o pipefail
+          ./target/release/horizon-prepare --prepare --server-jar ../mc/server.jar --minecraft-dir ../mc \
+            --root . --output ../prepared --java-home "$JAVA_HOME" 2>&1 | tail -40
+          bundle=$(./target/release/horizon-prepare compile-exporters --root . | tail -1)
+          test -f "$bundle/manifest.json"
+          mkdir -p ../exporters
+          cp -R "$bundle/server" "$bundle/client" "$bundle/manifest.json" ../exporters/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: exporters-${{ matrix.commit }}
+          path: work/exporters/
+          retention-days: 7
+
+  build:
+    needs: plan
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        commit: ${{ fromJSON(needs.plan.outputs.matrix).commit }}
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTFLAGS: ${{ matrix.os == 'windows-latest' && '-C target-feature=+crt-static' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: plan
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
+        with:
+          toolchain: stable
+      - name: Stage source and mods
+        id: stage
+        run: |
+          rev=$(python tools/lumos_native/stage.py --plan plan.json --commit "${{ matrix.commit }}" --work work | tail -1)
+          echo "mixins=$rev" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: tools-bin
+          key: horizon-mixins-${{ runner.os }}-${{ steps.stage.outputs.mixins }}
+      - name: horizon-mixins at the mods' pinned revision
+        run: |
+          [ -x tools-bin/bin/horizon-mixins ] || [ -x tools-bin/bin/horizon-mixins.exe ] || \
+            cargo install --locked --git https://github.com/horizon-rust/horizon-mixins --rev "${{ steps.stage.outputs.mixins }}" --root tools-bin horizon-mixins-cli
+      - name: Apply the mods
+        run: |
+          tool=tools-bin/bin/horizon-mixins; [ -x "$tool.exe" ] && tool="$tool.exe"
+          python tools/lumos_native/apply.py --tool "$tool" --work work
+          cat work/applied.json
+      - name: Build the game with them, and its preparer
+        working-directory: work/stage
+        run: |
+          pkg=horizon-client
+          grep -q 'name = "horizon-client"' ../src/crates/horizon-game/Cargo.toml 2>/dev/null && pkg=horizon-game
+          profile=release
+          grep -q '^\[profile.fast\]' Cargo.toml && profile=fast
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/work/target"
+          cargo build --locked --profile "$profile" -p "$pkg" --bin horizon-client -p horizon-prepare --bin horizon-prepare
+          out="$CARGO_TARGET_DIR/$profile"
+          mkdir -p "$GITHUB_WORKSPACE/work/bin"
+          ext=""; [ "$RUNNER_OS" = Windows ] && ext=".exe"
+          cp "$out/horizon-client$ext" "$out/horizon-prepare$ext" "$GITHUB_WORKSPACE/work/bin/"
+          if [ "$RUNNER_OS" = Windows ] && [ -f ../src/tools/ci/fetch_dxc.py ]; then
+            python ../src/tools/ci/fetch_dxc.py "$GITHUB_WORKSPACE/work/bin" || echo "DXC not added (the game falls back to FXC)"
+          fi
+          ls -l "$GITHUB_WORKSPACE/work/bin"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-${{ matrix.commit }}-${{ runner.os }}
+          path: |
+            work/bin/
+            work/applied.json
+          retention-days: 7
+      - name: Keep the staged source files the package needs
+        run: |
+          mkdir -p keep/mods
+          cp work/src/research-lock.json keep/
+          cp -R work/src/mods/horizon keep/mods/
+          cp -R work/mods keep/native-mods
+      - uses: actions/upload-artifact@v7
+        with:
+          name: src-${{ matrix.commit }}-${{ runner.os }}
+          path: keep/
+          retention-days: 7
+
+  package:
+    needs: [plan, exporters, build]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        commit: ${{ fromJSON(needs.plan.outputs.matrix).commit }}
+        target: [{os: macOS, platform: macos-arm64}, {os: Windows, platform: windows-x64}]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: plan
+      - id: get
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: "{build,src}-${{ matrix.commit }}-${{ matrix.target.os }}"
+          path: in
+      - id: exp
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: exporters-${{ matrix.commit }}
+          path: in/exporters
+      - name: Package and publish
+        if: steps.get.outcome == 'success' && steps.exp.outcome == 'success' && hashFiles(format('in/build-{0}-{1}/applied.json', matrix.commit, matrix.target.os)) != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          b="in/build-${{ matrix.commit }}-${{ matrix.target.os }}"
+          s="in/src-${{ matrix.commit }}-${{ matrix.target.os }}"
+          mkdir -p work/src/mods
+          cp "$s/research-lock.json" work/src/
+          cp -R "$s/mods/horizon" work/src/mods/
+          cp -R "$s/native-mods" work/mods
+          cp "$b/applied.json" work/
+          python3 tools/lumos_native/package.py --plan plan.json --commit "${{ matrix.commit }}" --work work \
+            --bin "$b/bin" --exporters in/exporters --platform "${{ matrix.target.platform }}" --out dist
+          gh release view "$RELEASE" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$RELEASE" -R "$GITHUB_REPOSITORY" --prerelease --title "Native mod builds" \
+              --notes "Horizon native mods built into ready-to-play games, used by Lumos Client's Discover page. Not meant to be downloaded by hand."
+          gh release upload "$RELEASE" dist/* --clobber -R "$GITHUB_REPOSITORY"
+
+  index:
+    needs: package
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Rebuild native-index.json from every published build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir parts
+          gh release download "$RELEASE" -R "$GITHUB_REPOSITORY" -p 'lumos-native-*.json' -D parts
+          python3 tools/lumos_native/index.py --dir parts --out native-index.json
+          gh release upload "$RELEASE" native-index.json --clobber -R "$GITHUB_REPOSITORY"
