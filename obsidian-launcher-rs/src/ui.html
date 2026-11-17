@@ -777,6 +777,9 @@
         <div><h1>Library</h1><p>Each instance keeps its own mods, packs, worlds and settings.</p></div>
         <div class="row">
           <button class="btn" data-act="open-folder" data-target="instances-root"><svg class="i sm"><use href="#i-folder"/></svg>Open folder</button>
+          <!-- Modpacks (modpack.rs) -->
+          <button class="btn" data-act="import-modpack" title="Make a new instance from a Modrinth modpack (.mrpack)"><svg class="i sm"><use href="#i-download"/></svg>Import modpack</button>
+          <input type="file" id="packFile" accept=".mrpack" hidden />
           <button class="btn primary" data-act="new-instance"><svg class="i sm"><use href="#i-plus"/></svg>New instance</button>
         </div>
       </div>
@@ -905,6 +908,7 @@
           <button class="active" data-type="mod"><svg class="i sm"><use href="#i-box"/></svg>Mods</button>
           <button data-type="resourcepack"><svg class="i sm"><use href="#i-image"/></svg>Resource Packs</button>
           <button data-type="shader"><svg class="i sm"><use href="#i-sparkle"/></svg>Shaders</button>
+          <button data-type="modpack"><svg class="i sm"><use href="#i-library"/></svg>Modpacks</button>
         </div>
       </div>
       <div class="discover">
@@ -1563,6 +1567,8 @@
   }
   // Mirrors extract_mc_version() in main.rs: the game version Modrinth results are filtered for.
   function modFilterVersion(v) { const s = String(v || ''); return s.includes('26.3') ? '1.21.11' : (s.trim().split(/\s+/).pop() || '1.21.11'); }
+  // The loader Discover filters mods for (mirrors mod_loader() in main.rs; Fabric when there's none).
+  function modLoaderName(v) { const m = verMeta(v); return ['vanilla', 'horizon'].includes(m.cls) ? 'Fabric' : m.loader; }
   function loaderChip(v) { const m = verMeta(v); return `<span class="chip loader-${m.cls}">${icon('box')}${esc(m.loader)}</span>`; }
   function versionChip(v) { const m = verMeta(v); return m.mc ? `<span class="chip mono">${esc(m.mc)}</span>` : ''; }
   function activeProfile() { return (state.profiles || []).find(p => p.id === state.activeProfileId) || (state.profiles || [])[0] || { id: 'default', name: 'Default', world: 'New World' }; }
@@ -2150,12 +2156,12 @@
     $('discSource').stableHTML = hz
       ? `<button class="opt active">Horizon registry</button><button class="opt" data-act="url" data-url="https://playhorizon.dev/mods">Website${icon('external')}</button>`
       : `<button class="opt active">Modrinth</button><button class="opt" data-act="url" data-url="https://www.curseforge.com/minecraft">CurseForge${icon('external')}</button>`;
-    $('compat2').textContent = hz ? 'Size and checksum checked on install' : 'Fabric Loader checked on install';
+    $('compat2').textContent = hz ? 'Size and checksum checked on install' : ui.modType === 'modpack' ? 'Every file checked (SHA-512) on install' : `${modLoaderName(state.selectedVersion)} builds only`;
     $('compat3').textContent = hz ? 'Native Rust mods arrive as a ready-made Horizon build' : 'Required dependencies auto-installed';
     $('discSiteBtn').dataset.url = hz ? 'https://playhorizon.dev/mods' : 'https://modrinth.com/mods';
     $('discSiteBtn').querySelector('span').textContent = hz ? 'Open Horizon mods' : 'Open Modrinth';
     $('compatVer').textContent = hz ? 'Horizon 26.3: Horizon’s own mods, shaders and packs'
-      : ui.modType === 'mod' ? `Filtered for ${modFilterVersion(state.selectedVersion)} + Fabric` : ui.modType === 'shader' ? 'Shaders need Fabric + Iris' : `Filtered for ${modFilterVersion(state.selectedVersion)}`;
+      : ui.modType === 'mod' ? `Filtered for ${modFilterVersion(state.selectedVersion)} + ${modLoaderName(state.selectedVersion)}` : ui.modType === 'shader' ? 'Shaders need Fabric + Iris' : ui.modType === 'modpack' ? 'Each modpack becomes a new instance' : `Filtered for ${modFilterVersion(state.selectedVersion)}`;
   }
   function skeletonRows(n, h = 64) {
     return Array.from({ length: n }, () => `<div class="row" style="padding:12px;gap:14px"><div class="skeleton" style="width:${h}px;height:${h}px;border-radius:12px"></div><div class="col" style="flex:1;gap:8px"><div class="skeleton" style="height:13px;width:40%"></div><div class="skeleton" style="height:11px;width:85%"></div></div></div>`).join('');
@@ -2185,7 +2191,7 @@
       return;
     }
     if (!items.length) {
-      $('modResults').innerHTML = `<div class="card empty">${icon('search', '')}<b>No results</b><span>Try a different search, or check your connection. ${ui.modType === 'mod' ? `Mods are filtered for ${esc(modFilterVersion(state.selectedVersion))} + Fabric.` : ''}</span></div>`;
+      $('modResults').innerHTML = `<div class="card empty">${icon('search', '')}<b>No results</b><span>Try a different search, or check your connection. ${ui.modType === 'mod' ? `Mods are filtered for ${esc(modFilterVersion(state.selectedVersion))} + ${esc(modLoaderName(state.selectedVersion))}.` : ''}</span></div>`;
       return;
     }
     $('modResults').innerHTML = items.map(m => {
@@ -2608,6 +2614,7 @@
       case 'new-icon': ui.newIconPicked = d.icon; updateNewTile(); break;
       case 'home-layout': if (d.v !== state.homeLayout) saveSettings({ homeLayout: d.v }); break;
       case 'new-instance': openNewInstance(); break;
+      case 'import-modpack': if (busy()) { toast('LumosClient is still getting a game ready.', 'err'); break; } $('packFile').value = ''; $('packFile').click(); break;
       case 'close-new': $('newInstScrim').classList.remove('open'); break;
       case 'create-instance': createInstance(); break;
       case 'inst-save': saveInstSettings(false); break;
@@ -2742,6 +2749,17 @@
   }));
   $('contentSearch').addEventListener('input', renderContentList);
   $('isResOwn').addEventListener('change', e => { $('isW').disabled = $('isH').disabled = !e.target.checked; });
+  // Modpacks (modpack.rs): the .mrpack goes to the launcher, which makes a new instance from it.
+  $('packFile').addEventListener('change', e => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    if (!/\.mrpack$/i.test(f.name)) { toast(`${f.name} isn't a Modrinth modpack (.mrpack).`, 'err'); return; }
+    if (f.size > 256 * 1024 * 1024) { toast(`${f.name} is too big to import.`, 'err'); return; }
+    const r = new FileReader();
+    r.onload = () => { send('import_modpack', { file: f.name, data: String(r.result).replace(/^data:[^,]*,/, '') }); toast(`Importing ${f.name}…`, 'info'); };
+    r.onerror = () => toast(`Couldn't read ${f.name}.`, 'err');
+    r.readAsDataURL(f);
+  });
   $('contentFile').addEventListener('change', e => { importFiles([...e.target.files], ui.contentKind); e.target.value = ''; });
   // Files dropped anywhere else must not navigate the window away from the launcher.
   document.addEventListener('dragover', e => e.preventDefault());

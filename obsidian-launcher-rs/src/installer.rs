@@ -219,10 +219,23 @@ pub enum Spec {
     Id(String),
     /// "Fabric <mc>": latest stable Fabric Loader on that Minecraft version.
     Fabric(String),
+    // ── NeoForge / Forge (forge.rs) ──
+    /// "NeoForge <mc>": latest stable NeoForge on that Minecraft version.
+    NeoForge(String),
+    /// "Forge <mc>": recommended (else latest) Forge on that Minecraft version.
+    Forge(String),
 }
 
 pub fn parse_spec(s: &str) -> Spec {
     let t = s.trim();
+    // ── NeoForge / Forge (forge.rs) ──
+    match crate::forge::split_id(t) {
+        Some((crate::forge::Kind::NeoForge, mc)) if crate::forge::spec_supported(crate::forge::Kind::NeoForge, mc) => {
+            return Spec::NeoForge(mc.to_owned())
+        }
+        Some((crate::forge::Kind::Forge, mc)) if crate::forge::spec_supported(crate::forge::Kind::Forge, mc) => return Spec::Forge(mc.to_owned()),
+        _ => {}
+    }
     match t.strip_prefix(FABRIC_PREFIX) {
         Some(mc) if !mc.trim().is_empty() => Spec::Fabric(mc.trim().to_owned()),
         _ => Spec::Id(t.to_owned()),
@@ -230,7 +243,7 @@ pub fn parse_spec(s: &str) -> Spec {
 }
 
 /// Version folder names must be a single, plain path component.
-fn safe_id(id: &str) -> bool {
+pub(crate) fn safe_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 80
         && !id.contains('/')
@@ -268,23 +281,23 @@ fn stays_within(base: &Path, path: &Path) -> bool {
     out.starts_with(base)
 }
 
-fn version_json_in(base: &Path, id: &str) -> PathBuf {
+pub(crate) fn version_json_in(base: &Path, id: &str) -> PathBuf {
     base.join("versions").join(id).join(format!("{id}.json"))
 }
 
-fn find_version_json(paths: &Paths, id: &str) -> Option<PathBuf> {
+pub(crate) fn find_version_json(paths: &Paths, id: &str) -> Option<PathBuf> {
     if !safe_id(id) {
         return None;
     }
     paths.bases().into_iter().map(|b| version_json_in(b, id)).find(|p| p.is_file())
 }
 
-fn read_json(p: &Path) -> Result<Value, String> {
+pub(crate) fn read_json(p: &Path) -> Result<Value, String> {
     let raw = fs::read_to_string(p).map_err(|e| format!("Couldn't read {}: {e}", p.display()))?;
     serde_json::from_str(&raw).map_err(|e| format!("{} is damaged ({e}).", p.display()))
 }
 
-fn write_json_atomic(p: &Path, v: &Value) -> Result<(), String> {
+pub(crate) fn write_json_atomic(p: &Path, v: &Value) -> Result<(), String> {
     if let Some(parent) = p.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Couldn't create {}: {e}", parent.display()))?;
     }
@@ -346,7 +359,7 @@ pub fn catalog(paths: &Paths, manifest: Option<&Value>) -> Vec<CatalogEntry> {
             for e in rd.flatten() {
                 let id = e.file_name().to_string_lossy().into_owned();
                 // "Fabric <mc>" means LumosClient's own profile; other launchers' copies don't count.
-                let foreign_fabric = id.starts_with(FABRIC_PREFIX) && base != paths.game.as_path();
+                let foreign_fabric = (id.starts_with(FABRIC_PREFIX) || matches!(parse_spec(&id), Spec::NeoForge(_) | Spec::Forge(_))) && base != paths.game.as_path();
                 if safe_id(&id) && !foreign_fabric && version_json_in(base, &id).is_file() && !installed.contains(&id) {
                     installed.push(id);
                 }
@@ -365,10 +378,16 @@ pub fn catalog(paths: &Paths, manifest: Option<&Value>) -> Vec<CatalogEntry> {
         .unwrap_or_default();
     let mut out: Vec<CatalogEntry> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+    let loader_index = crate::forge::cached_index(paths);
     for mc in &releases {
         if fabric_supports(mc) {
             let id = format!("{FABRIC_PREFIX}{mc}");
             out.push(CatalogEntry { installed: installed.contains(&id), id: id.clone(), kind: "fabric".into() });
+            seen.insert(id);
+        }
+        // ── NeoForge / Forge (forge.rs) ──
+        for (id, kind) in crate::forge::catalog_variants(&loader_index, mc) {
+            out.push(CatalogEntry { installed: installed.contains(&id), id: id.clone(), kind: kind.into() });
             seen.insert(id);
         }
         out.push(CatalogEntry { installed: installed.contains(mc), id: mc.clone(), kind: "vanilla".into() });
@@ -383,7 +402,7 @@ pub fn catalog(paths: &Paths, manifest: Option<&Value>) -> Vec<CatalogEntry> {
 
 // ───────────────────────── Install version metadata ─────────────────────────
 
-fn install_vanilla_json(paths: &Paths, id: &str) -> Result<PathBuf, String> {
+pub(crate) fn install_vanilla_json(paths: &Paths, id: &str) -> Result<PathBuf, String> {
     if let Some(found) = find_version_json(paths, id) {
         if read_json(&found).is_ok() {
             return Ok(found);
@@ -1218,7 +1237,7 @@ pub fn build_args(r: &Resolved, prep: &Prepared, game_dir: &Path, auth: &Auth, o
 /// Installs the named version and its Java, returning what's needed to launch it.
 pub fn install(paths: &Paths, spec: &str, report: Report) -> Result<(Resolved, Prepared, PathBuf), String> {
     let spec = spec.trim();
-    let is_fabric = matches!(parse_spec(spec), Spec::Fabric(_));
+    let is_fabric = matches!(parse_spec(spec), Spec::Fabric(_) | Spec::NeoForge(_) | Spec::Forge(_));
     let installed = if is_fabric { version_json_in(&paths.game, spec).is_file() } else { find_version_json(paths, spec).is_some() };
     let id = if installed {
         spec.to_owned()
@@ -1228,6 +1247,9 @@ pub fn install(paths: &Paths, spec: &str, report: Report) -> Result<(Resolved, P
                 report(&format!("Setting up Fabric for Minecraft {mc}"), -1.0);
                 install_fabric_json(paths, &mc)?
             }
+            // ── NeoForge / Forge (forge.rs) ──
+            Spec::NeoForge(mc) => crate::forge::install_json(paths, crate::forge::Kind::NeoForge, &mc, report)?,
+            Spec::Forge(mc) => crate::forge::install_json(paths, crate::forge::Kind::Forge, &mc, report)?,
             Spec::Id(id) => {
                 if !safe_id(&id) {
                     return Err("That version name isn't valid.".into());
@@ -1569,6 +1591,8 @@ mod tests {
         assert_eq!(parse_spec("Fabric 1.21.11"), Spec::Fabric("1.21.11".into()));
         assert_eq!(parse_spec("1.21.11"), Spec::Id("1.21.11".into()));
         assert_eq!(parse_spec("Forge 1.8.9"), Spec::Id("Forge 1.8.9".into()));
+        assert_eq!(parse_spec("Forge 1.20.1"), Spec::Forge("1.20.1".into()));
+        assert_eq!(parse_spec("NeoForge 1.21.1"), Spec::NeoForge("1.21.1".into()));
         assert!(!safe_id("../x"));
         assert!(!safe_id(".."));
         assert!(safe_id("Fabric 1.21.11"));

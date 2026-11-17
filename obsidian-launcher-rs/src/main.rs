@@ -22,8 +22,10 @@ use wry::{WebContext, WebView, WebViewBuilder};
 
 mod capes;
 mod elyby;
+mod forge;
 mod horizon_mods;
 mod hud_config;
+mod modpack;
 mod native_builds;
 mod installer;
 mod net;
@@ -1014,6 +1016,8 @@ fn horizon_root_for_check(shared: &Arc<Mutex<AppState>>) -> Option<PathBuf> {
 fn refresh_catalog_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>) {
     std::thread::spawn(move || {
         let paths = shared.lock().unwrap().paths.clone();
+        // NeoForge/Forge version lists for the catalog (forge.rs; cached, refreshed every few hours).
+        forge::refresh_index(&paths);
         let result = installer::manifest(&paths);
         let mut st = shared.lock().unwrap();
         match result {
@@ -1349,7 +1353,7 @@ fn mc_version_for(paths: &installer::Paths, selected: &str) -> String {
     if selected == HORIZON_ID {
         return "26.3".into();
     }
-    if let installer::Spec::Fabric(mc) = installer::parse_spec(selected) {
+    if let installer::Spec::Fabric(mc) | installer::Spec::NeoForge(mc) | installer::Spec::Forge(mc) = installer::parse_spec(selected) {
         return mc;
     }
     if let Some(base) = installer::base_game_version(paths, selected) {
@@ -1360,7 +1364,7 @@ fn mc_version_for(paths: &installer::Paths, selected: &str) -> String {
 
 fn mc_version_from_name(selected: &str) -> String {
     match installer::parse_spec(selected) {
-        installer::Spec::Fabric(mc) => mc,
+        installer::Spec::Fabric(mc) | installer::Spec::NeoForge(mc) | installer::Spec::Forge(mc) => mc,
         installer::Spec::Id(id) => {
             let first_numeric = id.split_whitespace().rev().find(|t| t.chars().next().is_some_and(|c| c.is_ascii_digit()));
             first_numeric.unwrap_or(&id).to_owned()
@@ -1372,11 +1376,19 @@ fn is_fabric_version(selected: &str) -> bool {
     selected.starts_with(installer::FABRIC_PREFIX) || selected.to_lowercase().contains("fabric")
 }
 
+// ── Mod loaders (forge.rs): which loader an instance runs, for Modrinth filters and installs ──
+fn mod_loader(paths: &installer::Paths, selected: &str) -> Option<&'static str> {
+    if selected == HORIZON_ID {
+        return None;
+    }
+    forge::instance_loader(paths, selected)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn search_modrinth_async(proxy: EventLoopProxy<UserEvent>, paths: installer::Paths, game_dir: PathBuf, query: String, project_type: String, sort_by: String, offset: u64, selected: String, seq: u64) {
     std::thread::spawn(move || {
         let project_type = match project_type.as_str() {
-            "mod" | "resourcepack" | "shader" => project_type,
+            "mod" | "resourcepack" | "shader" | "modpack" => project_type,
             _ => "mod".to_owned(),
         };
         // Horizon 26.3 can't run Java mods: its instances browse Horizon's own registry instead.
@@ -1389,9 +1401,12 @@ fn search_modrinth_async(proxy: EventLoopProxy<UserEvent>, paths: installer::Pat
         let mc = mc_version_for(&paths, &selected);
         let mut facets = vec![format!("[\"project_type:{project_type}\"]")];
         if project_type == "mod" {
-            facets.push("[\"categories:fabric\"]".to_owned());
+            // The instance's own loader (Fabric when it has none, as before).
+            let loaders = forge::compatible_modrinth_loaders(mod_loader(&paths, &selected).unwrap_or("fabric"));
+            facets.push(format!("[{}]", loaders.iter().map(|l| format!("\"categories:{l}\"")).collect::<Vec<_>>().join(",")));
         }
-        if project_type != "shader" {
+        // Modpacks make their own instance, so they aren't filtered by this one's version.
+        if project_type != "shader" && project_type != "modpack" {
             facets.push(format!("[\"versions:{mc}\"]"));
         }
         let facets = format!("[{}]", facets.join(","));
@@ -1606,6 +1621,7 @@ fn installed_projects(dir: &Path) -> HashMap<String, String> {
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn install_modrinth_project(
     proxy: &EventLoopProxy<UserEvent>,
     game_dir: &Path,
@@ -1614,9 +1630,10 @@ fn install_modrinth_project(
     mc_ver: &str,
     installed_loader: Option<(u64, u64, u64)>,
     depth: u8,
+    loader: &str,
 ) -> Result<String, String> {
     let mut existing: Option<HashMap<String, String>> = None;
-    install_modrinth_inner(proxy, game_dir, project, project_type, mc_ver, installed_loader, depth, &mut existing)
+    install_modrinth_inner(proxy, game_dir, project, project_type, mc_ver, installed_loader, depth, &mut existing, loader)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1629,6 +1646,7 @@ fn install_modrinth_inner(
     installed_loader: Option<(u64, u64, u64)>,
     depth: u8,
     existing: &mut Option<HashMap<String, String>>,
+    loader: &str,
 ) -> Result<String, String> {
     if depth > 3 {
         return Ok(String::new());
@@ -1640,7 +1658,7 @@ fn install_modrinth_inner(
     let compat_url = if project_type == "mod" {
         format!(
             "https://api.modrinth.com/v2/project/{project}/version?game_versions={game_versions}&loaders={}",
-            url_encode("[\"fabric\"]")
+            url_encode(&format!("[{}]", forge::compatible_modrinth_loaders(loader).iter().map(|l| format!("\"{l}\"")).collect::<Vec<_>>().join(",")))
         )
     } else {
         format!("https://api.modrinth.com/v2/project/{project}/version?game_versions={game_versions}")
@@ -1699,7 +1717,7 @@ fn install_modrinth_inner(
             push_log(proxy, &format!("[Modrinth] {e}"));
             continue;
         }
-        if project_type == "mod" && !jar_matches_fabric_loader(&tmp_dest, installed_loader) {
+        if project_type == "mod" && loader == "fabric" && !jar_matches_fabric_loader(&tmp_dest, installed_loader) {
             push_log(proxy, &format!("[Modrinth] Skipped {filename} (needs a newer Fabric Loader)"));
             let _ = fs::remove_file(&tmp_dest);
             continue;
@@ -1720,7 +1738,7 @@ fn install_modrinth_inner(
             for dep in ver.get("dependencies").and_then(|d| d.as_array()).into_iter().flatten() {
                 if dep.get("dependency_type").and_then(|t| t.as_str()) == Some("required") {
                     if let Some(dep_id) = dep.get("project_id").and_then(|id| id.as_str()) {
-                        match install_modrinth_inner(proxy, game_dir, dep_id, "mod", mc_ver, installed_loader, depth + 1, existing) {
+                        match install_modrinth_inner(proxy, game_dir, dep_id, "mod", mc_ver, installed_loader, depth + 1, existing, loader) {
                             Ok(f) if !f.is_empty() => push_log(proxy, &format!("[Modrinth] Added required dependency {f}")),
                             Ok(_) => {}
                             Err(e) => push_log(proxy, &format!("[Modrinth] A required dependency couldn't be installed: {e}")),
@@ -1765,20 +1783,21 @@ fn download_modrinth_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<A
             }
             return;
         }
-        if project_type == "mod" && !is_fabric_version(&selected) {
+        let loader = mod_loader(&paths, &selected);
+        if project_type == "mod" && loader.is_none() {
             let mc = mc_version_for(&paths, &selected);
             let hint = if selected == HORIZON_ID {
                 "Horizon 26.3 can't load Java mods. Switch this instance to a Fabric version first.".to_owned()
             } else {
-                format!("Mods need Fabric. Switch this instance to \"Fabric {mc}\" first (version menu next to Launch).")
+                format!("Mods need a mod loader. Switch this instance to \"Fabric {mc}\" or \"NeoForge {mc}\" first (version menu next to Launch).")
             };
             push_install_status(&proxy, &slug, "error", &hint);
             return;
         }
         let mc_ver = mc_version_for(&paths, &selected);
-        let loader = detect_fabric_loader_version(&paths, &selected);
+        let fabric_loader = detect_fabric_loader_version(&paths, &selected);
         push_install_status(&proxy, &slug, "installing", &format!("Checking compatibility for {slug}..."));
-        match install_modrinth_project(&proxy, &game_dir, &slug, &project_type, &mc_ver, loader, 0) {
+        match install_modrinth_project(&proxy, &game_dir, &slug, &project_type, &mc_ver, fabric_loader, 0, loader.unwrap_or("fabric")) {
             Ok(filename) => push_install_status(&proxy, &slug, "installed", &format!("Installed {filename} (Minecraft {mc_ver})")),
             Err(err) => push_install_status(&proxy, &slug, "error", &err),
         }
@@ -1826,7 +1845,7 @@ fn boost_instance_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppS
                 continue;
             }
             call_js(&proxy, "onNotice", json!({"message": format!("Adding {slug}..."), "kind": "info"}));
-            match install_modrinth_project(&proxy, &game_dir, slug, "mod", &mc_ver, loader, 0) {
+            match install_modrinth_project(&proxy, &game_dir, slug, "mod", &mc_ver, loader, 0, "fabric") {
                 Ok(f) if !f.is_empty() => added.push(slug),
                 Ok(_) => {}
                 Err(_) => skipped.push(slug),
@@ -1850,6 +1869,119 @@ fn boost_instance_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppS
         }
         msg.push_str(" Tuned Java settings are on for this instance.");
         call_js(&proxy, "onNotice", json!({"message": msg, "kind": "ok"}));
+    });
+}
+
+// ───────────────────────── Modpacks (modpack.rs) ─────────────────────────
+
+enum PackSource {
+    /// A `.mrpack` the player picked: (file name, base64 data).
+    File(String, String),
+    /// A Modrinth modpack project (slug or id) from Discover.
+    Modrinth(String),
+}
+
+/// Makes a new instance from a Modrinth modpack: its version, every file it lists, its overrides.
+fn install_modpack_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, source: PackSource) {
+    {
+        let mut st = lock(&shared);
+        if st.task.is_some() {
+            call_js(&proxy, "onNotice", json!({"message": "LumosClient is busy getting a game ready. Try again in a moment.", "kind": "err"}));
+            if let PackSource::Modrinth(slug) = &source {
+                push_install_status(&proxy, slug, "error", "LumosClient is busy. Try again in a moment.", "");
+            }
+            return;
+        }
+        st.task = Some(("Reading the modpack".into(), -1.0));
+        push_state(&proxy, &st);
+    }
+    std::thread::spawn(move || {
+        let reporter = TaskReporter::new(&proxy, &shared);
+        let report = |l: &str, f: f64| reporter.report(l, f);
+        let (base_dir, paths) = {
+            let st = lock(&shared);
+            (st.base_dir.clone(), st.paths.clone())
+        };
+        let slug = match &source {
+            PackSource::Modrinth(s) => Some(s.clone()),
+            PackSource::File(..) => None,
+        };
+        let downloads = paths.cache.join("modpacks");
+        let mut done_msg = String::new();
+        let result = run_guarded(|| {
+            fs::create_dir_all(&downloads).map_err(|e| format!("Couldn't create {}: {e}", downloads.display()))?;
+            let mrpack = match &source {
+                PackSource::Modrinth(slug) => modpack::download_from_modrinth(slug, &downloads, &report)?,
+                PackSource::File(name, data) => {
+                    use base64::Engine as _;
+                    if !name.to_lowercase().ends_with(".mrpack") {
+                        return Err(format!("{name} isn't a Modrinth modpack (.mrpack)."));
+                    }
+                    if data.len() / 4 * 3 > MAX_IMPORT_BYTES {
+                        return Err(format!("{name} is too big to import here."));
+                    }
+                    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|_| format!("Couldn't read {name}."))?;
+                    if bytes.len() < 4 || &bytes[..2] != b"PK" {
+                        return Err(format!("{name} isn't a valid modpack file."));
+                    }
+                    let p = downloads.join(format!("import-{}.mrpack", now_millis()));
+                    fs::write(&p, &bytes).map_err(|e| format!("Couldn't save {name}: {e}"))?;
+                    p
+                }
+            };
+            let outcome = (|| {
+                let idx = modpack::read_index(&mrpack)?;
+                let version = modpack::version_spec(&idx)?;
+                let mut id = format!("prof-{}", now_millis());
+                while lock(&shared).config.profiles.iter().any(|p| p.id == id) {
+                    id.push('x');
+                }
+                let dir = base_dir.join("instances").join(&id);
+                if let Err(e) = modpack::install(&mrpack, &idx, &dir, &report) {
+                    // The folder is brand new and only holds this pack's files.
+                    let _ = fs::remove_dir_all(&dir);
+                    return Err(e);
+                }
+                let name: String = idx.name.chars().take(40).collect();
+                let mut st = lock(&shared);
+                st.config.profiles.push(Profile { id: id.clone(), name: name.clone(), version: version.clone(), ..Default::default() });
+                st.config.active_profile_id = id;
+                st.config.selected_version = version.clone();
+                st.save_config();
+                if let Some((k, v)) = &idx.loader {
+                    reporter.log(&format!("[LumosClient] {name} was made with {k} {v}; this instance uses {version}."));
+                }
+                Ok(format!("{name} is ready as a new instance ({version}). Press Play to finish setting it up."))
+            })();
+            if matches!(source, PackSource::File(..)) {
+                let _ = fs::remove_file(&mrpack);
+            }
+            done_msg = outcome?;
+            Ok(())
+        });
+        {
+            let mut st = lock(&shared);
+            st.task = None;
+            push_state(&proxy, &st);
+        }
+        match result {
+            Ok(()) => {
+                let msg = done_msg;
+                if let Some(s) = &slug {
+                    push_install_status(&proxy, s, "installed", &msg, "");
+                }
+                call_js(&proxy, "onTask", json!({"done": true, "message": if slug.is_some() { serde_json::Value::Null } else { json!(msg) }}));
+            }
+            Err(e) => {
+                push_log(&proxy, &format!("[LumosClient] modpack: {e}"));
+                if let Some(s) = &slug {
+                    push_install_status(&proxy, s, "error", &e, "");
+                    call_js(&proxy, "onTask", json!({"done": true}));
+                } else {
+                    call_js(&proxy, "onTask", json!({"error": e}));
+                }
+            }
+        }
     });
 }
 
@@ -2617,6 +2749,18 @@ fn main() {
                         selected,
                         v.get("seq").and_then(|x| x.as_u64()).unwrap_or(0),
                     );
+                }
+                // ── Modpacks (modpack.rs) ──
+                "download_modrinth" if text("projectType") == "modpack" => {
+                    install_modpack_async(ipc_proxy.clone(), ipc_state.clone(), PackSource::Modrinth(text("slug")));
+                }
+                "import_modpack" => {
+                    let file = text("file");
+                    let data = match v.get_mut("data").map(serde_json::Value::take) {
+                        Some(serde_json::Value::String(d)) => d,
+                        _ => String::new(),
+                    };
+                    install_modpack_async(ipc_proxy.clone(), ipc_state.clone(), PackSource::File(file, data));
                 }
                 "download_modrinth" => {
                     let project_type = match text("projectType").as_str() {
