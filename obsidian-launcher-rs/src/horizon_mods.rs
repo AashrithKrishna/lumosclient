@@ -107,12 +107,14 @@ pub fn search(game_dir: &Path, query: &str, tab: &str, sort: &str, offset: usize
     let q = query.trim().to_lowercase();
     let installed = installed_files(game_dir);
     let native_installed = crate::native_builds::installed_ids(game_dir);
+    let own = own_projects();
     let mut hits: Vec<(&Value, &Value)> = idx
         .get("projects")
         .and_then(Value::as_array)
         .map(|a| a.as_slice())
         .unwrap_or_default()
         .iter()
+        .chain(own.iter())
         .filter(|p| kinds.contains(&s(p, "kind")))
         .filter_map(|p| current_version(p).map(|v| (p, v)))
         .filter(|(p, v)| revoked(&idx, s(p, "id"), s(&v["file"], "sha256")).is_none())
@@ -155,15 +157,37 @@ pub fn search(game_dir: &Path, query: &str, tab: &str, sort: &str, offset: usize
                 // A native mod installs when Lumos's cloud builds have it for this computer.
                 "native_ready": kind == "native-mod" && crate::native_builds::build_for_mod(s(p, "id")).is_some(),
                 "installed": installed.iter().any(|f| f == file) || native_installed.iter().any(|i| i == s(p, "id")),
-                "view_url": format!("{SITE}/{}", s(p, "id")),
+                "view_url": if s(p, "id").starts_with("lumos_") { format!("https://github.com/AashrithKrishna/lumosclient/tree/main/lumos-mods/{}", s(p, "id")) } else { format!("{SITE}/{}", s(p, "id")) },
             })
         })
         .collect();
     json!({"hits": page, "total_hits": total, "source": "horizon"})
 }
 
+/// Lumos's own native mods (lumos-mods/ in this repo): built into the combined game, not in
+/// Horizon's registry, so Discover lists them from here: (id, name, summary, categories).
+const OWN: &[(&str, &str, &str, &[&str])] = &[
+    ("lumos_durability_tooltip", "Durability Tooltip", "Shows durability as numbers on item tooltips, coloured green to red.", &["utility", "decoration"]),
+    ("lumos_totem_counter", "Totem Counter", "Counts your Totems of Undying on the HUD and tells you when one pops.", &["utility", "game-mechanics"]),
+    ("lumos_particle_rain", "Particle Rain", "Rain and snow as falling particles, with splashes and optional mist.", &["decoration"]),
+    ("lumos_paginated_advancements", "Paginated Advancements", "Pages for the advancement tabs, so no tab is ever cut off.", &["utility"]),
+];
+
+fn own_projects() -> Vec<Value> {
+    OWN.iter()
+        .map(|(id, name, summary, cats)| {
+            json!({"id": id, "name": name, "summary": summary, "kind": "native-mod", "authors": ["Lumos"],
+                   "categories": cats, "tags": cats, "downloads": 0, "updated": "",
+                   "versions": [{"game": GAME, "file": {"name": "", "sha256": ""}}]})
+        })
+        .collect()
+}
+
 /// True when the registry lists `id` as a native (compiled-in) mod.
 pub fn is_native(id: &str) -> bool {
+    if OWN.iter().any(|o| o.0 == id) {
+        return true;
+    }
     index().ok().and_then(|idx| {
         idx.get("projects")?.as_array()?.iter().find(|p| s(p, "id") == id).map(|p| s(p, "kind") == "native-mod")
     }) == Some(true)
