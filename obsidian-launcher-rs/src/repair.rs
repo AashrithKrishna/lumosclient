@@ -281,7 +281,8 @@ mod tests {
             "assetIndex": {"id": "17", "sha1": "w", "size": 9}
         });
         let files = expected_files(&game, &j, "1.21.11");
-        let paths: Vec<String> = files.iter().map(|f| f.path.to_string_lossy().into_owned()).collect();
+        // Compare with forward slashes: Windows joins with `\`.
+        let paths: Vec<String> = files.iter().map(|f| f.path.to_string_lossy().replace('\\', "/")).collect();
         assert_eq!(
             paths,
             vec![
