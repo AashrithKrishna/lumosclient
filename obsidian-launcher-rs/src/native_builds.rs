@@ -234,8 +234,13 @@ pub fn install(base_dir: &Path, game_dir: &Path, mod_id: &str, report: &dyn Fn(&
     if !st.mods.is_empty() && st.build != b.short && !st.mods.iter().all(|m| b.mods.iter().any(|(id, _, _)| id == m)) {
         let names: Vec<String> = st.mods.iter().map(|m| st.known.iter().find(|k| &k.0 == m).map_or(m.clone(), |k| k.1.clone())).collect();
         return Err(format!(
-            "This mod is made for a different Horizon version than {} in this instance. Put it in a new Horizon instance, or remove those first.",
-            names.join(", ")
+            "This mod is in a different native build than {} in this instance, so they can't be mixed yet. {}",
+            names.join(", "),
+            if builds().iter().any(|b| b.combined) {
+                "Put it in a new Horizon instance, or remove those first."
+            } else {
+                "Lumos is building one game with every native mod; once it's out (it updates on its own) you can mix any of them."
+            }
         ));
     }
     ensure_build(base_dir, &b, report)?;

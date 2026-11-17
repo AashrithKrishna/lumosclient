@@ -1632,12 +1632,20 @@
         return;
       }
     }
+    // The same notice again (a double click, a retried install) refreshes the one already shown.
+    const same = [...box.children].find(c => c.querySelector('span')?.textContent === msg);
+    if (same) {
+      clearTimeout(same._timer); same.style.opacity = '1';
+      same._timer = setTimeout(() => { same.style.transition = 'opacity .25s'; same.style.opacity = '0'; setTimeout(() => same.remove(), 260); }, 3800);
+      return;
+    }
     const el = document.createElement('div');
     el.className = 'toast ' + kind;
     el.innerHTML = `${icon(kind === 'err' ? 'alert' : kind === 'info' ? 'info' : 'check', '')}<span>${esc(msg)}</span>`;
     box.appendChild(el);
     while (box.children.length > 3) box.firstChild.remove();
     const timer = setTimeout(() => { el.style.transition = 'opacity .25s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 260); }, 3800);
+    el._timer = timer;
     if (m) ui.installToast = { el, names: [m[1]], at: Date.now(), timer };
   }
 
