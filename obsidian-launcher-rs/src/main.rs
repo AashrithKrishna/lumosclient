@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::window::{Window, WindowBuilder, WindowId};
-use wry::{WebView, WebViewBuilder};
+use wry::{WebContext, WebView, WebViewBuilder};
 
 mod elyby;
 mod horizon_mods;
@@ -30,7 +30,7 @@ const LAUNCHER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // ───────────────────────── Config ─────────────────────────
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Profile {
     id: String,
@@ -49,6 +49,38 @@ struct Profile {
     /// Game version this instance launches (empty = use the global selection).
     #[serde(default)]
     version: String,
+    /// This instance's own settings; `None` uses the launcher-wide setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    memory_mb: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resolution_width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resolution_height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fullscreen: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    jvm_args: Option<String>,
+}
+
+impl Profile {
+    /// The launcher-wide settings with this instance's own ones on top.
+    fn apply_to(&self, cfg: &mut LauncherConfig) {
+        if let Some(m) = self.memory_mb {
+            cfg.memory_mb = m;
+        }
+        if let Some(w) = self.resolution_width {
+            cfg.resolution_width = w;
+        }
+        if let Some(h) = self.resolution_height {
+            cfg.resolution_height = h;
+        }
+        if let Some(f) = self.fullscreen {
+            cfg.fullscreen = f;
+        }
+        if let Some(j) = &self.jvm_args {
+            cfg.jvm_args = j.clone();
+        }
+    }
 }
 
 /// Icon keys are short lowercase identifiers drawn by the UI; reject anything else.
@@ -90,6 +122,10 @@ struct LauncherConfig {
     jvm_args: String,
     #[serde(default = "default_true", alias = "emberHudEnabled")]
     lumos_hud_enabled: bool,
+    /// Horizon 26.3's controller support. Off unless the player turns it on: on Windows a
+    /// device that only looks like a controller made the game hide the mouse pointer in menus.
+    #[serde(default)]
+    horizon_controller: bool,
     #[serde(default = "default_accent")]
     ui_accent: String,
     #[serde(default = "default_theme")]
@@ -500,6 +536,7 @@ impl AppState {
                 memory_mb: default_memory(),
                 jvm_args: String::new(),
                 lumos_hud_enabled: true,
+                horizon_controller: false,
                 ui_accent: default_accent(),
                 ui_theme: default_theme(),
                 ui_motion: true,
@@ -516,6 +553,7 @@ impl AppState {
                     playtime_secs: 0,
                     icon: String::new(),
                     version: default_version(),
+                    ..Default::default()
                 }],
                 servers: vec![],
             });
@@ -536,6 +574,7 @@ impl AppState {
                 playtime_secs: 0,
                 icon: String::new(),
                 version: config.selected_version.clone(),
+                ..Default::default()
             });
         }
         if !config.profiles.iter().any(|p| p.id == config.active_profile_id) {
@@ -644,6 +683,7 @@ impl AppState {
             "memoryMb": self.config.memory_mb,
             "jvmArgs": self.config.jvm_args,
             "lumosHudEnabled": self.config.lumos_hud_enabled,
+            "horizonController": self.config.horizon_controller,
             "versions": self.version_list(),
             "catalog": catalog,
             "catalogError": self.catalog_error,
@@ -988,8 +1028,13 @@ fn launch_game(proxy: &EventLoopProxy<UserEvent>, shared: &Arc<Mutex<AppState>>,
         }
         st.task = Some(("Getting ready".into(), -1.0));
         push_state(proxy, &st);
+        // The instance's own settings (memory, window size, Java arguments) on top of the global ones.
+        let mut config = st.config.clone();
+        if let Some(p) = st.config.profiles.iter().find(|p| p.id == st.config.active_profile_id) {
+            p.apply_to(&mut config);
+        }
         LaunchSnapshot {
-            config: st.config.clone(),
+            config,
             paths: st.paths.clone(),
             game_dir: st.active_game_dir(),
             horizon_output: st.horizon_output(),
@@ -1137,6 +1182,18 @@ fn launch_java(
     spawn_streaming_exe(proxy, shared, &java, &args, &snap.game_dir, &[], None)
 }
 
+/// Writes the player's controller choice into the instance's `horizon-controller.txt`
+/// (`enabled:true|false`), keeping every other controller setting in it.
+fn set_horizon_controller(game_dir: &Path, enabled: bool) {
+    let path = game_dir.join("horizon-controller.txt");
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> =
+        text.lines().filter(|l| l.split_once(':').map(|(k, _)| k.trim()) != Some("enabled")).map(str::to_owned).collect();
+    lines.insert(0, format!("enabled:{enabled}"));
+    let _ = fs::create_dir_all(game_dir);
+    let _ = fs::write(&path, lines.join("\n") + "\n");
+}
+
 fn launch_horizon(
     proxy: &EventLoopProxy<UserEvent>,
     shared: &Arc<Mutex<AppState>>,
@@ -1147,6 +1204,7 @@ fn launch_horizon(
     let cfg = &snap.config;
     let auth = build_auth(shared, cfg, &snap.paths, rep)?;
     prepare_horizon(shared, rep, &snap.paths, &snap.horizon_output)?;
+    set_horizon_controller(&snap.game_dir, cfg.horizon_controller);
     let client = resolve_binary("horizon-client").ok_or("This LumosClient build is missing the Horizon engine. Reinstall LumosClient.")?;
     let session = json!({"name": auth.name, "uuid": auth.uuid, "access_token": auth.access_token}).to_string();
     let mut args: Vec<String> = vec![
@@ -1649,6 +1707,38 @@ fn ely_login_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>
 }
 
 /// Only Ely.by pages may open in the in-app browser.
+/// A small guide pinned to Ely.by pages in the catalog window: how to wear a skin in one click.
+const ELY_GUIDE_JS: &str = r#"(function () {
+  if (!/(^|\.)ely\.by$/.test(location.hostname) || window.__lumosGuide) return;
+  window.__lumosGuide = true;
+  function show() {
+    if (document.getElementById('lumos-guide') || !document.body) return;
+    var signedOut = !!Array.prototype.find.call(document.querySelectorAll('a'), function (a) { return /^\s*log in\s*$/i.test(a.textContent); });
+    var adding = /^\/skins\/add/.test(location.pathname);
+    var text = adding
+      ? 'Upload your skin here, then press ✓ on it to wear it. Close this window when you\'re done.'
+      : signedOut
+        ? 'Log in (top right) once with your Ely.by account. LumosClient remembers it.'
+        : 'Click ✓ on any skin to wear it. Close this window when you\'re done; LumosClient updates your preview.';
+    var d = document.createElement('div');
+    d.id = 'lumos-guide';
+    d.setAttribute('role', 'status');
+    d.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:2147483647;max-width:min(680px,calc(100vw - 32px));' +
+      'background:#18181c;color:#f4f4f5;border:1px solid rgba(255,107,44,.55);border-radius:12px;padding:10px 14px;' +
+      'font:600 13px/1.4 -apple-system,Segoe UI,sans-serif;box-shadow:0 12px 30px rgba(0,0,0,.45);display:flex;gap:10px;align-items:center';
+    var t = document.createElement('span');
+    t.textContent = 'LumosClient · ' + text;
+    var x = document.createElement('button');
+    x.textContent = '×';
+    x.setAttribute('aria-label', 'Hide');
+    x.style.cssText = 'background:none;border:0;color:#a1a1aa;font-size:18px;cursor:pointer;padding:0 2px';
+    x.onclick = function () { d.remove(); };
+    d.appendChild(t); d.appendChild(x);
+    document.body.appendChild(d);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show); else show();
+})();"#;
+
 fn allowed_ely_url(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://") else { return false };
     let host = rest.split(['/', '?', '#']).next().unwrap_or("");
@@ -1872,6 +1962,7 @@ fn main() {
                             playtime_secs: 0,
                             icon,
                             version: version.clone(),
+                            ..Default::default()
                         });
                         st.config.active_profile_id = id;
                         st.config.selected_version = version;
@@ -1972,6 +2063,31 @@ fn main() {
                     .to_owned();
                     download_modrinth_async(ipc_proxy.clone(), ipc_state.clone(), text("slug"), project_type, text("profileId"));
                 }
+                "save_instance_settings" => {
+                    // Each field: a value sets this instance's own setting, null goes back to the global one.
+                    let id = text("id");
+                    let mut st = ipc_state.lock().unwrap();
+                    if let Some(p) = st.config.profiles.iter_mut().find(|p| p.id == id) {
+                        let num = |k: &str| v.get(k).and_then(|x| x.as_u64());
+                        if v.get("memoryMb").is_some() {
+                            p.memory_mb = num("memoryMb").map(|m| (m as u32).clamp(1024, 65536));
+                        }
+                        if v.get("resolutionWidth").is_some() {
+                            p.resolution_width = num("resolutionWidth").map(|w| (w as u32).clamp(320, 7680));
+                        }
+                        if v.get("resolutionHeight").is_some() {
+                            p.resolution_height = num("resolutionHeight").map(|h| (h as u32).clamp(240, 4320));
+                        }
+                        if v.get("fullscreen").is_some() {
+                            p.fullscreen = v.get("fullscreen").and_then(|x| x.as_bool());
+                        }
+                        if v.get("jvmArgs").is_some() {
+                            p.jvm_args = v.get("jvmArgs").and_then(|x| x.as_str()).map(|j| j.trim().to_owned());
+                        }
+                        st.save_config();
+                        push_state(&ipc_proxy, &st);
+                    }
+                }
                 "save_settings" => {
                     let mut st = ipc_state.lock().unwrap();
                     if let Some(w) = v.get("resolutionWidth").and_then(|x| x.as_u64()) {
@@ -1994,6 +2110,9 @@ fn main() {
                     }
                     if let Some(hud) = v.get("lumosHudEnabled").and_then(|x| x.as_bool()) {
                         st.config.lumos_hud_enabled = hud;
+                    }
+                    if let Some(pad) = v.get("horizonController").and_then(|x| x.as_bool()) {
+                        st.config.horizon_controller = pad;
                     }
                     if let Some(a) = v.get("uiAccent").and_then(|x| x.as_str()) {
                         if ["blaze", "amber", "crimson", "violet", "azure", "emerald"].contains(&a) {
@@ -2126,8 +2245,11 @@ fn main() {
         .build(&window)
         .expect("Failed to build WebView");
 
-    // In-app Ely.by browser windows (skin catalog / account pages).
+    // In-app Ely.by browser windows (skin catalog / account pages). Their sign-in on the Ely.by
+    // website is kept in LumosClient's own folder, so the catalog's one-click ✓ (wear this skin)
+    // works every time after the first sign-in.
     let mut browsers: HashMap<WindowId, (Window, WebView)> = HashMap::new();
+    let mut ely_context = WebContext::new(Some(state.lock().unwrap().base_dir.join("webview")));
 
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -2153,7 +2275,11 @@ fn main() {
                         .with_inner_size(tao::dpi::LogicalSize::new(1100.0, 760.0))
                         .build(target);
                     if let Ok(w) = built {
-                        if let Ok(wv) = WebViewBuilder::new().with_url(&url).build(&w) {
+                        let built = WebViewBuilder::with_web_context(&mut ely_context)
+                            .with_initialization_script(ELY_GUIDE_JS)
+                            .with_url(&url)
+                            .build(&w);
+                        if let Ok(wv) = built {
                             browsers.insert(w.id(), (w, wv));
                         }
                     }
@@ -2204,6 +2330,34 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instance_settings_override_only_what_they_set() {
+        let mut cfg: LauncherConfig = serde_json::from_str(
+            r#"{"playerName":"P","minecraftDir":"","javaHome":"","activeProfileId":"a","selectedVersion":"1.21.11",
+                "resolutionWidth":1280,"resolutionHeight":720,"memoryMb":4096,"jvmArgs":"-Dglobal","profiles":[]}"#,
+        )
+        .unwrap();
+        let p: Profile = serde_json::from_str(r#"{"id":"a","name":"A","memoryMb":8192,"fullscreen":true}"#).unwrap();
+        p.apply_to(&mut cfg);
+        assert_eq!((cfg.memory_mb, cfg.fullscreen, cfg.resolution_width, cfg.jvm_args.as_str()), (8192, true, 1280, "-Dglobal"));
+        // Unset overrides aren't written back out.
+        let saved = serde_json::to_value(Profile { id: "b".into(), ..Default::default() }).unwrap();
+        assert!(saved.get("memoryMb").is_none() && saved.get("jvmArgs").is_none());
+    }
+
+    #[test]
+    fn controller_choice_keeps_other_controller_settings() {
+        let dir = std::env::temp_dir().join(format!("lumos-pad-{}", now_millis()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("horizon-controller.txt"), "vibration:false\nenabled:true\nlookSensitivity:0.7\n").unwrap();
+        set_horizon_controller(&dir, false);
+        let t = fs::read_to_string(dir.join("horizon-controller.txt")).unwrap();
+        assert_eq!(t, "enabled:false\nvibration:false\nlookSensitivity:0.7\n");
+        set_horizon_controller(&dir, true);
+        assert!(fs::read_to_string(dir.join("horizon-controller.txt")).unwrap().starts_with("enabled:true\n"));
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn file_names_cannot_escape_the_folder_on_any_os() {

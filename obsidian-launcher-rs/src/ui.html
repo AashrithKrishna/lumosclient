@@ -399,6 +399,10 @@
   .lib-row .sub span { display: inline-flex; align-items: center; gap: 5px; }
   .lib-row .play { opacity: 0; transition: opacity .12s; }
   .inst-card .mods-link { align-self: flex-start; height: 28px; padding: 0 10px; font-size: 12px; margin-top: -2px; }
+  .inst-set { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--line); }
+  .inst-set .txt { display: flex; flex-direction: column; gap: 2px; min-width: 200px; }
+  .inst-set .txt span { font-size: 12px; color: var(--fg-3); }
+  .danger-zone { border-color: rgba(240, 90, 95, .3); }
   #contentList.dropping { outline: 2px dashed rgba(var(--accent-rgb), .7); outline-offset: -4px; background: rgba(var(--accent-rgb), .06); }
   .drop-hint { font-size: 11.5px; color: var(--fg-3); padding: 2px 4px; }
   .lib-row:hover .play, .lib-row:focus-within .play { opacity: 1; }
@@ -792,8 +796,9 @@
           <button class="active" data-kind="mods"><svg class="i sm"><use href="#i-box"/></svg>Mods <span class="count" id="cnt-mods">–</span></button>
           <button data-kind="resourcepacks"><svg class="i sm"><use href="#i-image"/></svg>Resource Packs <span class="count" id="cnt-resourcepacks">–</span></button>
           <button data-kind="shaderpacks"><svg class="i sm"><use href="#i-sparkle"/></svg>Shaders <span class="count" id="cnt-shaderpacks">–</span></button>
+          <button data-kind="settings"><svg class="i sm"><use href="#i-gear"/></svg>Settings</button>
         </div>
-        <div class="row">
+        <div class="row" id="contentTools">
           <div class="search-box" style="width:200px"><svg class="i sm"><use href="#i-search"/></svg><input class="input" id="contentSearch" aria-label="Filter installed content" placeholder="Filter…" style="height:34px" /></div>
           <button class="btn sm icon" data-act="content-refresh" title="Refresh" aria-label="Refresh"><svg class="i sm"><use href="#i-refresh"/></svg></button>
           <button class="btn sm" data-act="content-folder"><svg class="i sm"><use href="#i-folder"/></svg>Folder</button>
@@ -803,6 +808,52 @@
         </div>
       </div>
       <div class="card" style="padding:6px" id="contentList"></div>
+      <div class="col hidden" id="instSettings" style="gap:14px">
+        <div class="card pad col" style="gap:14px">
+          <div class="section-title">This instance's settings</div>
+          <div class="hint-text" style="margin-top:-8px">Anything left on “Launcher default” follows Settings › Game.</div>
+          <div class="inst-set">
+            <div class="txt"><b>Version</b><span id="isVersion">–</span></div>
+            <button class="btn sm" data-act="version-menu"><svg class="i sm"><use href="#i-box"/></svg>Change version</button>
+          </div>
+          <div class="inst-set">
+            <div class="txt"><b>Memory</b><span id="isMemHint">Launcher default</span></div>
+            <div class="row" style="gap:8px">
+              <select class="select" id="isMem" aria-label="Memory for this instance" style="width:180px;height:34px;border-radius:9px"></select>
+            </div>
+          </div>
+          <div class="inst-set">
+            <div class="txt"><b>Window size</b><span id="isResHint">Launcher default</span></div>
+            <div class="row" style="gap:8px">
+              <label class="row" style="gap:6px;font-weight:600;color:var(--fg-2)"><span class="switch"><input type="checkbox" id="isResOwn" aria-label="Own window size" /><span></span></span>Own size</label>
+              <input class="input mono" id="isW" type="number" min="320" max="7680" aria-label="Width" style="width:84px;height:34px" />
+              <span class="faint">×</span>
+              <input class="input mono" id="isH" type="number" min="240" max="4320" aria-label="Height" style="width:84px;height:34px" />
+              <select class="select" id="isFs" aria-label="Fullscreen for this instance" style="width:170px;height:34px;border-radius:9px">
+                <option value="">Fullscreen: default</option><option value="true">Fullscreen: on</option><option value="false">Fullscreen: off</option>
+              </select>
+            </div>
+          </div>
+          <div class="inst-set">
+            <div class="txt"><b>Java arguments</b><span>Extra JVM flags for Java versions of this instance only.</span></div>
+            <div class="row" style="gap:8px;flex:1;max-width:420px">
+              <input class="input mono" id="isJvm" spellcheck="false" placeholder="Launcher default" aria-label="Java arguments for this instance" style="height:34px" />
+            </div>
+          </div>
+          <div class="row" style="gap:8px;justify-content:flex-end">
+            <span class="hint-text" id="isSaved"></span>
+            <button class="btn sm" data-act="inst-reset">Use launcher defaults</button>
+            <button class="btn primary sm" data-act="inst-save"><svg class="i sm"><use href="#i-check"/></svg>Save</button>
+          </div>
+        </div>
+        <div class="card pad col danger-zone" style="gap:10px">
+          <div class="section-title" style="color:var(--bad)">Delete instance</div>
+          <div class="row" style="justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <span class="hint-text" id="isDelHint">Removes it from LumosClient. Its folder (worlds, mods, screenshots) goes to the Trash, so you can get it back.</span>
+            <button class="btn sm danger" data-act="delete-instance"><svg class="i sm"><use href="#i-trash"/></svg>Delete instance</button>
+          </div>
+        </div>
+      </div>
       <div class="drop-hint">Changes here only affect this instance. Drop mods (.jar, or .hmod for Horizon 26.3) or packs onto the list to add them; switch one off to keep it without loading it.</div>
     </div>
   </section>
@@ -876,7 +927,8 @@
         <div><h1>Skins &amp; capes</h1><p>Powered by Ely.by. Players using Ely.by see your skin and cape in-game.</p></div>
         <div class="row">
           <button class="btn" data-act="skin-refresh"><svg class="i sm"><use href="#i-refresh"/></svg>Refresh</button>
-          <button class="btn primary" data-act="open-ely" data-url="https://ely.by/skins"><svg class="i sm"><use href="#i-sparkle"/></svg>Browse skin catalog</button>
+          <button class="btn" data-act="open-ely" data-url="https://ely.by/skins/add"><svg class="i sm"><use href="#i-plus"/></svg>Upload my own skin</button>
+          <button class="btn primary" data-act="open-ely" data-url="https://ely.by/skins"><svg class="i sm"><use href="#i-sparkle"/></svg>Browse &amp; wear skins</button>
         </div>
       </div>
       <div class="skins-layout">
@@ -902,13 +954,20 @@
           <div class="card pad col">
             <div class="section-title">How it works</div>
             <ol class="steps">
-              <li><span><b style="color:var(--fg-1)">Pick a skin or cape</b> in the Ely.by catalog. It opens inside LumosClient.</span></li>
-              <li><span><b style="color:var(--fg-1)">Click “Use”</b> on the catalog page, or upload your own on your Ely.by profile.</span></li>
+              <li><span><b style="color:var(--fg-1)">Open the catalog</b> and log in to Ely.by once (top right). LumosClient remembers it.</span></li>
+              <li><span><b style="color:var(--fg-1)">Click ✓ on any skin</b> to wear it right away. Nothing to download or upload. Have your own skin file? Use <b style="color:var(--fg-1)">Upload my own skin</b>.</span></li>
               <li><span><b style="color:var(--fg-1)">Close the catalog window.</b> LumosClient refreshes your preview and uses it next time you play.</span></li>
             </ol>
             <div class="row wrap">
               <button class="btn" data-act="open-ely" data-url="https://ely.by/skins">Skin catalog</button>
+              <button class="btn" data-act="open-ely" data-url="https://ely.by/skins/add">Upload a skin</button>
               <button class="btn" data-act="open-ely" data-url="https://account.ely.by/">My Ely.by profile</button>
+            </div>
+          </div>
+          <div class="card pad col">
+            <div class="section-title">Cape</div>
+            <div class="row" style="gap:10px"><canvas id="capePreview" width="10" height="16" role="img" aria-label="Your cape" style="width:40px;height:64px;image-rendering:pixelated;border-radius:6px;background:var(--bg-3)"></canvas>
+              <div class="col" style="gap:4px"><b id="capeState">No cape on this account</b><span class="hint-text">Ely.by gives capes to some accounts (it doesn't sell or hand them out). When your account has one, LumosClient shows it here and you wear it in game automatically.</span></div>
             </div>
             <div class="hint-text">Skins show for you and anyone else using Ely.by (LumosClient, TLauncher-style launchers, or servers with the Ely.by skin plugin). Horizon 26.3 doesn't draw custom skins yet.</div>
           </div>
@@ -1097,6 +1156,10 @@
             <div class="set-row" data-k="lumoshud hud fps cps keystrokes coordinates overlay">
               <div class="txt"><b>Enable LumosHUD</b><span>Built-in overlay for Fabric 1.21.11: FPS, CPS, coordinates + facing and keystrokes. Synced into the instance's mods folder on launch.</span></div>
               <label class="switch"><input type="checkbox" id="setHud" aria-label="Enable LumosHUD" /><span></span></label>
+            </div>
+            <div class="set-row" data-k="controller gamepad xbox playstation pad horizon cursor pointer">
+              <div class="txt"><b>Use a game controller in Horizon 26.3</b><span>Turn on to play Horizon with an Xbox, PlayStation or Switch controller. Off keeps the mouse pointer in menus even if Windows reports a controller you aren't using.</span></div>
+              <label class="switch"><input type="checkbox" id="setPad" aria-label="Use a game controller in Horizon 26.3" /><span></span></label>
             </div>
           </div>
           <div class="banner" style="background:rgba(var(--accent-rgb),.07);border-color:rgba(var(--accent-rgb),.25)">
@@ -1526,6 +1589,11 @@
     confirmSave();
     // The active instance changed elsewhere (e.g. a new instance): show its own files.
     if (ui.libDetail && ui.contentFor !== state.activeProfileId) loadContent();
+    if (ui.libDetail && ui.instSettings) {
+      const fill = ui.instSettingsFill || ui.instSettingsFor !== state.activeProfileId;
+      ui.instSettingsFill = false; ui.instSettingsFor = state.activeProfileId;
+      renderInstSettings(fill);
+    }
   };
 
   function accountName() {
@@ -1599,6 +1667,9 @@
     if (seq !== ui.skinSeq) return;
     drawSkin($('skinFront'), img, d && d.slim, false, null);
     drawSkin($('skinBack'), img, d && d.slim, true, cape);
+    const cp = $('capePreview').getContext('2d'); cp.imageSmoothingEnabled = false; cp.clearRect(0, 0, 10, 16);
+    if (cape) { const s = cape.width / 64; cp.drawImage(cape, 1 * s, 1 * s, 10 * s, 16 * s, 0, 0, 10, 16); }
+    $('capeState').textContent = cape ? 'Cape on: you wear it in game' : d && d.name ? 'No cape on this account' : 'Sign in with Ely.by to see your cape';
     const face = $('acctFaceCanvas').getContext('2d'); face.imageSmoothingEnabled = false; face.clearRect(0, 0, 8, 8);
     if (img) { face.drawImage(img, 8, 8, 8, 8, 0, 0, 8, 8); face.drawImage(img, 40, 8, 8, 8, 0, 0, 8, 8); }
     // Rail avatar: the skin's face when there is one.
@@ -1765,6 +1836,7 @@
           <div class="sub"><span>${icon('clock')}${fmtDuration(p.playtimeSecs)}</span><span>${icon('cal')}${fmtAgo(p.lastPlayed)}</span><span>${icon('box')}${esc(profVersion(p))}</span></div>
         </div>
         <button class="btn ghost sm" data-act="manage-content" data-id="${esc(p.id)}" title="Mods and packs for ${esc(p.name)}">${icon('box')}Mods &amp; packs</button>
+        <button class="btn ghost sm icon" data-act="instance-settings" data-id="${esc(p.id)}" title="Settings for ${esc(p.name)}" aria-label="Settings for ${esc(p.name)}">${icon('gear')}</button>
         <button class="btn primary sm play" data-act="quick-profile" data-id="${esc(p.id)}">${icon('play')}Play</button>
       </div>`).join('')
       : `<div class="card empty">${icon('library', '')}<b>No instances match “${esc(q)}”</b></div>`;
@@ -1775,7 +1847,11 @@
     ui.libDetail = on;
     $('libList').classList.toggle('hidden', on);
     $('libDetail').classList.toggle('hidden', !on);
-    if (on) { renderDetail(); loadContent(); }
+    if (on) {
+      document.querySelectorAll('#contentSeg button').forEach(x => x.classList.toggle('active', x.dataset.kind === ui.contentKind));
+      showInstSettings(false);
+      renderDetail(); loadContent();
+    }
     renderCrumbs();
   }
   function renderDetail() {
@@ -1786,6 +1862,54 @@
     $('detLast').textContent = fmtAgo(p.lastPlayed);
     $('detTime').textContent = fmtDuration(p.playtimeSecs);
     $('detVersion').textContent = profVersion(p);
+  }
+  // ── Instance settings tab ──
+  function showInstSettings(on) {
+    ui.instSettings = on;
+    $('instSettings').classList.toggle('hidden', !on);
+    $('contentList').classList.toggle('hidden', on);
+    $('contentTools').classList.toggle('hidden', on);
+    document.querySelector('#libDetail .drop-hint').classList.toggle('hidden', on);
+    if (on) renderInstSettings(true);
+  }
+  function renderInstSettings(fill) {
+    const p = activeProfile();
+    $('isVersion').textContent = profVersion(p);
+    const only = (state.profiles || []).length <= 1;
+    $('isDelHint').textContent = only ? 'This is your only instance. Make another one before deleting this one.'
+      : `Removes it from LumosClient. Its folder (worlds, mods, screenshots) goes to the ${TRASH}, so you can get it back.`;
+    if (!fill) return;
+    const gMem = state.memoryMb || 4096;
+    const opts = [[ '', `Launcher default (${fmtGb(gMem)})` ], ...[2048, 3072, 4096, 6144, 8192, 12288, 16384].filter(m => !state.systemMemoryMb || m <= state.systemMemoryMb).map(m => [String(m), fmtGb(m)])];
+    $('isMem').innerHTML = opts.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('');
+    $('isMem').value = p.memoryMb ? String(p.memoryMb) : '';
+    if (p.memoryMb && $('isMem').value !== String(p.memoryMb)) { $('isMem').insertAdjacentHTML('beforeend', `<option value="${p.memoryMb}">${esc(fmtGb(p.memoryMb))}</option>`); $('isMem').value = String(p.memoryMb); }
+    $('isMemHint').textContent = p.memoryMb ? 'Own setting' : 'Launcher default';
+    const ownRes = !!(p.resolutionWidth && p.resolutionHeight);
+    $('isResOwn').checked = ownRes;
+    $('isW').value = p.resolutionWidth || state.resolutionWidth || 1280;
+    $('isH').value = p.resolutionHeight || state.resolutionHeight || 720;
+    $('isW').disabled = $('isH').disabled = !ownRes;
+    $('isFs').value = p.fullscreen === true ? 'true' : p.fullscreen === false ? 'false' : '';
+    $('isResHint').textContent = ownRes || typeof p.fullscreen === 'boolean' ? 'Own setting' : `Launcher default (${state.resolutionWidth}×${state.resolutionHeight})`;
+    $('isJvm').value = p.jvmArgs ?? '';
+    $('isSaved').textContent = '';
+  }
+  function saveInstSettings(reset) {
+    const own = $('isResOwn').checked && !reset;
+    const w = Math.round(+$('isW').value), hgt = Math.round(+$('isH').value);
+    if (own && (!(w >= 320 && w <= 7680) || !(hgt >= 240 && hgt <= 4320))) { toast('Window size must be between 320×240 and 7680×4320.', 'err'); return; }
+    const jvm = $('isJvm').value.trim();
+    send('save_instance_settings', {
+      id: state.activeProfileId,
+      memoryMb: reset || !$('isMem').value ? null : +$('isMem').value,
+      resolutionWidth: own ? w : null,
+      resolutionHeight: own ? hgt : null,
+      fullscreen: reset || $('isFs').value === '' ? null : $('isFs').value === 'true',
+      jvmArgs: reset || !jvm ? null : jvm,
+    });
+    $('isSaved').textContent = reset ? 'Back to launcher defaults' : 'Saved';
+    ui.instSettingsFill = true;
   }
   function loadContent() {
     if (ui.contentFor !== state.activeProfileId) { ui.content = {}; ui.contentFor = state.activeProfileId; }
@@ -2021,6 +2145,7 @@
     document.querySelectorAll('.radio-card[data-hide]').forEach(b => b.classList.toggle('active', String(!!state.hideOnLaunch) === b.dataset.hide));
     setVal('javaHome', state.javaHome || ''); setVal('setJvmArgs', state.jvmArgs || '');
     setChecked('setHud', state.lumosHudEnabled !== false);
+    setChecked('setPad', state.horizonController === true);
     document.querySelectorAll('[data-theme-opt]').forEach(b => b.classList.toggle('active', b.dataset.themeOpt === (state.uiTheme || 'dark')));
     $('swatches').stableHTML = ACCENTS.map(([k, name, a, b]) => `<button class="swatch ${state.uiAccent === k ? 'active' : ''}" style="background:linear-gradient(135deg,${a},${b})" data-act="accent" data-k="${k}" title="${name}" aria-label="${name}"></button>`).join('');
     $('accentName').textContent = (ACCENTS.find(a => a[0] === state.uiAccent) || ACCENTS[0])[1];
@@ -2049,7 +2174,7 @@
       ui.saveSent = true;
       send('save_settings', {
         resolutionWidth: state.resolutionWidth, resolutionHeight: state.resolutionHeight, fullscreen: state.fullscreen,
-        memoryMb: state.memoryMb, jvmArgs: state.jvmArgs, javaHome: state.javaHome, lumosHudEnabled: state.lumosHudEnabled !== false,
+        memoryMb: state.memoryMb, jvmArgs: state.jvmArgs, javaHome: state.javaHome, lumosHudEnabled: state.lumosHudEnabled !== false, horizonController: state.horizonController === true,
         uiAccent: state.uiAccent, uiTheme: state.uiTheme, uiMotion: state.uiMotion !== false, hideOnLaunch: !!state.hideOnLaunch, homeLayout: state.homeLayout || 'launchpad'
       });
       clearTimeout(ui.saveTimeout);
@@ -2319,6 +2444,12 @@
       case 'new-instance': openNewInstance(); break;
       case 'close-new': $('newInstScrim').classList.remove('open'); break;
       case 'create-instance': createInstance(); break;
+      case 'inst-save': saveInstSettings(false); break;
+      case 'inst-reset': saveInstSettings(true); break;
+      case 'instance-settings':
+        e.stopPropagation(); selectProfile(d.id); go('library');
+        document.querySelectorAll('#contentSeg button').forEach(x => x.classList.toggle('active', x.dataset.kind === 'settings'));
+        showLibDetail(true); showInstSettings(true); break;
       case 'delete-instance':
         if ((state.profiles || []).length <= 1) { toast('You need at least one instance.', 'err'); break; }
         if (!confirmClick(el, icon('trash') + 'Click again')) break;
@@ -2406,6 +2537,7 @@
   $('javaHome').addEventListener('change', e => saveSettings({ javaHome: e.target.value.trim() }));
   $('setJvmArgs').addEventListener('change', e => saveSettings({ jvmArgs: e.target.value.trim() }));
   $('setHud').addEventListener('change', e => saveSettings({ lumosHudEnabled: e.target.checked }));
+  $('setPad').addEventListener('change', e => saveSettings({ horizonController: e.target.checked }));
   $('setMotion').addEventListener('change', e => saveSettings({ uiMotion: e.target.checked }));
 
   // Account
@@ -2434,11 +2566,14 @@
   $('detName').addEventListener('change', e => { const n = e.target.value.trim(); if (n) send('rename_profile', { id: state.activeProfileId, name: n }); else e.target.value = activeProfile().name; });
   $('detName').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
   document.querySelectorAll('#contentSeg button').forEach(b => b.addEventListener('click', () => {
-    ui.contentKind = b.dataset.kind;
     document.querySelectorAll('#contentSeg button').forEach(x => x.classList.toggle('active', x === b));
+    showInstSettings(b.dataset.kind === 'settings');
+    if (b.dataset.kind === 'settings') return;
+    ui.contentKind = b.dataset.kind;
     if (ui.content[ui.contentKind]) renderContentList(); else loadContent();
   }));
   $('contentSearch').addEventListener('input', renderContentList);
+  $('isResOwn').addEventListener('change', e => { $('isW').disabled = $('isH').disabled = !e.target.checked; });
   $('contentFile').addEventListener('change', e => { importFiles([...e.target.files], ui.contentKind); e.target.value = ''; });
   // Files dropped anywhere else must not navigate the window away from the launcher.
   document.addEventListener('dragover', e => e.preventDefault());
