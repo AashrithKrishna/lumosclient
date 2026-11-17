@@ -1,0 +1,20 @@
+pluginManagement {
+    repositories {
+        maven { name = 'Fabric'; url = 'https://maven.fabricmc.net/' }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+rootProject.name = 'lumoshud'
+
+// One subproject per Minecraft version, all compiled from the same sources in src/
+// (see build.gradle). The list lives in gradle.properties (mc_versions).
+def versions = providers.gradleProperty('mc_versions').get().split(',').collect { it.trim() }.findAll { it }
+def only = providers.gradleProperty('mc').getOrNull()
+versions.findAll { only == null || it == only }.each { v ->
+    include ":mc-$v"
+    def dir = file("build/mc/$v")
+    dir.mkdirs()
+    project(":mc-$v").projectDir = dir
+}

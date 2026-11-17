@@ -604,6 +604,28 @@
     .filters { position: static; }
     .search-trigger { width: 200px; }
   }
+  /* Lumos capes (begin) */
+  .capes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(66px, 1fr)); gap: 8px; }
+  .cape-opt { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--bg-3); color: var(--fg-2); font: inherit; font-size: 11px; cursor: pointer; }
+  .cape-opt canvas { width: 32px; height: 64px; image-rendering: pixelated; }
+  .cape-opt:hover:not(:disabled) { border-color: rgba(var(--accent-rgb), .6); }
+  .cape-opt.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--fg-1); }
+  .cape-opt:disabled { cursor: default; opacity: .55; }
+  .cape-opt .none { width: 32px; height: 64px; display: grid; place-items: center; font-size: 20px; color: var(--fg-3); }
+  /* Lumos capes (end) */
+  /* ── Instance HUD block (hudRender) ── */
+  .hud-row { display: grid; grid-template-columns: 38px minmax(120px, 1fr) auto; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); }
+  .hud-row .name { font-weight: 600; font-size: 13px; }
+  .hud-row.off .name { color: var(--fg-3); }
+  .hud-style { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .hud-style .select { width: 84px; height: 30px; border-radius: 8px; }
+  .hud-style input[type=color] { width: 30px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: none; cursor: pointer; }
+  .hud-style .range { width: 80px; }
+  .hud-tog { height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); font-size: 12px; font-weight: 600; color: var(--fg-3); }
+  .hud-tog.on { color: var(--accent); border-color: rgba(var(--accent-rgb), .45); background: rgba(var(--accent-rgb), .1); }
+  .hud-switches { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 18px; }
+  .hud-switches label { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; font-size: 13px; font-weight: 600; border-top: 1px solid var(--line); }
+  /* ── end instance HUD block ── */
 </style>
 </head>
 <body>
@@ -850,6 +872,18 @@
             <button class="btn primary sm" data-act="inst-save"><svg class="i sm"><use href="#i-check"/></svg>Save</button>
           </div>
         </div>
+        <!-- feat/updater: repair instance -->
+        <div class="card pad col" style="gap:10px">
+          <div class="section-title">Repair instance</div>
+          <div class="row" style="justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <span class="hint-text" id="isRepairHint">Checks the game jar, libraries, sounds and textures and Java against their checksums, downloads damaged or missing files again and clears unfinished downloads. Your worlds and mods aren't touched.</span>
+            <button class="btn sm" data-act="inst-repair"><svg class="i sm"><use href="#i-refresh"/></svg>Repair instance</button>
+          </div>
+        </div>
+        <!-- /feat/updater -->
+        <!-- ── HUD (LumosHUD for Fabric, Horizon's own HUD for Horizon 26.3; filled by hudRender) ── -->
+        <div class="card pad col hidden" id="isHud" style="gap:12px"></div>
+        <!-- ── end HUD ── -->
         <div class="card pad col danger-zone" style="gap:10px">
           <div class="section-title" style="color:var(--bad)">Delete instance</div>
           <div class="row" style="justify-content:space-between;gap:12px;flex-wrap:wrap">
@@ -973,6 +1007,16 @@
             <div class="row" style="gap:10px"><canvas id="capePreview" width="10" height="16" role="img" aria-label="Your cape" style="width:40px;height:64px;image-rendering:pixelated;border-radius:6px;background:var(--bg-3)"></canvas>
               <div class="col" style="gap:4px"><b id="capeState">No cape on this account</b><span class="hint-text">Ely.by gives capes to some accounts (it doesn't sell or hand them out). When your account has one, LumosClient shows it here and you wear it in game automatically.</span></div>
             </div>
+            <!-- Lumos capes (begin) -->
+            <div class="col" id="lumosCapes" style="gap:10px;border-top:1px solid var(--line-2);padding-top:12px">
+              <div class="row" style="justify-content:space-between;gap:10px">
+                <div class="col" style="gap:2px"><b>Lumos capes</b><span class="hint-text">Free capes anyone with LumosClient sees in Fabric 1.21.11.</span></div>
+                <label class="switch" title="Show Lumos capes in game"><input type="checkbox" id="setCapes" aria-label="Show Lumos capes in game" checked /><span></span></label>
+              </div>
+              <div class="hint-text" id="capesNote">Loading capes…</div>
+              <div class="capes-grid" id="capesGrid" role="radiogroup" aria-label="Lumos capes"></div>
+            </div>
+            <!-- Lumos capes (end) -->
             <div class="hint-text">Skins show for you and anyone else using Ely.by (LumosClient, TLauncher-style launchers, or servers with the Ely.by skin plugin). Horizon 26.3 doesn't draw custom skins yet.</div>
           </div>
         </div>
@@ -1158,7 +1202,7 @@
         <div class="sec col hidden" data-sec="hud" style="gap:12px">
           <div class="set-group">
             <div class="set-row" data-k="lumoshud hud fps cps keystrokes coordinates overlay">
-              <div class="txt"><b>Enable LumosHUD</b><span>Built-in overlay for Fabric 1.21.x: FPS, CPS, coordinates + facing and keystrokes. Synced into the instance's mods folder on launch.</span></div>
+              <div class="txt"><b>Enable LumosHUD</b><span>Built-in Lunar-style HUD for Fabric 1.21.6–1.21.11: FPS, CPS, keystrokes, coordinates, armour, effects and more. Press Right Shift in game to move them; pick modules per instance under Library › instance › Settings. Synced into the instance's mods folder on launch.</span></div>
               <label class="switch"><input type="checkbox" id="setHud" aria-label="Enable LumosHUD" /><span></span></label>
             </div>
             <div class="set-row" data-k="controller gamepad xbox playstation pad horizon cursor pointer">
@@ -1168,7 +1212,7 @@
           </div>
           <div class="banner" style="background:rgba(var(--accent-rgb),.07);border-color:rgba(var(--accent-rgb),.25)">
             <svg class="i" style="color:var(--accent)"><use href="#i-info"/></svg>
-            <div class="grow muted">LumosHUD only loads on <b style="color:var(--fg-1)">Fabric 1.21.11</b>. Other versions launch without it.</div>
+            <div class="grow muted">LumosHUD only loads on <b style="color:var(--fg-1)">Fabric 1.21.6 to 1.21.11</b>. Other versions launch without it.</div>
           </div>
         </div>
 
@@ -1250,6 +1294,15 @@
               <div class="txt"><b id="aboutVersion">LumosClient</b><span>Rust launcher for Horizon 26.3 and your local Java versions.</span></div>
               <button class="btn sm" data-act="url" data-url="https://github.com/AashrithKrishna/lumosclient"><svg class="i sm"><use href="#i-external"/></svg>GitHub</button>
             </div>
+            <!-- feat/updater: updates -->
+            <div class="set-row" data-k="update updates new version upgrade">
+              <div class="txt"><b>Updates</b><span id="updAbout">LumosClient checks GitHub for a new version when it starts.</span></div>
+              <div class="row" style="gap:6px">
+                <button class="btn sm primary hidden" id="updAboutInstall" data-act="upd-install"><svg class="i sm"><use href="#i-download"/></svg>Update</button>
+                <button class="btn sm" id="updCheckBtn" data-act="upd-check"><svg class="i sm"><use href="#i-refresh"/></svg>Check for updates</button>
+              </div>
+            </div>
+            <!-- /feat/updater -->
             <div class="set-row stack" data-k="keyboard shortcuts keys">
               <div class="txt"><b>Keyboard shortcuts</b></div>
               <div class="kbd-list">
@@ -1752,8 +1805,8 @@
     $('heroLoaderChip').stableHTML = icon('box') + esc(m.label || m.loader);
     $('metaRam').stableHTML = icon('cpu') + fmtGb(state.memoryMb || 0);
     $('metaRes').stableHTML = icon('monitor') + (state.fullscreen ? 'Fullscreen' : `${state.resolutionWidth}×${state.resolutionHeight}`);
-    const hudLive = state.lumosHudEnabled !== false && /^Fabric 1\.21(\.\d+)?$/.test(state.selectedVersion);
-    $('metaHud').stableHTML = icon('hud') + (state.lumosHudEnabled === false ? 'LumosHUD off' : hudLive ? 'LumosHUD on' : 'LumosHUD (Fabric 1.21.x only)');
+    const hudLive = state.lumosHudEnabled !== false && /^Fabric 1\.21\.([6-9]|10|11)$/.test(state.selectedVersion); // LumosHUD versions: main.rs HUD_VERSIONS
+    $('metaHud').stableHTML = icon('hud') + (state.lumosHudEnabled === false ? 'LumosHUD off' : hudLive ? 'LumosHUD on' : 'LumosHUD (Fabric 1.21.6–1.21.11 only)');
     $('horizonBanner').classList.toggle('hidden', !horizonFirstRun() || busy());
 
     // Quick play: instances (switch) + servers (join)
@@ -1906,6 +1959,7 @@
     $('isFs').value = p.fullscreen === true ? 'true' : p.fullscreen === false ? 'false' : '';
     $('isResHint').textContent = ownRes || typeof p.fullscreen === 'boolean' ? 'Own setting' : `Launcher default (${state.resolutionWidth}×${state.resolutionHeight})`;
     $('isJvm').value = p.jvmArgs ?? '';
+    hudLoad(); // HUD block
   }
   function saveInstSettings(reset) {
     const own = $('isResOwn').checked && !reset;
@@ -1923,6 +1977,105 @@
     $('isSaved').textContent = reset ? 'Back to launcher defaults' : 'Saved';
     ui.instSettingsFill = true;
   }
+  // ── Instance HUD block: LumosHUD's config/lumoshud.json, or Horizon's horizon-extras.txt (main.rs hud_get/hud_set → hud_config.rs) ──
+  const HUD_KEYS = [['key.keyboard.right.shift', 'Right Shift'], ['key.keyboard.right.control', 'Right Ctrl'], ['key.keyboard.right.alt', 'Right Alt'],
+    ['key.keyboard.h', 'H'], ['key.keyboard.u', 'U'], ['key.keyboard.insert', 'Insert'], ['key.keyboard.home', 'Home'], ['key.keyboard.f6', 'F6']];
+  const HUD_SCALES = [50, 75, 100, 125, 150, 175, 200, 250, 300];
+  let hudData = null;
+  function hudLoad() {
+    const v = profVersion(activeProfile());
+    if (!/^Fabric /.test(v) && v !== 'Horizon 26.3 (Rust)') { hudData = null; $('isHud').classList.add('hidden'); return; }
+    send('hud_get', { profileId: state.activeProfileId });
+  }
+  function hudSet(patch) { send('hud_set', { profileId: state.activeProfileId, patch }); }
+  window.onHudConfig = function (d) {
+    if (!d || d.profileId !== state.activeProfileId) return;
+    if (d.error) toast(d.error, 'err');
+    hudData = d; hudRender();
+  };
+  function hudStyleHtml(m, mod) {
+    const scale = Math.round((m.scale || 1) * 100);
+    const scales = HUD_SCALES.includes(scale) ? HUD_SCALES : [...HUD_SCALES, scale].sort((a, b) => a - b);
+    const a = `data-mod="${esc(mod)}"`;
+    return `<div class="hud-style">
+      <input type="color" ${a} data-hud="textColor" value="${esc((c => c.length === 9 ? '#' + c.slice(3) : c)(m.textColor || '#FFFFFF'))}" title="Text colour" aria-label="Text colour" />
+      <select class="select" ${a} data-hud="scale" title="Size" aria-label="Size">${scales.map(s => `<option value="${s}" ${s === scale ? 'selected' : ''}>${s}%</option>`).join('')}</select>
+      <button class="hud-tog ${m.background ? 'on' : ''}" ${a} data-hud="background" title="Box behind the text">Box</button>
+      <input class="range" type="range" min="0" max="100" step="5" ${a} data-hud="backgroundOpacity" value="${+m.backgroundOpacity || 0}" title="Box opacity" aria-label="Box opacity" ${m.background ? '' : 'disabled'} />
+      <button class="hud-tog ${m.shadow ? 'on' : ''}" ${a} data-hud="shadow" title="Text shadow">Shadow</button>
+    </div>`;
+  }
+  function hudRender() {
+    const box = $('isHud'), d = hudData;
+    const v = profVersion(activeProfile());
+    if (!d || (d.kind === 'none' && !d.fabric)) { box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    if (d.kind === 'horizon') {
+      box.innerHTML = `<div class="section-title">In-game HUD <span class="chip">Horizon 26.3</span></div>
+        <div class="hint-text" style="margin-top:-6px">Horizon's own HUD widgets (horizon-extras.txt). Move them in game from Options › PvP &amp; HUD.</div>
+        <div class="hud-switches">${d.switches.map(s => `<label>${esc(s.label)}<span class="switch"><input type="checkbox" data-hzn="${esc(s.key)}" ${s.on ? 'checked' : ''} aria-label="${esc(s.label)}" /><span></span></span></label>`).join('')}</div>`;
+      return;
+    }
+    if (d.kind === 'none') {
+      box.innerHTML = `<div class="section-title">In-game HUD <span class="chip">LumosHUD</span></div>
+        <div class="hint-text">LumosHUD runs on Fabric 1.21.6 to 1.21.11. This instance is on ${esc(v)}, so it launches without it.</div>`;
+      return;
+    }
+    const keyName = (HUD_KEYS.find(k => k[0] === d.editorKey) || [d.editorKey, d.editorKey.replace(/^key\.(keyboard|mouse)\./, '')])[1];
+    const keyOpts = (HUD_KEYS.some(k => k[0] === d.editorKey) ? HUD_KEYS : [...HUD_KEYS, [d.editorKey, keyName]]);
+    const first = d.modules.find(m => m.enabled) || d.modules[0];
+    box.innerHTML = `<div class="section-title">In-game HUD <span class="chip">LumosHUD</span></div>
+      <div class="hint-text" style="margin-top:-6px">${state.lumosHudEnabled === false ? 'LumosHUD is switched off in Settings › LumosHUD, so these apply once it is back on. ' : ''}Press <b>${esc(keyName)}</b> in game to drag, resize and snap modules. Changes here apply the next time the game starts or within a few seconds while it runs.</div>
+      <div class="inst-set">
+        <div class="txt"><b>Editor key</b><span>Opens the HUD editor in game</span></div>
+        <div class="row" style="gap:10px">
+          <select class="select" id="hudKey" aria-label="HUD editor key" style="width:150px;height:34px;border-radius:9px">${keyOpts.map(([k, n]) => `<option value="${esc(k)}" ${k === d.editorKey ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
+          <label class="row" style="gap:6px;font-weight:600;color:var(--fg-2)"><span class="switch"><input type="checkbox" id="hudSnap" ${d.snapping ? 'checked' : ''} aria-label="Snapping" /><span></span></span>Snapping</label>
+          <button class="btn sm" data-hudact="reset" title="Every module back to its default place, size and style">Reset layout</button>
+        </div>
+      </div>
+      <div class="inst-set">
+        <div class="txt"><b>Every module</b><span>Sets this style on all modules at once</span></div>
+        ${hudStyleHtml(first, '*')}
+      </div>
+      ${d.modules.map(m => `<div class="hud-row ${m.enabled ? '' : 'off'}">
+        <span class="switch"><input type="checkbox" data-mod="${esc(m.id)}" data-hud="enabled" ${m.enabled ? 'checked' : ''} aria-label="${esc(m.name)}" /><span></span></span>
+        <span class="name">${esc(m.name)}</span>
+        ${hudStyleHtml(m, m.id)}
+      </div>`).join('')}`;
+  }
+  function hudField(el) {
+    const k = el.dataset.hud;
+    if (k === 'enabled') return el.checked;
+    if (k === 'scale') return (+el.value) / 100;
+    if (k === 'backgroundOpacity') return +el.value;
+    if (k === 'textColor') return el.value.toUpperCase();
+    if (k === 'background' || k === 'shadow') return !el.classList.contains('on');
+  }
+  function hudChange(el) {
+    const mod = el.dataset.mod, k = el.dataset.hud;
+    const val = { [k]: hudField(el) };
+    hudSet(mod === '*' ? { all: val } : { modules: { [mod]: val } });
+  }
+  $('isHud').addEventListener('change', e => {
+    const t = e.target;
+    if (t.dataset.hzn) { hudSet({ switches: { [t.dataset.hzn]: t.checked } }); return; }
+    if (t.id === 'hudKey') { hudSet({ editorKey: t.value }); return; }
+    if (t.id === 'hudSnap') { hudSet({ snapping: t.checked }); return; }
+    if (t.dataset.hud && t.dataset.hud !== 'background' && t.dataset.hud !== 'shadow') hudChange(t);
+  });
+  $('isHud').addEventListener('click', e => {
+    const t = e.target.closest('button');
+    if (!t) return;
+    if (t.dataset.hudact === 'reset') { // two clicks, so a stray one doesn't lose the layout
+      if (t.dataset.armed) { hudSet({ reset: true }); toast('LumosHUD layout reset'); return; }
+      t.dataset.armed = '1'; t.textContent = 'Click again to reset';
+      setTimeout(() => { if (t.isConnected) { delete t.dataset.armed; t.textContent = 'Reset layout'; } }, 3000);
+      return;
+    }
+    if (t.dataset.hud === 'background' || t.dataset.hud === 'shadow') hudChange(t);
+  });
+  // ── end instance HUD block ──
   function loadContent() {
     if (ui.contentFor !== state.activeProfileId) { ui.content = {}; ui.contentFor = state.activeProfileId; }
     $('contentList').innerHTML = skeletonRows(4, 34);
@@ -2665,6 +2818,73 @@
   });
   window.addEventListener('resize', closePopovers);
 
+  // ───────────────────────── Lumos capes (begin) ─────────────────────────
+  // The cape picker on the Skins page. The backend answers capes_load with onCapes and
+  // capes_select with onCapeSelected; choosing needs an Ely.by account.
+  const capes = { data: null, skinImg: null, slim: false, imgs: {}, busy: false, loaded: false };
+  function capesSignedIn() { return !!(capes.data && capes.data.name); }
+  function capesCurrentImg() { const c = capes.data && capes.data.current; return c ? capes.imgs[c] || null : null; }
+  function renderCapes() {
+    const d = capes.data, grid = $('capesGrid'), note = $('capesNote');
+    $('setCapes').checked = state.lumosCapesEnabled !== false;
+    if (!d) { note.textContent = 'Loading capes…'; grid.innerHTML = ''; return; }
+    if (d.configured === false) { note.textContent = 'Capes server not set up yet.'; grid.innerHTML = ''; return; }
+    if (d.error) { note.textContent = d.error; grid.innerHTML = ''; return; }
+    const signed = capesSignedIn();
+    note.textContent = !signed ? 'Sign in with Ely.by to wear a Lumos cape. Offline players can still see other players\' capes.'
+      : capes.busy ? 'Saving your cape…'
+      : d.current ? `Wearing ${(d.capes.find(c => c.id === d.current) || {}).name || d.current}. Everyone using LumosClient sees it in game.` : 'Pick a cape to wear in game.';
+    const opts = [{ id: '', name: 'No cape' }].concat(d.capes || []);
+    grid.innerHTML = opts.map(c => {
+      const sel = (d.current || '') === c.id;
+      return `<button class="cape-opt ${sel ? 'sel' : ''}" role="radio" aria-checked="${sel}" data-cape="${esc(c.id)}" ${!signed || capes.busy ? 'disabled' : ''} title="${esc(c.name)}">`
+        + (c.id ? `<canvas width="16" height="32" data-cape-canvas="${esc(c.id)}" aria-hidden="true"></canvas>` : `<span class="none" aria-hidden="true">∅</span>`)
+        + `<span>${esc(c.name)}</span></button>`;
+    }).join('');
+    grid.querySelectorAll('canvas[data-cape-canvas]').forEach(cv => {
+      const img = capes.imgs[cv.dataset.capeCanvas] || null;
+      if (capes.skinImg) return drawSkin(cv, capes.skinImg, capes.slim, true, img);
+      const x = cv.getContext('2d'); x.imageSmoothingEnabled = false; x.clearRect(0, 0, 16, 32);
+      if (img) x.drawImage(img, 1, 1, 10, 16, 3, 8, 10, 16);
+    });
+    // The back view shows the Lumos cape the player wears, over any Ely.by cape.
+    const cur = capesCurrentImg();
+    if (cur) {
+      if (capes.skinImg) drawSkin($('skinBack'), capes.skinImg, capes.slim, true, cur);
+      const cp = $('capePreview').getContext('2d'); cp.imageSmoothingEnabled = false; cp.clearRect(0, 0, 10, 16); cp.drawImage(cur, 1, 1, 10, 16, 0, 0, 10, 16);
+      $('capeState').textContent = 'Lumos cape on: you wear it in game';
+    }
+  }
+  window.onCapes = async function (d) {
+    const imgs = {};
+    await Promise.all(((d && d.capes) || []).map(async c => { imgs[c.id] = await loadImg(c.data); }));
+    capes.imgs = imgs; capes.data = d || {}; renderCapes();
+  };
+  window.onCapeSelected = function (r) {
+    capes.busy = false;
+    if (r && r.ok) { if (capes.data) capes.data.current = r.cape || null; toast(r.cape ? 'Cape saved. Others see it within a minute.' : 'Cape removed'); send('refresh_skin'); }
+    else toast((r && r.error) || 'Couldn’t change your cape.', 'err');
+    renderCapes();
+  };
+  const baseOnSkin = window.onSkin;
+  window.onSkin = async function (d) {
+    await baseOnSkin(d);
+    capes.skinImg = await loadImg(d && d.skin); capes.slim = !!(d && d.slim);
+    const name = (d && d.name) || null;
+    if (!capes.loaded || name !== capes.lastName) { capes.loaded = true; capes.lastName = name; if (capes.data) capes.data.current = null; send('capes_load'); }
+    if (capes.data) capes.data.name = name;
+    renderCapes();
+  };
+  $('capesGrid').addEventListener('click', e => {
+    const b = e.target.closest('button[data-cape]');
+    if (!b || b.disabled || capes.busy) return;
+    if ((capes.data.current || '') === b.dataset.cape) return;
+    capes.busy = true; renderCapes();
+    send('capes_select', { cape: b.dataset.cape || 'none' });
+  });
+  $('setCapes').addEventListener('change', e => { state.lumosCapesEnabled = e.target.checked; send('capes_enabled', { enabled: e.target.checked }); toast(e.target.checked ? 'Lumos capes on in game' : 'Lumos capes off in game'); });
+  // ───────────────────────── Lumos capes (end) ─────────────────────────
+
   // ───────────────────────── Boot ─────────────────────────
   // Shortcut labels: ⌘ on a Mac, Ctrl everywhere else.
   const keyLabel = IS_MAC ? (s => s)
@@ -2674,8 +2894,208 @@
   const logo = $('logoSrc').getAttribute('src');
   document.querySelectorAll('.js-logo').forEach(img => { img.src = logo; });
   renderSettingsValues(); renderHome(); renderStatus();
+  // feat/updater: helpers for the update banner, crash card and repair (script below).
+  window.lumosUi = {
+    $, esc, icon, toast, send, go, openSettings, activeProfile, fmtGb, getState: () => state,
+    openInstSettings(id) {
+      selectProfile(id); go('library'); showLibDetail(true);
+      document.querySelectorAll('#contentSeg button').forEach(x => x.classList.toggle('active', x.dataset.kind === 'settings'));
+      showInstSettings(true);
+    },
+    findMod(q) {
+      ui.modType = 'mod'; ui.modOffset = 0; ui.modLoaded = true;
+      document.querySelectorAll('#typeSeg button').forEach(b => b.classList.toggle('active', b.dataset.type === 'mod'));
+      $('modQuery').value = q; go('discover'); searchMods();
+    },
+  };
   send('init', {});
 })();
 </script>
+<!-- ═════════════════ feat/updater: update banner, crash help, repair ═════════════════ -->
+<style>
+  .upd-bar { flex: none; display: flex; align-items: center; gap: 10px; margin: 8px 24px 0; padding: 8px 12px; border-radius: 12px; font-size: 12.5px;
+    background: rgba(var(--accent-rgb), .08); border: 1px solid rgba(var(--accent-rgb), .28); color: var(--fg-1); }
+  .upd-bar svg.i { color: var(--accent); }
+  .upd-bar .grow { flex: 1; min-width: 0; }
+  .upd-notes { flex: none; margin: 6px 24px 0; padding: 10px 12px; max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: 12px; line-height: 1.5;
+    color: var(--fg-2); background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; }
+  .crash-card { width: min(560px, calc(100vw - 32px)); padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .crash-card h2 { margin: 0; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+  .crash-card h2 svg { color: var(--bad); }
+  .crash-card p { margin: 0; color: var(--fg-2); font-size: 13px; line-height: 1.5; }
+  .crash-card pre { margin: 0; padding: 10px; max-height: 140px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 11px;
+    color: var(--fg-3); background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; }
+  .crash-card .acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+</style>
+<script>
+(() => {
+  'use strict';
+  const L = window.lumosUi;
+  if (!L) return;
+  const { $, esc, icon, toast, send } = L;
+  const upd = { release: null, canInstall: false };
+  const DISMISS_KEY = 'lumos.updateDismissed';
+  const dismissed = () => { try { return localStorage.getItem(DISMISS_KEY) || ''; } catch (e) { return ''; } };
+
+  // ── Update banner ──
+  function bar() {
+    let el = $('updBar');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'updBar'; el.className = 'upd-bar hidden'; el.setAttribute('role', 'status');
+      const notes = document.createElement('div');
+      notes.id = 'updNotes'; notes.className = 'upd-notes hidden';
+      const anchor = $('taskStrip') || document.querySelector('.topbar');
+      anchor.after(el); el.after(notes);
+    }
+    return el;
+  }
+  function showBanner(force) {
+    const r = upd.release;
+    if (!r || (!force && dismissed() === r.version)) return;
+    const el = bar();
+    el.innerHTML = `${icon('download')}<span class="grow">LumosClient <b>${esc(r.version)}</b> is available (you have ${esc(L.getState().launcherVersion || '')}).</span>`
+      + (r.notes ? `<button class="btn sm ghost" data-act="upd-notes">What's new</button>` : '')
+      + `<button class="btn sm primary" data-act="upd-install">${icon('download')}Update</button>`
+      + `<button class="btn sm ghost icon" data-act="upd-dismiss" aria-label="Hide until the next version">${icon('x')}</button>`;
+    $('updNotes').textContent = r.notes || '';
+    el.classList.remove('hidden');
+  }
+  function hideBanner() { if ($('updBar')) { $('updBar').classList.add('hidden'); $('updNotes').classList.add('hidden'); } }
+  function setAbout(text, canUpdate) {
+    if ($('updAbout')) $('updAbout').textContent = text;
+    if ($('updAboutInstall')) $('updAboutInstall').classList.toggle('hidden', !canUpdate);
+  }
+  window.onUpdate = function (u) {
+    if (!u) return;
+    $('updCheckBtn') && ($('updCheckBtn').disabled = false);
+    if (u.restarting) { toast('Update installed. Restarting LumosClient…', 'info'); return; }
+    if (u.error) {
+      if (u.manual !== false) toast(u.error, 'err');
+      if (u.openedPage) toast('Opened the release page so you can download the update yourself.', 'info');
+      if (u.manual) setAbout("Couldn't check for updates: " + u.error, false);
+      return;
+    }
+    if (u.available && u.release) {
+      upd.release = u.release; upd.canInstall = !!u.canInstall;
+      setAbout(`Version ${u.release.version} is available.`, true);
+      showBanner(!!u.manual);
+      return;
+    }
+    setAbout(`You're on the latest version (${u.current || ''}).`, false);
+    if (u.manual) toast(`LumosClient ${u.current || ''} is the latest version.`);
+  };
+  function installUpdate() {
+    const st = L.getState();
+    if (st.running) { toast('Close the game first: LumosClient never updates while a game is running.', 'err'); return; }
+    if (st.task) { toast('Wait for the current download to finish, then update.', 'err'); return; }
+    if (upd.release && !upd.canInstall) { send('open_url', { url: upd.release.pageUrl }); return; }
+    send('install_update');
+    hideBanner();
+    toast('Downloading the update…', 'info');
+  }
+
+  // ── Crash help ──
+  const ACTION_LABEL = {
+    disable_mod: ['x', 'Switch off that mod'], find_mod: ['compass', 'Find it in Discover'], open_logs: ['terminal', 'Open logs'],
+    repair: ['refresh', 'Repair instance'], raise_memory: ['cpu', 'Raise memory'], java_settings: ['coffee', 'Java settings'],
+    inst_settings: ['gear', 'Instance settings'],
+  };
+  let crash = null;
+  function crashScrim() {
+    let el = $('crashScrim');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'crashScrim'; el.className = 'scrim';
+      el.innerHTML = '<div class="modal crash-card" role="dialog" aria-modal="true" aria-labelledby="crashTitle" id="crashCard"></div>';
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+  function closeCrash() { if ($('crashScrim')) $('crashScrim').classList.remove('open'); }
+  window.onCrashHelp = function (d) {
+    if (!d || !d.title) return;
+    crash = d;
+    const prof = (L.getState().profiles || []).find(p => p.id === d.profileId);
+    const culprit = d.culprit ? `<p>Likely cause: <span class="chip accent">${esc(d.culprit)}</span>${d.modFile ? ` <span class="faint mono" style="font-size:11px">${esc(d.modFile)}</span>` : ''}</p>` : '';
+    const acts = (d.actions || []).filter(a => ACTION_LABEL[a] && (a !== 'find_mod' || d.needs));
+    $('crashCard') || crashScrim();
+    $('crashCard').innerHTML = `<h2 id="crashTitle">${icon('alert', '')}${esc(d.title)}</h2>`
+      + `<p>${esc(d.detail)}</p>${culprit}`
+      + (d.excerpt ? `<pre>${esc(d.excerpt)}</pre>` : '')
+      + `<span class="hint-text">${prof ? 'Instance: ' + esc(prof.name) + (d.source ? ' · ' : '') : ''}${d.source ? 'From ' + esc(d.source) : ''}</span>`
+      + `<div class="acts"><button class="btn sm ghost" data-act="crash-close">Close</button>`
+      + acts.map((a, i) => `<button class="btn sm${i === 0 ? ' primary' : ''}" data-act="crash-act" data-a="${a}">${icon(ACTION_LABEL[a][0])}${esc(a === 'find_mod' ? 'Find ' + d.needs : ACTION_LABEL[a][1])}</button>`).join('')
+      + '</div>';
+    crashScrim().classList.add('open');
+  };
+  function nextMemory(current) {
+    const sys = L.getState().systemMemoryMb || 0;
+    const cap = sys ? Math.max(2048, sys - 2048) : 16384;
+    return [4096, 6144, 8192, 10240, 12288, 16384].find(m => m > current && m <= cap) || 0;
+  }
+  function crashAction(a) {
+    const d = crash; if (!d) return;
+    const st = L.getState();
+    const pid = d.profileId || st.activeProfileId;
+    closeCrash();
+    switch (a) {
+      case 'disable_mod':
+        send('toggle_content', { profileId: pid, kind: 'mods', file: d.modFile, enabled: false });
+        toast(`Switched off ${d.culprit || d.modFile}. Turn it back on in the instance's Mods tab.`);
+        break;
+      case 'find_mod': L.findMod(d.needs || ''); break;
+      case 'open_logs': L.go('logs'); break;
+      case 'repair': L.openInstSettings(pid); startRepair(pid); break;
+      case 'raise_memory': {
+        const prof = (st.profiles || []).find(p => p.id === pid) || {};
+        const cur = prof.memoryMb || st.memoryMb || 4096;
+        const next = nextMemory(cur);
+        if (!next) { toast(`This instance already has ${L.fmtGb(cur)}, about as much as this computer can spare.`, 'info'); L.openInstSettings(pid); break; }
+        send('save_instance_settings', { id: pid, memoryMb: next });
+        toast(`This instance now gets ${L.fmtGb(next)} of memory (was ${L.fmtGb(cur)}).`);
+        break;
+      }
+      case 'java_settings': L.openSettings('java'); break;
+      case 'inst_settings': L.openInstSettings(pid); break;
+    }
+  }
+
+  // ── Repair ──
+  function startRepair(pid) {
+    const st = L.getState();
+    if (st.running || st.task) { toast('Wait for the current game or download to finish.', 'err'); return; }
+    send('repair_instance', { profileId: pid });
+    if ($('isRepairHint')) $('isRepairHint').textContent = 'Checking every file… this can take a minute.';
+    toast('Repairing the instance…', 'info');
+  }
+  window.onRepair = function (r) {
+    if (!r) return;
+    const hint = $('isRepairHint');
+    if (r.error) { if (hint) hint.textContent = 'Repair stopped: ' + r.error; toast(r.error, 'err'); return; }
+    if (hint) hint.textContent = (r.fixed && r.fixed.length) ? r.fixed.join(' · ') : 'Everything checked out: nothing needed fixing.';
+    toast(r.message || 'Repair finished.');
+  };
+
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-act]');
+    if (!el) return;
+    switch (el.dataset.act) {
+      case 'upd-check': el.disabled = true; setAbout('Checking for updates…', false); send('check_update', { manual: true }); break;
+      case 'upd-install': installUpdate(); break;
+      case 'upd-notes': $('updNotes').classList.toggle('hidden'); break;
+      case 'upd-dismiss': try { localStorage.setItem(DISMISS_KEY, upd.release ? upd.release.version : ''); } catch (err) { /* private mode */ } hideBanner(); break;
+      case 'crash-close': closeCrash(); break;
+      case 'crash-act': crashAction(el.dataset.a); break;
+      case 'inst-repair': startRepair(L.getState().activeProfileId); break;
+    }
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('crashScrim') && $('crashScrim').classList.contains('open')) closeCrash(); });
+
+  // Check quietly a few seconds after start, so it never slows the first screen.
+  setTimeout(() => send('check_update', { manual: false }), 4000);
+})();
+</script>
+<!-- ═════════════════ end feat/updater ═════════════════ -->
 </body>
 </html>

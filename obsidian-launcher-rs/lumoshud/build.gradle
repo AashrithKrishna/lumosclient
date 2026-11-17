@@ -1,0 +1,69 @@
+// LumosHUD: one jar per Minecraft version in mc_versions, all from src/main. Each version is a
+// subproject (settings.gradle) whose folder, build/mc/<mc>/, only holds its build output.
+//   ./gradlew build            → lumoshud-<mc>.jar for every version, copied next to this file
+//   ./gradlew build -Pmc=1.21.11  → just that one
+// Mojang's official names at compile time; Loom remaps the jar to Fabric's intermediary names,
+// so the mod runs on Fabric Loader without Fabric API.
+plugins {
+    id 'net.fabricmc.fabric-loom-remap' version "${loom_version}" apply false
+}
+
+subprojects { p ->
+    def mc = p.name.substring('mc-'.length())
+    def mcParts = mc.tokenize('.').collect { it as int } + [0, 0]
+    def inputSet = (mcParts[1] > 21 || (mcParts[1] == 21 && mcParts[2] >= 9)) ? 'modern' : 'legacy'
+    apply plugin: 'net.fabricmc.fabric-loom-remap'
+    apply plugin: 'java'
+
+    version = rootProject.mod_version
+    group = 'dev.lumosclient'
+    base { archivesName = "lumoshud-$mc" }
+
+    repositories { mavenCentral() }
+
+    dependencies {
+        minecraft "com.mojang:minecraft:$mc"
+        mappings loom.officialMojangMappings()
+        modImplementation "net.fabricmc:fabric-loader:${rootProject.loader_version}"
+        testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    }
+
+    sourceSets {
+        main {
+            // Screens and the mouse take input as event records from 1.21.9 on (src/input/modern),
+            // as plain numbers before (src/input/legacy).
+            java.srcDirs = [rootProject.file('src/main/java'), rootProject.file("src/input/${inputSet}/java")]
+            resources.srcDirs = [rootProject.file('src/main/resources')]
+        }
+        test {
+            java.srcDirs = [rootProject.file('src/test/java')]
+        }
+    }
+
+    processResources {
+        inputs.property 'version', project.version
+        inputs.property 'mc', mc
+        filesMatching('fabric.mod.json') {
+            expand 'version': project.version, 'mc': mc
+        }
+    }
+
+    java {
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
+    tasks.withType(JavaCompile).configureEach { it.options.release = 21; it.options.encoding = 'UTF-8' }
+
+    test { useJUnitPlatform() }
+
+    // The launcher bundles lumoshud/lumoshud-<mc>.jar (build_app.sh, package_windows.sh, main.rs).
+    def published = rootProject.file("lumoshud-${mc}.jar")
+    tasks.named('remapJar') {
+        outputs.file(published)
+        doLast {
+            java.nio.file.Files.copy(archiveFile.get().asFile.toPath(), published.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+}

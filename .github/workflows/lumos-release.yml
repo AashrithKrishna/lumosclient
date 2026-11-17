@@ -1,0 +1,268 @@
+# Builds every Lumos Client download and attaches them to a draft GitHub release "v<version>":
+#   Lumos-macOS-universal.dmg  one Lumos.app for Apple silicon and Intel Macs (arm64 + x86_64 joined with lipo)
+#   Lumos-Linux-x86_64.tar.gz  built on Ubuntu 22.04 (glibc 2.35), with a desktop entry installer
+#   Lumos-Windows-x64.zip      the "lumos windows" workflow's build, packaged by package_windows.sh
+# The platform-independent parts are made once on Linux: Horizon's compiled exporters (from the pinned
+# Minecraft, which never leaves that job: only Horizon's own classes do), LumosHUD and authlib-injector.
+# The release stays a draft: check it, then publish it by hand.
+name: lumos release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release (must match obsidian-launcher-rs/Cargo.toml), e.g. 0.3.0
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  common:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: The version matches the launcher's
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          want="${VERSION#v}"
+          have=$(sed -n 's/^version = "\(.*\)"/\1/p' obsidian-launcher-rs/Cargo.toml | head -1)
+          [ "$want" = "$have" ] || { echo "::error::obsidian-launcher-rs/Cargo.toml says $have, not $want"; exit 1; }
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: lumos-release-prepare
+      - name: Horizon's preparer
+        run: cargo build --release --locked -p horizon-prepare --bin horizon-prepare
+      - name: Fetch the pinned Minecraft from Mojang (stays in this job)
+        run: python3 tools/lumos_native/fetch_mc.py --lock research-lock.json --out "$RUNNER_TEMP/mc"
+      - name: Import it and compile the exporters
+        run: |
+          set -o pipefail
+          ./target/release/horizon-prepare --prepare --server-jar "$RUNNER_TEMP/mc/server.jar" \
+            --minecraft-dir "$RUNNER_TEMP/mc" --root . --java-home "$JAVA_HOME" 2>&1 | tail -40
+          bundle=$(./target/release/horizon-prepare compile-exporters --root . | tail -1)
+          test -f "$bundle/manifest.json"
+          mkdir -p common/exporters
+          cp -R "$bundle/server" "$bundle/client" "$bundle/manifest.json" common/exporters/
+          # Only Horizon's own classes and their manifest leave this job.
+          stray=$(find common/exporters -type f ! -name manifest.json ! -name '*.class')
+          [ -z "$stray" ] || { echo "::error::not one of Horizon's classes: $stray"; exit 1; }
+      - name: LumosHUD
+        run: |
+          bash obsidian-launcher-rs/lumoshud/build_jars.sh --force
+          cp obsidian-launcher-rs/lumoshud/lumoshud-*.jar common/
+      - name: authlib-injector (pinned, checksummed)
+        run: |
+          url=https://github.com/yushijinhun/authlib-injector/releases/download/v1.2.8/authlib-injector-1.2.8.jar
+          curl -fsSL "$url" -o common/authlib-injector-1.2.8.jar
+          echo "9c7f4343e6c82034958ffb48c14a2cb0c85928be7283103ce17da00c6d5a7b10  common/authlib-injector-1.2.8.jar" | sha256sum -c -
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lumos-common
+          path: common/
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    needs: common
+    runs-on: macos-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: lumos-release-macos
+          workspaces: |
+            . -> target
+            obsidian-launcher-rs -> target
+      - name: Horizon engine and preparer (Apple silicon and Intel)
+        run: |
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked --target "$t" -p horizon-game --bin horizon-client -p horizon-prepare --bin horizon-prepare
+          done
+      - name: Launcher tests
+        run: cargo test --release --locked --manifest-path obsidian-launcher-rs/Cargo.toml
+      - name: Launcher (Apple silicon and Intel)
+        run: |
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked --target "$t" --manifest-path obsidian-launcher-rs/Cargo.toml
+          done
+      - name: Universal programs
+        run: |
+          mkdir -p universal
+          lipo -create -output universal/lumos-launcher \
+            obsidian-launcher-rs/target/aarch64-apple-darwin/release/lumos-launcher \
+            obsidian-launcher-rs/target/x86_64-apple-darwin/release/lumos-launcher
+          for b in horizon-client horizon-prepare; do
+            lipo -create -output "universal/$b" "target/aarch64-apple-darwin/release/$b" "target/x86_64-apple-darwin/release/$b"
+          done
+          for b in universal/*; do
+            archs=$(lipo -archs "$b"); echo "$b: $archs"
+            [[ "$archs" == *arm64* && "$archs" == *x86_64* ]] || { echo "::error::$b is not universal"; exit 1; }
+          done
+      - uses: actions/download-artifact@v8
+        with:
+          name: lumos-common
+          path: common
+      - name: Lumos.app and its DMG
+        run: |
+          mkdir -p exporters .local/vendor
+          cp -R common/exporters/. exporters/
+          cp common/lumoshud-*.jar obsidian-launcher-rs/lumoshud/
+          cp common/authlib-injector-1.2.8.jar .local/vendor/
+          obsidian-launcher-rs/build_app.sh --prebuilt universal
+          mv dist/Lumos.dmg dist/Lumos-macOS-universal.dmg
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lumos-macos
+          path: dist/Lumos-macOS-universal.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    needs: common
+    # The oldest supported Ubuntu: the programs then run on any glibc 2.35+ desktop.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: GTK, WebKitGTK, ALSA and udev headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libasound2-dev libudev-dev
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: lumos-release-linux
+          workspaces: |
+            . -> target
+            obsidian-launcher-rs -> target
+      - name: Horizon engine and preparer
+        run: cargo build --release --locked -p horizon-game --bin horizon-client -p horizon-prepare --bin horizon-prepare
+      - name: Launcher tests
+        run: cargo test --release --locked --manifest-path obsidian-launcher-rs/Cargo.toml
+      - name: Launcher
+        run: cargo build --release --locked --manifest-path obsidian-launcher-rs/Cargo.toml
+      - uses: actions/download-artifact@v8
+        with:
+          name: lumos-common
+          path: common
+      - name: Lumos-Linux-x86_64.tar.gz
+        run: |
+          mkdir -p programs exporters .local/vendor
+          cp obsidian-launcher-rs/target/release/lumos-launcher target/release/horizon-client target/release/horizon-prepare programs/
+          cp -R common/exporters/. exporters/
+          cp common/lumoshud-*.jar obsidian-launcher-rs/lumoshud/
+          cp common/authlib-injector-1.2.8.jar .local/vendor/
+          obsidian-launcher-rs/package_linux.sh programs
+          echo "Newest glibc symbol each program needs:"
+          for b in programs/*; do
+            echo "$b: $(objdump -T "$b" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lumos-linux
+          path: dist/Lumos-Linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    # The same build as lumos-windows.yml.
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: lumos-windows
+          workspaces: |
+            . -> target
+            obsidian-launcher-rs -> target
+      - name: Horizon engine and preparer
+        run: cargo build --release --locked -p horizon-game --bin horizon-client -p horizon-prepare --bin horizon-prepare
+      - name: Launcher tests
+        run: cargo test --release --locked --manifest-path obsidian-launcher-rs/Cargo.toml
+      - name: Launcher
+        run: cargo build --release --locked --manifest-path obsidian-launcher-rs/Cargo.toml
+      - name: Collect the programs
+        run: |
+          mkdir -p out
+          cp obsidian-launcher-rs/target/release/lumos-launcher.exe out/
+          cp target/release/horizon-client.exe target/release/horizon-prepare.exe out/
+          # Microsoft's DXC (pinned, checksummed) with its licences: DirectX 12 uses it on integrated GPUs.
+          python tools/ci/fetch_dxc.py out
+          ls -l out
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lumos-windows-x64-programs
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: [common, macos, linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          path: in
+      - name: Lumos-Windows-x64.zip
+        run: |
+          mkdir -p exporters .local/vendor
+          cp -R in/lumos-common/exporters/. exporters/
+          cp in/lumos-common/lumoshud-*.jar obsidian-launcher-rs/lumoshud/
+          cp in/lumos-common/authlib-injector-1.2.8.jar .local/vendor/
+          obsidian-launcher-rs/package_windows.sh in/lumos-windows-x64-programs
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          v="${VERSION#v}"
+          mkdir -p upload
+          cp in/lumos-macos/Lumos-macOS-universal.dmg in/lumos-linux/Lumos-Linux-x86_64.tar.gz dist/Lumos-Windows-x64.zip upload/
+          (cd upload && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          gh release create "v$v" upload/* -R "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+            --title "Lumos Client $v" \
+            --notes "Lumos Client $v for Mac (Apple silicon and Intel), Windows x64 and Linux x86_64. See the README for how to install each one."

@@ -1,0 +1,45 @@
+plugins {
+    // "-remap": Minecraft 1.21.11 is obfuscated, so the mod is written against Mojang's names
+    // and remapped to Fabric's intermediary names when the jar is built.
+    id 'net.fabricmc.fabric-loom-remap' version '1.14.10'
+}
+
+version = project.mod_version
+group = 'dev.lumosclient'
+
+base {
+    archivesName = 'lumoscapes'
+}
+
+repositories {
+    // Minecraft, Fabric Loader and Mojang's mappings come from Loom's own repositories.
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    // No Fabric API: the mod only uses mixins and Minecraft's own classes.
+}
+
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') {
+        expand 'version': project.version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.release = 21
+    it.options.encoding = 'UTF-8'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+// The launcher looks for build/libs/lumoscapes-1.21.11.jar.
+remapJar {
+    archiveFileName = "lumoscapes-${project.minecraft_version}.jar"
+}

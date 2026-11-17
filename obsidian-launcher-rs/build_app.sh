@@ -21,16 +21,32 @@ VENDOR="$ROOT/.local/vendor"
 
 export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH"
 
-# --clean: rebuild the launcher from scratch.
-if [[ "${1:-}" == "--clean" ]]; then
-  cargo clean --manifest-path "$LAUNCHER/Cargo.toml"
+# ── (feat/platforms) where the three programs come from ──
+# Default: this Mac's own release builds (the launcher is tested and built here; Horizon must be
+# built already). --prebuilt <dir>: take lumos-launcher, horizon-client and horizon-prepare from
+# <dir> instead (the release workflow passes universal arm64 + x86_64 programs made with lipo).
+LAUNCHER_BIN="$LAUNCHER/target/release/lumos-launcher"
+ENGINE_DIR="$ROOT/target/release"
+PREBUILT=""
+if [[ "${1:-}" == "--prebuilt" ]]; then
+  PREBUILT="$(cd "${2:?usage: build_app.sh --prebuilt <folder with lumos-launcher, horizon-client, horizon-prepare>}" && pwd)"
+  LAUNCHER_BIN="$PREBUILT/lumos-launcher"
+  ENGINE_DIR="$PREBUILT"
+  [[ -f "$LAUNCHER_BIN" ]] || { echo "error: $LAUNCHER_BIN is missing" >&2; exit 1; }
+  chmod +x "$PREBUILT"/lumos-launcher "$PREBUILT"/horizon-client "$PREBUILT"/horizon-prepare 2>/dev/null || true
+else
+  # --clean: rebuild the launcher from scratch.
+  if [[ "${1:-}" == "--clean" ]]; then
+    cargo clean --manifest-path "$LAUNCHER/Cargo.toml"
+  fi
+  cargo test --release --manifest-path "$LAUNCHER/Cargo.toml"
+  cargo build --release --manifest-path "$LAUNCHER/Cargo.toml"
 fi
-cargo test --release --manifest-path "$LAUNCHER/Cargo.toml"
-cargo build --release --manifest-path "$LAUNCHER/Cargo.toml"
 
 for bin in horizon-client horizon-prepare; do
-  [[ -x "$ROOT/target/release/$bin" ]] || { echo "error: $ROOT/target/release/$bin is missing; build Horizon first (cargo build --release)." >&2; exit 1; }
+  [[ -x "$ENGINE_DIR/$bin" ]] || { echo "error: $ENGINE_DIR/$bin is missing; build Horizon first (cargo build --release)." >&2; exit 1; }
 done
+# ── end feat/platforms ──
 
 # authlib-injector (Ely.by skins), pinned and checksummed.
 mkdir -p "$VENDOR"
@@ -46,7 +62,7 @@ fi
 EXPORTERS=""
 if [[ -f "$ROOT/exporters/manifest.json" ]]; then
   EXPORTERS="$ROOT/exporters"
-elif out="$("$ROOT/target/release/horizon-prepare" compile-exporters --root "$ROOT" 2>/dev/null | tail -1)" && [[ -f "$out/manifest.json" ]]; then
+elif out="$("$ENGINE_DIR/horizon-prepare" compile-exporters --root "$ROOT" 2>/dev/null | tail -1)" && [[ -f "$out/manifest.json" ]]; then
   EXPORTERS="$out"
 else
   for d in $(ls -td "$ROOT"/.local/exporters/*/ 2>/dev/null); do
@@ -102,10 +118,15 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 </plist>
 PLIST
 
-cp "$LAUNCHER/target/release/lumos-launcher" "$MACOS/lumos-launcher"
-cp "$ROOT/target/release/horizon-client" "$RES_BIN/horizon-client"
-cp "$ROOT/target/release/horizon-prepare" "$RES_BIN/horizon-prepare"
-cp "$LAUNCHER/lumoshud/lumoshud-1.21.11.jar" "$RESOURCES/mods/lumoshud-1.21.11.jar"
+cp "$LAUNCHER_BIN" "$MACOS/lumos-launcher"
+cp "$ENGINE_DIR/horizon-client" "$RES_BIN/horizon-client"
+cp "$ENGINE_DIR/horizon-prepare" "$RES_BIN/horizon-prepare"
+# ── LumosHUD: one jar per supported Minecraft version, rebuilt with Gradle when missing or stale ──
+"$LAUNCHER/lumoshud/build_jars.sh" | while read -r jar; do cp "$jar" "$RESOURCES/mods/"; done
+# ── end LumosHUD ──
+# LumosCapes (optional until built: cd lumoscapes && ./gradlew build).
+CAPES_JAR="$LAUNCHER/lumoscapes/build/libs/lumoscapes-1.21.11.jar"
+[[ -f "$CAPES_JAR" ]] && cp "$CAPES_JAR" "$RESOURCES/mods/" || echo "note: $CAPES_JAR not built; Lumos capes won't show in game."
 cp "$AUTHLIB_JAR" "$RESOURCES/authlib-injector-${AUTHLIB_VERSION}.jar"
 # Horizon preparer support files (copied to ~/LumosClient/horizon on first use).
 cp "$ROOT/research-lock.json" "$HROOT/research-lock.json"
@@ -123,6 +144,12 @@ chmod +x "$MACOS/lumos-launcher" "$RES_BIN/horizon-client" "$RES_BIN/horizon-pre
 codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || echo "warning: ad-hoc signing failed (the app still runs locally)"
 
 hdiutil create -volname "LumosClient" -srcfolder "$APP_DIR" -ov -format UDZO "$ROOT/dist/Lumos.dmg" >/dev/null
+
+# feat/updater: checksums the in-app updater verifies before installing (see RELEASING.md).
+# SHA256SUMS always lists exactly the packages present in dist/, so it can't go stale.
+(cd "$ROOT/dist" && shasum -a 256 Lumos.dmg > Lumos.dmg.sha256 \
+  && shasum -a 256 $(ls Lumos.dmg Lumos-Windows-x64.zip 2>/dev/null) > SHA256SUMS)
+# /feat/updater
 
 echo "Built LumosClient ${VERSION}: $APP_DIR"
 ls -lh "$MACOS/lumos-launcher" "$ROOT/dist/Lumos.dmg"

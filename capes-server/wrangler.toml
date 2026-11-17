@@ -1,0 +1,19 @@
+name = "lumos-capes"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+
+# Cape PNGs (public/capes/<id>.png) are served straight from Cloudflare's asset storage.
+[assets]
+directory = "./public"
+
+# Where player choices and short-lived challenges live.
+# Replace the id below with the one `npx wrangler kv namespace create CAPES` prints.
+[[kv_namespaces]]
+binding = "CAPES"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+# Free rate limiting: at most 10 cape changes per minute from one address.
+[[ratelimits]]
+name = "SELECT_LIMITER"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }

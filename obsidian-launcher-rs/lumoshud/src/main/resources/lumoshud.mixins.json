@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.lumosclient.hud.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["GuiMixin", "MinecraftMixin", "MouseHandlerMixin", "MultiPlayerGameModeMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

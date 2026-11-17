@@ -12,12 +12,11 @@ VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$LAUNCHER/Cargo.toml" | head -1)
 AUTHLIB_VERSION="1.2.8"
 AUTHLIB_SHA256="9c7f4343e6c82034958ffb48c14a2cb0c85928be7283103ce17da00c6d5a7b10"
 AUTHLIB_JAR="$ROOT/.local/vendor/authlib-injector-${AUTHLIB_VERSION}.jar"
-HUD_JAR="$LAUNCHER/lumoshud/lumoshud-1.21.11.jar"
 
 for f in lumos-launcher.exe horizon-client.exe horizon-prepare.exe; do
   [[ -f "$PROGRAMS/$f" ]] || { echo "error: $PROGRAMS/$f is missing" >&2; exit 1; }
 done
-[[ -f "$HUD_JAR" ]] || { echo "error: $HUD_JAR is missing (run lumoshud/build_hud.sh)" >&2; exit 1; }
+HUD_JARS="$("$LAUNCHER/lumoshud/build_jars.sh")" || { echo "error: LumosHUD build failed (needs a JDK 21+)" >&2; exit 1; }
 [[ -f "$AUTHLIB_JAR" && "$(shasum -a 256 "$AUTHLIB_JAR" | cut -d' ' -f1)" == "$AUTHLIB_SHA256" ]] \
   || { echo "error: run build_app.sh once to fetch authlib-injector ${AUTHLIB_VERSION}" >&2; exit 1; }
 
@@ -45,7 +44,10 @@ mkdir -p "$RES/bin" "$RES/mods" "$HROOT/exporters" "$HROOT/mods/horizon/src/test
 cp "$PROGRAMS/lumos-launcher.exe" "$APP/Lumos.exe"
 # The engine, its preparer and anything shipped beside them (DXC's dxcompiler.dll and its licences).
 find "$PROGRAMS" -maxdepth 1 -type f ! -name lumos-launcher.exe -exec cp {} "$RES/bin/" \;
-cp "$HUD_JAR" "$RES/mods/"
+for jar in $HUD_JARS; do cp "$jar" "$RES/mods/"; done
+# LumosCapes (optional until built: cd lumoscapes && ./gradlew build).
+CAPES_JAR="$LAUNCHER/lumoscapes/build/libs/lumoscapes-1.21.11.jar"
+[[ -f "$CAPES_JAR" ]] && cp "$CAPES_JAR" "$RES/mods/" || echo "note: $CAPES_JAR not built; Lumos capes won't show in game."
 cp "$AUTHLIB_JAR" "$RES/"
 cp "$ROOT/research-lock.json" "$HROOT/"
 cp -R "$ROOT/mods/horizon/src/test/java/dev/horizonlab/parity" "$HROOT/mods/horizon/src/test/java/dev/horizonlab/"
@@ -74,5 +76,11 @@ rm -f "$ROOT/dist/Lumos-Windows-x64.zip"
 mkdir -p "$ROOT/dist"
 (cd "$STAGE" && zip -qr -X "$ROOT/dist/Lumos-Windows-x64.zip" Lumos)
 rm -rf "$STAGE"
+
+# feat/updater: checksums the in-app updater verifies before installing (see RELEASING.md).
+# SHA256SUMS always lists exactly the packages present in dist/, so it can't go stale.
+(cd "$ROOT/dist" && shasum -a 256 Lumos-Windows-x64.zip > Lumos-Windows-x64.zip.sha256 \
+  && shasum -a 256 $(ls Lumos.dmg Lumos-Windows-x64.zip 2>/dev/null) > SHA256SUMS)
+# /feat/updater
 echo "Built Lumos Client ${VERSION} for Windows: $ROOT/dist/Lumos-Windows-x64.zip"
 ls -lh "$ROOT/dist/Lumos-Windows-x64.zip"

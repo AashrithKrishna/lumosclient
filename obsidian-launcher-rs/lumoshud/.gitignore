@@ -1,0 +1,6 @@
+# Gradle output and caches (the built jars land in lumoshud/ as lumoshud-<mc>.jar, ignored by *.jar).
+.gradle/
+build/
+run/
+# The wrapper is part of the source.
+!gradle/wrapper/gradle-wrapper.jar

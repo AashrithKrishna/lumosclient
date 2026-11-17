@@ -1,0 +1,45 @@
+# Builds LumosHUD (obsidian-launcher-rs/lumoshud): lumoshud-<mc>.jar for every Minecraft version in
+# its gradle.properties (mc_versions), runs its unit tests, and uploads the jars as an artifact.
+# build_app.sh and package_windows.sh copy these jars into the app (they build them locally too).
+name: lumoshud
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - obsidian-launcher-rs/lumoshud/**
+      - .github/workflows/lumoshud.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: obsidian-launcher-rs/lumoshud
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Gradle and Loom caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: lumoshud-${{ runner.os }}-${{ hashFiles('obsidian-launcher-rs/lumoshud/*.gradle', 'obsidian-launcher-rs/lumoshud/gradle.properties', 'obsidian-launcher-rs/lumoshud/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: lumoshud-${{ runner.os }}-
+      - name: Build and test
+        run: ./build_jars.sh --force
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lumoshud
+          path: obsidian-launcher-rs/lumoshud/lumoshud-*.jar
+          if-no-files-found: error

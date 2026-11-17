@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "lumoscapes",
+  "version": "${version}",
+  "name": "LumosCapes",
+  "description": "Free Lumos Client capes, drawn on every player who picked one in the launcher.",
+  "authors": ["Lumos Client"],
+  "environment": "client",
+  "mixins": [
+    { "config": "lumoscapes.mixins.json", "environment": "client" }
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "1.21.11",
+    "java": ">=21"
+  }
+}

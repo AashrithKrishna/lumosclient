@@ -20,11 +20,17 @@ use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::window::{Window, WindowBuilder, WindowId};
 use wry::{WebContext, WebView, WebViewBuilder};
 
+mod capes;
 mod elyby;
 mod horizon_mods;
+mod hud_config;
 mod native_builds;
 mod installer;
 mod net;
+// feat/updater: self-update, crash explainer, repair instance
+mod crash_help;
+mod repair;
+mod updater;
 
 const HORIZON_ID: &str = "Horizon 26.3 (Rust)";
 const LAUNCHER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -123,6 +129,9 @@ struct LauncherConfig {
     jvm_args: String,
     #[serde(default = "default_true", alias = "emberHudEnabled")]
     lumos_hud_enabled: bool,
+    /// Lumos capes in game (the LumosCapes mod in Fabric 1.21.11 instances).
+    #[serde(default = "default_true")]
+    lumos_capes_enabled: bool,
     /// Horizon 26.3's controller support. Off unless the player turns it on: on Windows a
     /// device that only looks like a controller made the game hide the mouse pointer in menus.
     #[serde(default)]
@@ -296,8 +305,13 @@ fn bundled_file(rel: &str, dev_rel: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-fn bundled_hud() -> Option<PathBuf> {
-    bundled_file("mods/lumoshud-1.21.11.jar", "lumoshud/lumoshud-1.21.11.jar")
+/// The LumosHUD jar built for a Minecraft version (lumoshud/build.gradle, `mc_versions`).
+fn bundled_hud(mc: &str) -> Option<PathBuf> {
+    bundled_file(&format!("mods/lumoshud-{mc}.jar"), &format!("lumoshud/lumoshud-{mc}.jar"))
+}
+
+fn bundled_capes_mod() -> Option<PathBuf> {
+    bundled_file(&format!("mods/{}", capes::MOD_JAR), &format!("lumoscapes/build/libs/{}", capes::MOD_JAR))
 }
 
 fn bundled_authlib() -> Option<PathBuf> {
@@ -554,6 +568,7 @@ impl AppState {
                 memory_mb: default_memory(),
                 jvm_args: String::new(),
                 lumos_hud_enabled: true,
+                lumos_capes_enabled: true,
                 horizon_controller: false,
                 ui_accent: default_accent(),
                 ui_theme: default_theme(),
@@ -701,6 +716,7 @@ impl AppState {
             "memoryMb": self.config.memory_mb,
             "jvmArgs": self.config.jvm_args,
             "lumosHudEnabled": self.config.lumos_hud_enabled,
+            "lumosCapesEnabled": self.config.lumos_capes_enabled,
             "horizonController": self.config.horizon_controller,
             "versions": self.version_list(),
             "catalog": catalog,
@@ -909,6 +925,7 @@ fn spawn_streaming_exe(
                 p.last_played = now_millis();
             }
             st.session = Some((pid, Instant::now()));
+            crash_help::begin_session(); // feat/updater
             st.save_config();
             if st.config.hide_on_launch {
                 let _ = proxy.send_event(UserEvent::SetWindowVisible(false));
@@ -925,6 +942,7 @@ fn spawn_streaming_exe(
             let mut xml = Log4jText::default();
             for line in BufReader::new(stream).lines().map_while(Result::ok) {
                 for l in xml.feed(&line) {
+                    crash_help::remember_line(&l); // feat/updater
                     push_log(&p, &l);
                 }
             }
@@ -1146,27 +1164,44 @@ fn migrate_legacy_names(config: &mut LauncherConfig) {
     }
 }
 
-/// LumosHUD hooks Fabric's stable (intermediary) names, the same in every 1.21.x, and is built
-/// for Java 21, which every 1.21.x runs on.
+// ── LumosHUD versions ── (keep in step with lumoshud/gradle.properties `mc_versions` and ui.html's HUD_VERSIONS)
+/// The Minecraft versions a LumosHUD jar is built for: lumoshud-<mc>.jar each.
+const HUD_VERSIONS: &[&str] = &["1.21.6", "1.21.7", "1.21.8", "1.21.9", "1.21.10", "1.21.11"];
+
+/// The Minecraft version of a Fabric instance LumosHUD has a jar for.
+fn hud_mc(version: &str) -> Option<String> {
+    match installer::parse_spec(version) {
+        installer::Spec::Fabric(mc) if HUD_VERSIONS.contains(&mc.as_str()) => Some(mc),
+        _ => None,
+    }
+}
+
 fn hud_supported(version: &str) -> bool {
-    matches!(installer::parse_spec(version), installer::Spec::Fabric(mc) if mc == "1.21" || mc.starts_with("1.21."))
+    hud_mc(version).is_some()
 }
 
 fn sync_lumos_hud(game_dir: &Path, version: &str, enabled: bool) {
     let mods_dir = game_dir.join("mods");
     // Earlier builds shipped the HUD under its old name; two copies would draw it twice.
     let _ = fs::remove_file(mods_dir.join(LEGACY_HUD_JAR));
-    let dest = mods_dir.join("lumoshud-1.21.11.jar");
-    let wants = enabled && hud_supported(version);
-    if wants {
-        if let Some(src) = bundled_hud() {
-            let _ = fs::create_dir_all(&mods_dir);
-            let _ = fs::copy(src, dest);
+    let want = hud_mc(version).filter(|_| enabled).map(|mc| format!("lumoshud-{mc}.jar"));
+    // A jar for another version (the instance changed version) or a switched-off HUD goes.
+    if let Ok(rd) = fs::read_dir(&mods_dir) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with("lumoshud-") && name.ends_with(".jar") && Some(&name) != want.as_ref() {
+                let _ = fs::remove_file(e.path());
+            }
         }
-    } else if dest.is_file() {
-        let _ = fs::remove_file(dest);
+    }
+    if let (Some(name), Some(mc)) = (want, hud_mc(version)) {
+        if let Some(src) = bundled_hud(&mc) {
+            let _ = fs::create_dir_all(&mods_dir);
+            let _ = fs::copy(src, mods_dir.join(name));
+        }
     }
 }
+// ── end LumosHUD versions ──
 
 fn launch_java(
     proxy: &EventLoopProxy<UserEvent>,
@@ -1180,13 +1215,20 @@ fn launch_java(
     let auth = build_auth(shared, cfg, &snap.paths, rep)?;
     let (resolved, prepared, managed_java) = installer::install(&snap.paths, &cfg.selected_version, &report)?;
     sync_lumos_hud(&snap.game_dir, &cfg.selected_version, cfg.lumos_hud_enabled);
+    let capes_arg = capes::sync_mod(
+        &snap.game_dir,
+        &cfg.selected_version,
+        cfg.lumos_capes_enabled,
+        bundled_capes_mod().as_deref(),
+        capes::server_url().as_deref(),
+    );
     let custom = (!cfg.java_home.trim().is_empty())
         .then(|| installer::java_binary_in_home(Path::new(cfg.java_home.trim())))
         .filter(|p| p.is_file());
     let java = custom.unwrap_or(managed_java);
     let opts = installer::LaunchOpts {
         memory_mb: cfg.memory_mb,
-        extra_jvm: cfg.jvm_args.split_whitespace().map(str::to_owned).collect(),
+        extra_jvm: cfg.jvm_args.split_whitespace().map(str::to_owned).chain(capes_arg).collect(),
         width: cfg.resolution_width,
         height: cfg.resolution_height,
         fullscreen: cfg.fullscreen,
@@ -1850,6 +1892,64 @@ fn refresh_skin_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppSta
     });
 }
 
+// ───────────────────────── Lumos capes (begin) ─────────────────────────
+
+/// Sends the cape picker its data: the catalog with previews and the cape this account wears.
+fn capes_load_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>) {
+    std::thread::spawn(move || {
+        let (name, enabled) = {
+            let st = shared.lock().unwrap();
+            let name = (st.config.account_kind == "elyby").then(|| st.config.ely_session.as_ref().map(|s| s.name.clone())).flatten();
+            (name, st.config.lumos_capes_enabled)
+        };
+        let Some(base) = capes::server_url() else {
+            call_js(&proxy, "onCapes", json!({"configured": false, "enabled": enabled, "name": name, "error": capes::NOT_SET_UP}));
+            return;
+        };
+        let list = match capes::catalog(&capes::Net, &base) {
+            Ok(l) => l,
+            Err(e) => {
+                call_js(&proxy, "onCapes", json!({"configured": true, "enabled": enabled, "name": name, "error": e}));
+                return;
+            }
+        };
+        let current = name.as_deref().and_then(|n| capes::player_cape(&capes::Net, &base, n).ok().flatten());
+        let capes: Vec<_> = list
+            .iter()
+            .map(|c| json!({"id": c.id, "name": c.name, "data": capes::texture_data_uri(&c.url).ok()}))
+            .collect();
+        call_js(&proxy, "onCapes", json!({"configured": true, "enabled": enabled, "name": name, "current": current, "capes": capes}));
+    });
+}
+
+/// Wears a cape (None = no cape) on the signed-in Ely.by account.
+fn capes_select_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, cape: Option<String>) {
+    std::thread::spawn(move || {
+        let reply = |r: serde_json::Value| call_js(&proxy, "onCapeSelected", r);
+        let Some(base) = capes::server_url() else { return reply(json!({"error": capes::NOT_SET_UP})) };
+        let session = {
+            let st = shared.lock().unwrap();
+            if st.config.account_kind == "elyby" { st.config.ely_session.clone() } else { None }
+        };
+        let Some(session) = session else { return reply(json!({"error": "Sign in with Ely.by to wear a Lumos cape."})) };
+        let fresh = match elyby::ensure_fresh(&session) {
+            Ok(f) => f,
+            Err(e) => return reply(json!({"error": e.to_string()})),
+        };
+        if fresh != session {
+            let mut st = shared.lock().unwrap();
+            st.config.ely_session = Some(fresh.clone());
+            st.save_config();
+        }
+        match capes::select(&capes::Net, &base, &fresh, cape.as_deref()) {
+            Ok(()) => reply(json!({"ok": true, "cape": cape})),
+            Err(e) => reply(json!({"error": e.to_string()})),
+        }
+    });
+}
+
+// ───────────────────────── Lumos capes (end) ─────────────────────────
+
 fn ely_login_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, login: String, password: String, totp: Option<String>) {
     std::thread::spawn(move || {
         let client_token = shared.lock().unwrap().config.ely_client_token.clone();
@@ -1910,9 +2010,268 @@ fn allowed_ely_url(url: &str) -> bool {
     !host.contains('@') && !host.contains(':') && (host == "ely.by" || host.ends_with(".ely.by"))
 }
 
+// ───────────────────────── Platform: Linux ─────────────────────────
+// (feat/platforms) Linux needs the webview placed inside tao's GTK box: `build(&window)` only
+// works on X11 there, `build_gtk` works on X11 and Wayland.
+
+fn attach_webview<'a>(builder: WebViewBuilder<'a>, window: &'a Window) -> wry::Result<WebView> {
+    #[cfg(target_os = "linux")]
+    {
+        use tao::platform::unix::WindowExtUnix;
+        use wry::WebViewBuilderExtUnix;
+        let vbox = window.default_vbox().expect("tao windows have a GTK box by default");
+        builder.build_gtk(vbox)
+    }
+    #[cfg(not(target_os = "linux"))]
+    builder.build(window)
+}
+
+/// Linux: the window's app id / WM_CLASS ("lumos-client", matching lumos-client.desktop), and
+/// WebKitGTK's DMA-BUF renderer off unless the player chose otherwise (it shows a blank window
+/// with some GPU drivers).
+fn linux_setup() {
+    #[cfg(target_os = "linux")]
+    {
+        gtk::glib::set_prgname(Some("lumos-client"));
+        gtk::glib::set_application_name("Lumos Client");
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+}
+// ───────────────────────── end Platform: Linux ─────────────────────────
+
 // ───────────────────────── Main ─────────────────────────
 
+// ═════════════════ feat/updater: self-update, crash help, repair instance ═════════════════
+
+fn updater_ipc(action: &str, v: &serde_json::Value, proxy: &EventLoopProxy<UserEvent>, shared: &Arc<Mutex<AppState>>) {
+    match action {
+        "check_update" => check_update_async(proxy.clone(), v.get("manual").and_then(|m| m.as_bool()).unwrap_or(false)),
+        "install_update" => install_update(proxy, shared),
+        "repair_instance" => repair_instance(proxy, shared, v.get("profileId").and_then(|x| x.as_str()).unwrap_or("")),
+        _ => {}
+    }
+}
+
+/// Asks GitHub whether a newer LumosClient exists (`LUMOS_NO_UPDATE_CHECK` skips the startup check).
+fn check_update_async(proxy: EventLoopProxy<UserEvent>, manual: bool) {
+    if !manual && std::env::var_os("LUMOS_NO_UPDATE_CHECK").is_some() {
+        return;
+    }
+    std::thread::spawn(move || match updater::check(LAUNCHER_VERSION) {
+        Ok(Some(r)) => {
+            let can_install = updater::platform_asset_name().is_some_and(|n| updater::select_asset(&r.assets, n).is_some());
+            call_js(&proxy, "onUpdate", json!({"available": true, "manual": manual, "current": LAUNCHER_VERSION, "release": r, "canInstall": can_install}));
+        }
+        Ok(None) => call_js(&proxy, "onUpdate", json!({"available": false, "manual": manual, "current": LAUNCHER_VERSION})),
+        Err(e) => call_js(&proxy, "onUpdate", json!({"available": false, "manual": manual, "current": LAUNCHER_VERSION, "error": e})),
+    });
+}
+
+/// Downloads, verifies and installs the newer release, then restarts. Never while a game runs.
+fn install_update(proxy: &EventLoopProxy<UserEvent>, shared: &Arc<Mutex<AppState>>) {
+    {
+        let mut st = lock(shared);
+        if st.active_child.is_some() {
+            call_js(proxy, "onUpdate", json!({"error": "Close the game first: LumosClient never updates while a game is running."}));
+            return;
+        }
+        if st.task.is_some() {
+            call_js(proxy, "onUpdate", json!({"error": "Wait for the current download to finish, then update."}));
+            return;
+        }
+        // Holding a task keeps launches out until the update is done.
+        st.task = Some(("Updating LumosClient".into(), -1.0));
+        push_state(proxy, &st);
+    }
+    let proxy = proxy.clone();
+    let shared = shared.clone();
+    std::thread::spawn(move || {
+        let rep = TaskReporter::new(&proxy, &shared);
+        let release = match updater::last_found() {
+            Some(r) => Ok(r),
+            None => updater::check(LAUNCHER_VERSION).and_then(|r| r.ok_or_else(|| "LumosClient is already up to date.".to_owned())),
+        };
+        let result = match release {
+            Ok(r) => {
+                let page = r.page_url.clone();
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| updater::install(&r, &|l, f| rep.report(l, f))))
+                    .unwrap_or_else(|_| Err(updater::UpdateError::Failed("The update stopped unexpectedly. Nothing was changed.".into())))
+                    .map_err(|e| (e, page))
+            }
+            Err(e) => Err((updater::UpdateError::Failed(e), updater::RELEASES_PAGE.to_owned())),
+        };
+        match result {
+            Ok(relaunch) => {
+                push_log(&proxy, "[LumosClient] Update installed. Restarting…");
+                call_js(&proxy, "onUpdate", json!({"restarting": true}));
+                std::thread::sleep(Duration::from_millis(700));
+                updater::relaunch_and_exit(relaunch);
+            }
+            Err((e, page)) => {
+                {
+                    let mut st = lock(&shared);
+                    st.task = None;
+                    push_state(&proxy, &st);
+                }
+                push_log(&proxy, &format!("[LumosClient] Update didn't install: {}", e.message()));
+                let manual = matches!(e, updater::UpdateError::Manual(_));
+                if manual {
+                    open_external(&page);
+                }
+                call_js(&proxy, "onUpdate", json!({"error": e.message(), "openedPage": manual}));
+            }
+        }
+    });
+}
+
+/// (profile id, game folder, Horizon?, how long it ran) of the session that just ended.
+fn crash_context(shared: &Arc<Mutex<AppState>>) -> Option<(String, PathBuf, bool, Duration)> {
+    let st = lock(shared);
+    let (pid, started) = st.session.as_ref()?;
+    let (id, dir, ver) = st.target_instance(pid)?;
+    Some((id, dir, ver == HORIZON_ID, started.elapsed()))
+}
+
+/// When the game closed with an error, explains why (window.onCrashHelp).
+fn explain_crash_async(proxy: EventLoopProxy<UserEvent>, code: Option<i32>, ctx: Option<(String, PathBuf, bool, Duration)>) {
+    let Some((pid, game_dir, horizon, ran_for)) = ctx else { return };
+    if !crash_help::should_explain(code) {
+        return;
+    }
+    std::thread::spawn(move || {
+        // Give the game's last log lines a moment to land on disk.
+        std::thread::sleep(Duration::from_millis(400));
+        let d = crash_help::diagnose(&game_dir, horizon, ran_for, code, &pid);
+        push_log(&proxy, &format!("[LumosClient] What happened: {}{}", d.title, d.culprit.as_ref().map(|c| format!(" (likely {c})")).unwrap_or_default()));
+        call_js(&proxy, "onCrashHelp", json!(d));
+    });
+}
+
+/// Re-checks an instance's files (game jar, libraries, assets, Java; Horizon's resources)
+/// and downloads whatever is damaged or missing. Reports what it fixed (window.onRepair).
+fn repair_instance(proxy: &EventLoopProxy<UserEvent>, shared: &Arc<Mutex<AppState>>, profile_id: &str) {
+    let job = {
+        let mut st = lock(shared);
+        if st.active_child.is_some() || st.task.is_some() {
+            call_js(proxy, "onRepair", json!({"profileId": profile_id, "error": "Wait for the current game or download to finish."}));
+            return;
+        }
+        let Some((pid, game_dir, version)) = st.target_instance(profile_id) else {
+            call_js(proxy, "onRepair", json!({"profileId": profile_id, "error": GONE_INSTANCE}));
+            return;
+        };
+        st.task = Some(("Repairing instance".into(), -1.0));
+        push_state(proxy, &st);
+        (pid, game_dir, version, st.paths.clone(), st.base_dir.clone(), st.horizon_output())
+    };
+    let proxy = proxy.clone();
+    let shared = shared.clone();
+    std::thread::spawn(move || {
+        let (pid, game_dir, version, paths, base_dir, horizon_output) = job;
+        let rep = TaskReporter::new(&proxy, &shared);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| repair_inner(&shared, &rep, &paths, &base_dir, &game_dir, &version, &horizon_output)))
+            .unwrap_or_else(|_| Err("Something went wrong inside LumosClient. Check Logs, then try again.".into()));
+        let manifest = installer::manifest(&paths).ok();
+        let catalog = installer::catalog(&paths, manifest.as_ref());
+        {
+            let mut st = lock(&shared);
+            st.task = None;
+            st.catalog = catalog;
+            push_state(&proxy, &st);
+        }
+        match result {
+            Err(e) => {
+                push_log(&proxy, &format!("[LumosClient] Repair stopped: {e}"));
+                call_js(&proxy, "onTask", json!({"error": e}));
+                call_js(&proxy, "onRepair", json!({"profileId": pid, "error": e}));
+            }
+            Ok(fixed) => {
+                let message = if fixed.is_empty() { "Everything checked out: nothing needed fixing.".to_owned() } else { format!("Repaired: {}.", fixed.join("; ")) };
+                for f in &fixed {
+                    push_log(&proxy, &format!("[LumosClient] Repair: {f}"));
+                }
+                call_js(&proxy, "onTask", json!({"done": true}));
+                call_js(&proxy, "onRepair", json!({"profileId": pid, "fixed": fixed, "message": message}));
+            }
+        }
+    });
+}
+
+fn repair_inner(
+    shared: &Arc<Mutex<AppState>>,
+    rep: &TaskReporter,
+    paths: &installer::Paths,
+    base_dir: &Path,
+    game_dir: &Path,
+    version: &str,
+    horizon_output: &Path,
+) -> Result<Vec<String>, String> {
+    let report = |l: &str, f: f64| rep.report(l, f);
+    let mut fixed = Vec::new();
+    rep.report("Removing unfinished downloads", -1.0);
+    let leftovers = repair::remove_part_files(&[
+        paths.game.clone(),
+        paths.runtime.clone(),
+        paths.cache.clone(),
+        paths.horizon_root(),
+        game_dir.join("mods"),
+        game_dir.join("resourcepacks"),
+        game_dir.join("shaderpacks"),
+    ]);
+    if leftovers > 0 {
+        fixed.push(format!("Removed {leftovers} unfinished download{}", if leftovers == 1 { "" } else { "s" }));
+    }
+    if version != HORIZON_ID {
+        fixed.extend(repair::verify_version(paths, version, &report).fixed);
+        installer::install(paths, version, &report)?;
+        return Ok(fixed);
+    }
+    // Horizon: its Minecraft files and Java, then its prepared resources (`--check`).
+    let native = native_builds::launch_parts(base_dir, game_dir);
+    let (prepare, root, output) = match &native {
+        Some((_, prepare, root, short)) => (prepare.clone(), root.clone(), horizon_output.with_file_name(format!("26.3-{short}"))),
+        None => {
+            let prepare = resolve_binary("horizon-prepare").ok_or("This LumosClient build is missing the Horizon preparer. Reinstall LumosClient.")?;
+            let root = match horizon_support().ok_or("This LumosClient build is missing Horizon's support files. Reinstall LumosClient.")? {
+                HorizonRoot::Dev(d) => d,
+                HorizonRoot::Bundled(b) => {
+                    let dest = paths.horizon_root();
+                    installer::sync_horizon_root(&b, &dest)?;
+                    dest
+                }
+            };
+            (prepare, root, horizon_output.to_path_buf())
+        }
+    };
+    let own = paths.own_only();
+    if let Ok(mc) = installer::horizon_minecraft(&prepare, &root) {
+        let found = repair::verify_version(&own, &mc, &report);
+        if !found.fixed.is_empty() {
+            installer::install(&own, &mc, &report)?;
+        }
+        fixed.extend(found.fixed);
+    }
+    rep.report("Checking Horizon's resources", -1.0);
+    let out = installer::horizon_output(&prepare, &root, &output)?;
+    if !installer::horizon_check(&prepare, &root, &out) {
+        match native {
+            Some(_) => {
+                let log = |l: &str| rep.log(l);
+                installer::ensure_horizon(paths, &prepare, &root, &output, &report, &log)?;
+            }
+            None => prepare_horizon(shared, rep, paths, &output)?,
+        }
+        fixed.push("Prepared Horizon's resources again".into());
+    }
+    Ok(fixed)
+}
+
+// ═════════════════ end feat/updater ═════════════════
+
 fn main() {
+    linux_setup();
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
@@ -1948,7 +2307,7 @@ fn main() {
         .replace("{{LOGO_DATA_URI}}", &format!("data:image/png;base64,{}", b64(include_bytes!("../assets/lumos_logo_128.png"))))
         .replace("{{PANORAMA_DATA_URI}}", &format!("data:image/jpeg;base64,{}", b64(include_bytes!("../assets/panorama.jpg"))));
 
-    let webview = WebViewBuilder::new()
+    let builder = WebViewBuilder::new()
         .with_html(html)
         .with_ipc_handler(move |req| {
             let body = req.body();
@@ -1996,6 +2355,25 @@ fn main() {
                         open_external(&url);
                     }
                 }
+                // ── HUD block of the instance page (hud_config.rs) ──
+                "hud_get" | "hud_set" => {
+                    let target = ipc_state.lock().unwrap().target_instance(&text("profileId"));
+                    if let Some((pid, game_dir, ver)) = target {
+                        let (lumos, horizon) = (hud_supported(&ver), ver == HORIZON_ID);
+                        let mut out = Ok(());
+                        if action == "hud_set" {
+                            out = hud_config::apply(&game_dir, lumos, horizon, v.get("patch").unwrap_or(&serde_json::Value::Null));
+                        }
+                        let mut payload = hud_config::state(&game_dir, lumos, horizon);
+                        payload["profileId"] = json!(pid);
+                        payload["fabric"] = json!(matches!(installer::parse_spec(&ver), installer::Spec::Fabric(_)));
+                        if let Err(e) = out {
+                            payload["error"] = json!(e);
+                        }
+                        call_js(&ipc_proxy, "onHudConfig", payload);
+                    }
+                }
+                // ── end HUD block ──
                 "list_content" => {
                     if let Some((pid, game_dir, ver)) = ipc_state.lock().unwrap().target_instance(&text("profileId")) {
                         push_content(&ipc_proxy, &game_dir, &text("kind"), &pid, ver == HORIZON_ID);
@@ -2370,6 +2748,8 @@ fn main() {
                         }
                     });
                 }
+                // feat/updater
+                "check_update" | "install_update" | "repair_instance" => updater_ipc(action, &v, &ipc_proxy, &ipc_state),
                 "launch_singleplayer" => launch_game(&ipc_proxy, &ipc_state, None),
                 "launch_multiplayer" => {
                     let addr = text("address");
@@ -2379,6 +2759,7 @@ fn main() {
                     }
                 }
                 "stop_process" => {
+                    crash_help::note_user_stop(); // feat/updater
                     let mut st = ipc_state.lock().unwrap();
                     if let Some(child) = st.active_child.as_mut() {
                         let _ = child.kill();
@@ -2419,6 +2800,21 @@ fn main() {
                     }
                 }
                 "refresh_skin" => refresh_skin_async(ipc_proxy.clone(), ipc_state.clone()),
+                // ── Lumos capes (begin) ──
+                "capes_load" => capes_load_async(ipc_proxy.clone(), ipc_state.clone()),
+                "capes_select" => {
+                    let cape = Some(text("cape")).filter(|c| !c.is_empty() && c != "none");
+                    capes_select_async(ipc_proxy.clone(), ipc_state.clone(), cape);
+                }
+                "capes_enabled" => {
+                    let mut st = ipc_state.lock().unwrap();
+                    if let Some(on) = v.get("enabled").and_then(|x| x.as_bool()) {
+                        st.config.lumos_capes_enabled = on;
+                        st.save_config();
+                        push_state(&ipc_proxy, &st);
+                    }
+                }
+                // ── Lumos capes (end) ──
                 "open_ely" => {
                     let path = text("path");
                     let url = if path.is_empty() { elyby::CATALOG_URL.to_owned() } else { path };
@@ -2428,9 +2824,8 @@ fn main() {
                 }
                 _ => {}
             }
-        })
-        .build(&window)
-        .expect("Failed to build WebView");
+        });
+    let webview = attach_webview(builder, &window).expect("Failed to build WebView");
 
     // In-app Ely.by browser windows (skin catalog / account pages). Their sign-in on the Ely.by
     // website is kept in LumosClient's own folder, so the catalog's one-click ✓ (wear this skin)
@@ -2462,10 +2857,10 @@ fn main() {
                         .with_inner_size(tao::dpi::LogicalSize::new(1100.0, 760.0))
                         .build(target);
                     if let Ok(w) = built {
-                        let built = WebViewBuilder::with_web_context(&mut ely_context)
+                        let builder = WebViewBuilder::with_web_context(&mut ely_context)
                             .with_initialization_script(ELY_GUIDE_JS)
-                            .with_url(&url)
-                            .build(&w);
+                            .with_url(&url);
+                        let built = attach_webview(builder, &w);
                         if let Ok(wv) = built {
                             browsers.insert(w.id(), (w, wv));
                         }
@@ -2491,6 +2886,7 @@ fn main() {
                 }
             }
             Event::UserEvent(UserEvent::ProcessExited(code)) => {
+                let crash_ctx = crash_context(&state); // feat/updater
                 {
                     let mut st = state.lock().unwrap();
                     if let Some((pid, started)) = st.session.take() {
@@ -2507,6 +2903,7 @@ fn main() {
                     let _ = webview.evaluate_script(&format!("window.renderState({});", st.state_json()));
                 }
                 let _ = webview.evaluate_script(&format!("window.onGameExit && window.onGameExit({});", json!({"code": code})));
+                explain_crash_async(proxy.clone(), code, crash_ctx); // feat/updater
                 check_resources_async(proxy.clone(), state.clone());
             }
             _ => {}
@@ -2534,9 +2931,31 @@ mod tests {
     }
 
     #[test]
-    fn lumoshud_goes_into_every_fabric_1_21() {
-        assert!(hud_supported("Fabric 1.21.11") && hud_supported("Fabric 1.21") && hud_supported("Fabric 1.21.4"));
+    fn lumoshud_goes_into_the_fabric_versions_it_is_built_for() {
+        assert!(hud_supported("Fabric 1.21.11") && hud_supported("Fabric 1.21.9") && hud_supported("Fabric 1.21.6"));
+        assert!(!hud_supported("Fabric 1.21.5") && !hud_supported("Fabric 1.21") && !hud_supported("Fabric 1.21.4"));
         assert!(!hud_supported("1.21.11") && !hud_supported("Fabric 1.20.1") && !hud_supported("Horizon 26.3 (Rust)"));
+        // Every supported version has its jar in the build (lumoshud/gradle.properties).
+        let props = include_str!("../lumoshud/gradle.properties");
+        let line = props.lines().find_map(|l| l.strip_prefix("mc_versions=")).unwrap();
+        assert_eq!(line.split(',').map(str::trim).collect::<Vec<_>>(), HUD_VERSIONS);
+    }
+
+    #[test]
+    fn lumoshud_sync_keeps_only_the_instance_versions_jar() {
+        let dir = std::env::temp_dir().join(format!("lumos-hudsync-{}", now_millis()));
+        let mods = dir.join("mods");
+        fs::create_dir_all(&mods).unwrap();
+        for f in ["lumoshud-1.21.9.jar", "lumoshud-1.21.11.jar", "sodium.jar"] {
+            fs::write(mods.join(f), b"x").unwrap();
+        }
+        sync_lumos_hud(&dir, "Fabric 1.21.10", true);
+        assert!(!mods.join("lumoshud-1.21.9.jar").exists() && !mods.join("lumoshud-1.21.11.jar").exists());
+        assert!(mods.join("sodium.jar").exists());
+        assert_eq!(mods.join("lumoshud-1.21.10.jar").exists(), bundled_hud("1.21.10").is_some());
+        sync_lumos_hud(&dir, "Fabric 1.21.10", false);
+        assert!(!mods.join("lumoshud-1.21.10.jar").exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
