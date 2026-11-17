@@ -80,8 +80,11 @@ jobs:
         working-directory: work/src
         run: |
           set -o pipefail
-          ./target/release/horizon-prepare --prepare --server-jar ../mc/server.jar --minecraft-dir ../mc \
-            --root . --output ../prepared --java-home "$JAVA_HOME" 2>&1 | tail -40
+          # Older commits' preparers know fewer options: pass only those this one lists.
+          help=$(./target/release/horizon-prepare --help 2>&1 || true)
+          args=(--prepare --server-jar ../mc/server.jar --minecraft-dir ../mc --root .)
+          if grep -q -- '--java-home' <<<"$help"; then args+=(--java-home "$JAVA_HOME"); fi
+          ./target/release/horizon-prepare "${args[@]}" 2>&1 | tail -40
           bundle=$(./target/release/horizon-prepare compile-exporters --root . | tail -1)
           test -f "$bundle/manifest.json"
           mkdir -p ../exporters

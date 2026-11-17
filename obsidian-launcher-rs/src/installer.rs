@@ -1248,7 +1248,49 @@ pub fn install(paths: &Paths, spec: &str, report: Report) -> Result<(Resolved, P
 // ───────────────────────── Horizon ─────────────────────────
 
 /// The Minecraft version the bundled preparer is pinned to (`--launch-api`).
+/// What a Horizon preparer understands. Native-mod builds come from older Horizon commits
+/// whose preparer has fewer options, so every option is checked against its own `--help`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PrepareCaps {
+    pub output: bool,
+    pub java_home: bool,
+    pub complete: bool,
+    pub progress: bool,
+    pub check: bool,
+    pub launch_api: bool,
+    pub sounds: bool,
+}
+
+impl PrepareCaps {
+    pub fn from_help(help: &str) -> Self {
+        let has = |f: &str| help.contains(f);
+        PrepareCaps {
+            output: has("--output"),
+            java_home: has("--java-home"),
+            complete: has("--complete"),
+            progress: has("--progress"),
+            check: has("--check"),
+            launch_api: has("--launch-api"),
+            sounds: has("horizon-prepare sounds"),
+        }
+    }
+}
+
+pub fn prepare_caps(prepare: &Path) -> PrepareCaps {
+    let out = no_console(&mut Command::new(prepare)).arg("--help").stdin(Stdio::null()).output();
+    out.map(|o| PrepareCaps::from_help(&format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))))
+        .unwrap_or_default()
+}
+
+/// Marker Lumos writes once a preparer without `--check` finished.
+const PREPARED_STAMP: &str = ".lumos-prepared";
+
 pub fn horizon_minecraft(prepare: &Path, root: &Path) -> Result<String, String> {
+    if !prepare_caps(prepare).launch_api {
+        // Older preparers: the version is the one research-lock.json pins.
+        let lock = read_json(&root.join("research-lock.json"))?;
+        return s(lock.pointer("/minecraft/version")).ok_or_else(|| "research-lock.json names no Minecraft version.".to_owned());
+    }
     let out = no_console(&mut Command::new(prepare))
         .arg("--launch-api")
         .arg("--root")
@@ -1307,6 +1349,21 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
 
 /// `horizon-prepare --check`: true when the prepared resources are complete and current.
 pub fn horizon_check(prepare: &Path, root: &Path, output: &Path) -> bool {
+    let caps = prepare_caps(prepare);
+    if !caps.check {
+        return output.join(PREPARED_STAMP).is_file();
+    }
+    if !caps.output {
+        return no_console(&mut Command::new(prepare))
+            .current_dir(root)
+            .arg("--check")
+            .arg("--root")
+            .arg(root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|st| st.success());
+    }
     no_console(&mut Command::new(prepare))
         .current_dir(root)
         .arg("--check")
@@ -1320,8 +1377,18 @@ pub fn horizon_check(prepare: &Path, root: &Path, output: &Path) -> bool {
         .is_ok_and(|st| st.success())
 }
 
+/// Where a preparer puts its resources: `wanted` when it takes `--output`, else its own
+/// `<root>/.local/horizon-client/<version>`.
+pub fn horizon_output(prepare: &Path, root: &Path, wanted: &Path) -> Result<PathBuf, String> {
+    if prepare_caps(prepare).output {
+        return Ok(wanted.to_path_buf());
+    }
+    Ok(root.join(".local").join("horizon-client").join(horizon_minecraft(prepare, root)?))
+}
+
 /// Downloads Minecraft's files for the pinned version, its Java and the server jar into our
-/// own folder, then runs the preparer with machine-readable progress.
+/// own folder, then runs the preparer (with machine-readable progress when it has it).
+/// Returns the resources folder to pass to the game.
 pub fn ensure_horizon(
     paths: &Paths,
     prepare: &Path,
@@ -1329,9 +1396,11 @@ pub fn ensure_horizon(
     output: &Path,
     report: Report,
     log: &(dyn Fn(&str) + Sync),
-) -> Result<(), String> {
+) -> Result<PathBuf, String> {
+    let caps = prepare_caps(prepare);
+    let output = &horizon_output(prepare, root, output)?;
     if horizon_check(prepare, root, output) {
-        return Ok(());
+        return Ok(output.clone());
     }
     let mc = horizon_minecraft(prepare, root)?;
     // Only our own folder: the preparer is pointed at it with --minecraft-dir.
@@ -1349,21 +1418,28 @@ pub fn ensure_horizon(
     )?;
     let java_home = java_home_of(&java);
     report("Preparing Horizon (the first time takes a few minutes)", 0.0);
-    let mut child = no_console(&mut Command::new(prepare))
+    let mut cmd = Command::new(prepare);
+    no_console(&mut cmd)
         .arg("--prepare")
         .arg("--server-jar")
         .arg(&server_jar)
         .arg("--minecraft-dir")
         .arg(&own.game)
         .arg("--root")
-        .arg(root)
-        .arg("--output")
-        .arg(output)
-        .arg("--java-home")
-        .arg(&java_home)
-        .arg("--complete")
-        .arg("--progress")
-        .arg("json")
+        .arg(root);
+    if caps.output {
+        cmd.arg("--output").arg(output);
+    }
+    if caps.java_home {
+        cmd.arg("--java-home").arg(&java_home);
+    }
+    if caps.complete {
+        cmd.arg("--complete");
+    }
+    if caps.progress {
+        cmd.arg("--progress").arg("json");
+    }
+    let mut child = cmd
         .env("JAVA_HOME", &java_home)
         .current_dir(root)
         .stdout(Stdio::piped())
@@ -1418,7 +1494,27 @@ pub fn ensure_horizon(
             .unwrap_or_else(|| format!("exit status {status}"));
         return Err(format!("Horizon couldn't prepare its files: {detail}"));
     }
-    Ok(())
+    // Preparers without --complete copy the sounds with their own command (optional: the game
+    // only goes silent without them).
+    if !caps.complete && caps.sounds {
+        report("Copying Horizon's sounds", -1.0);
+        let _ = no_console(&mut Command::new(prepare))
+            .arg("sounds")
+            .arg("--minecraft-dir")
+            .arg(&own.game)
+            .arg("--root")
+            .arg(root)
+            .env("JAVA_HOME", &java_home)
+            .current_dir(root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    if !caps.check {
+        let _ = fs::create_dir_all(output);
+        let _ = fs::write(output.join(PREPARED_STAMP), mc.as_bytes());
+    }
+    Ok(output.clone())
 }
 
 // ───────────────────────── Tests ─────────────────────────
@@ -1427,6 +1523,16 @@ pub fn ensure_horizon(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn preparer_options_are_read_from_its_help() {
+        let old = "Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [--root PATH]\n       horizon-prepare sounds [--minecraft-dir PATH] [--root PATH]";
+        let c = PrepareCaps::from_help(old);
+        assert!(!c.output && !c.java_home && !c.complete && !c.progress && !c.check && !c.launch_api && c.sounds);
+        let new = "[--output PATH] [--java-home PATH] [--complete] [--progress json] --check --launch-api horizon-prepare sounds";
+        let c = PrepareCaps::from_help(new);
+        assert!(c.output && c.java_home && c.complete && c.progress && c.check && c.launch_api);
+    }
 
     #[test]
     fn maven_paths() {

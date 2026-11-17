@@ -1236,7 +1236,7 @@ fn launch_horizon(
             let report = |l: &str, f: f64| rep.report(l, f);
             let log = |l: &str| rep.log(l);
             rep.report("Getting Horizon ready", -1.0);
-            installer::ensure_horizon(&snap.paths, &prepare, &root, &output, &report, &log)?;
+            let output = installer::ensure_horizon(&snap.paths, &prepare, &root, &output, &report, &log)?;
             (client, output)
         }
         None => {
