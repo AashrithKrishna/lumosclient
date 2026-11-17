@@ -21,6 +21,7 @@ use tao::window::{Window, WindowBuilder, WindowId};
 use wry::{WebView, WebViewBuilder};
 
 mod elyby;
+mod horizon_mods;
 mod installer;
 mod net;
 
@@ -315,9 +316,11 @@ fn open_external(target: &str) {
 
 // ───────────────────────── Instance content ─────────────────────────
 
-/// Content folders inside an instance that the UI is allowed to list/modify.
-fn content_folder(kind: &str) -> Option<&'static str> {
+/// Content folders inside an instance that the UI is allowed to list/modify. A Horizon 26.3
+/// instance keeps its (Rust) mods in `horizon-mods/`, turned on in `horizon-mods.txt`.
+fn content_folder(kind: &str, horizon: bool) -> Option<&'static str> {
     match kind {
+        "mods" if horizon => Some(horizon_mods::MODS_DIR),
         "mods" => Some("mods"),
         "resourcepacks" => Some("resourcepacks"),
         "shaderpacks" => Some("shaderpacks"),
@@ -326,10 +329,12 @@ fn content_folder(kind: &str) -> Option<&'static str> {
 }
 
 /// File types each content folder takes when the player adds their own files.
-fn content_extension_ok(kind: &str, file: &str) -> bool {
+fn content_extension_ok(kind: &str, file: &str, horizon: bool) -> bool {
     let lower = file.to_ascii_lowercase();
     match kind {
+        "mods" if horizon => lower.ends_with(".hmod"),
         "mods" => lower.ends_with(".jar"),
+        "shaderpacks" if horizon => lower.ends_with(".zip") || lower.ends_with(".hshader"),
         "resourcepacks" | "shaderpacks" => lower.ends_with(".zip"),
         _ => false,
     }
@@ -359,9 +364,10 @@ fn safe_file_name(name: &str) -> bool {
         && !RESERVED.contains(&stem.as_str())
 }
 
-fn list_content_json(game_dir: &Path, kind: &str, profile_id: &str) -> String {
+fn list_content_json(game_dir: &Path, kind: &str, profile_id: &str, horizon: bool) -> String {
     let mut items: Vec<serde_json::Value> = Vec::new();
-    if let Some(folder) = content_folder(kind) {
+    let horizon_mods = horizon && kind == "mods";
+    if let Some(folder) = content_folder(kind, horizon) {
         if let Ok(rd) = fs::read_dir(game_dir.join(folder)) {
             for entry in rd.flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
@@ -375,9 +381,18 @@ fn list_content_json(game_dir: &Path, kind: &str, profile_id: &str) -> String {
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0);
+                // Horizon mods are switched in horizon-mods.txt by their manifest id, not renamed.
+                let mod_id = horizon_mods.then(|| horizon_mods::manifest_id_of(&entry.path())).flatten();
+                if horizon_mods && mod_id.is_none() && !meta.as_ref().is_some_and(|m| m.is_dir()) {
+                    continue; // not a Horizon mod (e.g. a stray file)
+                }
+                let enabled = match &mod_id {
+                    Some(id) => horizon_mods::is_enabled(game_dir, id),
+                    None => !name.ends_with(".disabled"),
+                };
                 items.push(json!({
                     "file": name,
-                    "enabled": !name.ends_with(".disabled"),
+                    "enabled": enabled,
                     "isDir": meta.as_ref().map(|m| m.is_dir()).unwrap_or(false),
                     "size": meta.as_ref().map(|m| m.len()).unwrap_or(0),
                     "modified": modified,
@@ -386,11 +401,11 @@ fn list_content_json(game_dir: &Path, kind: &str, profile_id: &str) -> String {
         }
     }
     items.sort_by_key(|a| a["file"].as_str().unwrap_or("").to_lowercase());
-    json!({ "kind": kind, "profileId": profile_id, "items": items }).to_string()
+    json!({ "kind": kind, "profileId": profile_id, "horizon": horizon, "items": items }).to_string()
 }
 
-fn push_content(proxy: &EventLoopProxy<UserEvent>, game_dir: &Path, kind: &str, profile_id: &str) {
-    let js = format!("window.renderContent && window.renderContent({});", list_content_json(game_dir, kind, profile_id));
+fn push_content(proxy: &EventLoopProxy<UserEvent>, game_dir: &Path, kind: &str, profile_id: &str, horizon: bool) {
+    let js = format!("window.renderContent && window.renderContent({});", list_content_json(game_dir, kind, profile_id, horizon));
     let _ = proxy.send_event(UserEvent::EvalJs(js));
 }
 
@@ -1214,19 +1229,18 @@ fn is_fabric_version(selected: &str) -> bool {
     selected.starts_with(installer::FABRIC_PREFIX) || selected.to_lowercase().contains("fabric")
 }
 
-fn search_modrinth_async(proxy: EventLoopProxy<UserEvent>, paths: installer::Paths, query: String, project_type: String, sort_by: String, offset: u64, selected: String, seq: u64) {
+#[allow(clippy::too_many_arguments)]
+fn search_modrinth_async(proxy: EventLoopProxy<UserEvent>, paths: installer::Paths, game_dir: PathBuf, query: String, project_type: String, sort_by: String, offset: u64, selected: String, seq: u64) {
     std::thread::spawn(move || {
         let project_type = match project_type.as_str() {
             "mod" | "resourcepack" | "shader" => project_type,
             _ => "mod".to_owned(),
         };
-        if selected == HORIZON_ID && project_type != "resourcepack" {
-            let msg = if project_type == "mod" {
-                "Horizon 26.3 runs the Rust engine, which can't load Java mods. Switch this instance to a Fabric version to use mods."
-            } else {
-                "Shader packs need a Java version with Iris. Switch this instance to a Fabric version to use shaders."
-            };
-            call_js(&proxy, "renderModResults", json!({"hits": [], "total_hits": 0, "notice": msg, "seq": seq}));
+        // Horizon 26.3 can't run Java mods: its instances browse Horizon's own registry instead.
+        if selected == HORIZON_ID {
+            let mut payload = horizon_mods::search(&game_dir, &query, &project_type, &sort_by, offset as usize);
+            payload["seq"] = json!(seq);
+            call_js(&proxy, "renderModResults", payload);
             return;
         }
         let mc = mc_version_for(&paths, &selected);
@@ -1266,15 +1280,17 @@ fn push_install_status(proxy: &EventLoopProxy<UserEvent>, slug: &str, state: &st
 }
 
 /// Saves a file the player picked (base64 from the page) into one of an instance's content folders.
-fn import_content(game_dir: &Path, kind: &str, file: &str, data_b64: &str) -> Result<(), String> {
+fn import_content(game_dir: &Path, kind: &str, file: &str, data_b64: &str, horizon: bool) -> Result<(), String> {
     use base64::Engine as _;
-    let folder = content_folder(kind).ok_or("Unknown content type.")?;
+    let folder = content_folder(kind, horizon).ok_or("Unknown content type.")?;
     if !safe_file_name(file) || file.starts_with('.') {
         return Err("That file name can't be used.".into());
     }
-    if !content_extension_ok(kind, file) {
+    if !content_extension_ok(kind, file, horizon) {
         return Err(match kind {
+            "mods" if horizon => format!("{file} isn't a Horizon mod. Horizon 26.3 loads .hmod mods, not Java .jar files."),
             "mods" => format!("{file} isn't a mod. Mods are .jar files."),
+            "shaderpacks" if horizon => format!("{file} isn't a shader pack. Packs are .hshader or .zip files."),
             _ => format!("{file} isn't a pack. Packs are .zip files."),
         });
     }
@@ -1284,8 +1300,13 @@ fn import_content(game_dir: &Path, kind: &str, file: &str, data_b64: &str) -> Re
     let bytes = base64::engine::general_purpose::STANDARD.decode(data_b64.trim()).map_err(|_| format!("Couldn't read {file}."))?;
     // A .jar or .zip is a zip archive: catch renamed or broken files before the game trips on them.
     if bytes.len() < 4 || &bytes[..2] != b"PK" {
-        return Err(format!("{file} isn't a valid {} file.", if kind == "mods" { ".jar" } else { ".zip" }));
+        return Err(format!("{file} isn't a valid {} file.", file.rsplit('.').next().unwrap_or("mod")));
     }
+    let horizon_id = if horizon && kind == "mods" {
+        Some(horizon_mods::manifest_id_of_bytes(&bytes).ok_or(format!("{file} isn't a valid Horizon mod (no horizon-mod.toml)."))?)
+    } else {
+        None
+    };
     let dir = game_dir.join(folder);
     fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
     let tmp = dir.join(format!(".{file}.{}.part", now_millis()));
@@ -1296,6 +1317,9 @@ fn import_content(game_dir: &Path, kind: &str, file: &str, data_b64: &str) -> Re
     })?;
     // The new file replaces a switched-off copy of the same name (only once it's safely saved).
     let _ = fs::remove_file(dir.join(format!("{file}.disabled")));
+    if let Some(id) = horizon_id {
+        horizon_mods::set_enabled(game_dir, &id, true)?;
+    }
     Ok(())
 }
 
@@ -1536,6 +1560,14 @@ fn download_modrinth_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<A
             return;
         };
         let push_install_status = |proxy: &EventLoopProxy<UserEvent>, slug: &str, state: &str, msg: &str| push_install_status(proxy, slug, state, msg, &pid);
+        if selected == HORIZON_ID {
+            push_install_status(&proxy, &slug, "installing", &format!("Installing {slug}..."));
+            match horizon_mods::install(&game_dir, &slug) {
+                Ok(file) => push_install_status(&proxy, &slug, "installed", &format!("Installed {file} (Horizon 26.3)")),
+                Err(err) => push_install_status(&proxy, &slug, "error", &err),
+            }
+            return;
+        }
         if project_type == "mod" && !is_fabric_version(&selected) {
             let mc = mc_version_for(&paths, &selected);
             let hint = if selected == HORIZON_ID {
@@ -1692,10 +1724,11 @@ fn main() {
                     let target = text("target");
                     let dir = {
                         let st = ipc_state.lock().unwrap();
-                        let inst = st.target_instance(&text("profileId")).map(|t| t.1);
+                        let inst = st.target_instance(&text("profileId")).map(|t| (t.1, t.2 == HORIZON_ID));
                         match (target.as_str(), inst) {
-                            ("instance", Some(inst)) => inst,
-                            ("mods" | "resourcepacks" | "shaderpacks" | "saves" | "screenshots" | "logs", Some(inst)) => inst.join(&target),
+                            ("instance", Some((inst, _))) => inst,
+                            ("mods", Some((inst, true))) => inst.join(horizon_mods::MODS_DIR),
+                            ("mods" | "resourcepacks" | "shaderpacks" | "saves" | "screenshots" | "logs", Some((inst, _))) => inst.join(&target),
                             _ => st.base_dir.clone(),
                         }
                     };
@@ -1709,8 +1742,8 @@ fn main() {
                     }
                 }
                 "list_content" => {
-                    if let Some((pid, game_dir, _)) = ipc_state.lock().unwrap().target_instance(&text("profileId")) {
-                        push_content(&ipc_proxy, &game_dir, &text("kind"), &pid);
+                    if let Some((pid, game_dir, ver)) = ipc_state.lock().unwrap().target_instance(&text("profileId")) {
+                        push_content(&ipc_proxy, &game_dir, &text("kind"), &pid, ver == HORIZON_ID);
                     }
                 }
                 "import_content" => {
@@ -1718,7 +1751,8 @@ fn main() {
                     let target = ipc_state.lock().unwrap().target_instance(&text("profileId"));
                     match target {
                         None => call_js(&ipc_proxy, "onNotice", json!({"message": GONE_INSTANCE, "kind": "err"})),
-                        Some((pid, game_dir, _)) => {
+                        Some((pid, game_dir, ver)) => {
+                            let horizon = ver == HORIZON_ID;
                             // Decoding and writing a big file takes a moment: keep the window responsive.
                             let data = match v.get_mut("data").map(serde_json::Value::take) {
                                 Some(serde_json::Value::String(d)) => d,
@@ -1726,11 +1760,11 @@ fn main() {
                             };
                             let proxy = ipc_proxy.clone();
                             std::thread::spawn(move || {
-                                match import_content(&game_dir, &kind, &file, &data) {
+                                match import_content(&game_dir, &kind, &file, &data, horizon) {
                                     Ok(()) => call_js(&proxy, "onNotice", json!({"message": format!("Added {file}"), "kind": "ok"})),
                                     Err(e) => call_js(&proxy, "onNotice", json!({"message": e, "kind": "err"})),
                                 }
-                                push_content(&proxy, &game_dir, &kind, &pid);
+                                push_content(&proxy, &game_dir, &kind, &pid, horizon);
                             });
                         }
                     }
@@ -1742,8 +1776,17 @@ fn main() {
                     if target.is_none() {
                         call_js(&ipc_proxy, "onNotice", json!({"message": GONE_INSTANCE, "kind": "err"}));
                     }
-                    if let (Some(folder), true, Some((pid, game_dir, _))) = (content_folder(&kind), safe_file_name(&file), target) {
+                    let horizon = target.as_ref().is_some_and(|t| t.2 == HORIZON_ID);
+                    if let (Some(folder), true, Some((pid, game_dir, _))) = (content_folder(&kind, horizon), safe_file_name(&file), target) {
                         let dir = game_dir.join(folder);
+                        // A Horizon mod is switched in horizon-mods.txt; renaming it would only hide it.
+                        if let Some(id) = (horizon && kind == "mods").then(|| horizon_mods::manifest_id_of(&dir.join(&file))).flatten() {
+                            if let Err(e) = horizon_mods::set_enabled(&game_dir, &id, enable) {
+                                call_js(&ipc_proxy, "onNotice", json!({"message": e, "kind": "err"}));
+                            }
+                            push_content(&ipc_proxy, &game_dir, &kind, &pid, horizon);
+                            return;
+                        }
                         let target = if enable {
                             file.strip_suffix(".disabled").unwrap_or(&file).to_owned()
                         } else if file.ends_with(".disabled") {
@@ -1759,7 +1802,7 @@ fn main() {
                                 call_js(&ipc_proxy, "onNotice", json!({"message": format!("Couldn't switch {file}: {e}"), "kind": "err"}));
                             }
                         }
-                        push_content(&ipc_proxy, &game_dir, &kind, &pid);
+                        push_content(&ipc_proxy, &game_dir, &kind, &pid, horizon);
                     }
                 }
                 "trash_content" => {
@@ -1768,14 +1811,21 @@ fn main() {
                     if target.is_none() {
                         call_js(&ipc_proxy, "onNotice", json!({"message": GONE_INSTANCE, "kind": "err"}));
                     }
-                    if let (Some(folder), true, Some((pid, game_dir, _))) = (content_folder(&kind), safe_file_name(&file), target) {
+                    let horizon = target.as_ref().is_some_and(|t| t.2 == HORIZON_ID);
+                    if let (Some(folder), true, Some((pid, game_dir, _))) = (content_folder(&kind, horizon), safe_file_name(&file), target) {
                         let src = game_dir.join(folder).join(&file);
+                        let mod_id = (horizon && kind == "mods").then(|| horizon_mods::manifest_id_of(&src)).flatten();
                         let base = ipc_state.lock().unwrap().base_dir.clone();
                         match move_to_trash(&base, &src, &file) {
-                            Ok(_) => call_js(&ipc_proxy, "onNotice", json!({"message": format!("Moved {file} to {TRASH_NAME}"), "kind": "info"})),
+                            Ok(_) => {
+                                if let Some(id) = &mod_id {
+                                    let _ = horizon_mods::forget(&game_dir, id);
+                                }
+                                call_js(&ipc_proxy, "onNotice", json!({"message": format!("Moved {file} to {TRASH_NAME}"), "kind": "info"}))
+                            }
                             Err(e) => call_js(&ipc_proxy, "onNotice", json!({"message": format!("Couldn't move {file} to {TRASH_NAME}: {e}"), "kind": "err"})),
                         }
-                        push_content(&ipc_proxy, &game_dir, &kind, &pid);
+                        push_content(&ipc_proxy, &game_dir, &kind, &pid, horizon);
                     }
                 }
                 "set_profile_icon" => {
@@ -1895,14 +1945,16 @@ fn main() {
                 }
                 "refresh_versions" => refresh_catalog_async(ipc_proxy.clone(), ipc_state.clone()),
                 "search_modrinth" => {
-                    let (selected, paths) = {
+                    let (selected, paths, game_dir) = {
                         let st = ipc_state.lock().unwrap();
-                        let ver = st.target_instance(&text("profileId")).map(|t| t.2).unwrap_or_else(|| st.config.selected_version.clone());
-                        (ver, st.paths.clone())
+                        let t = st.target_instance(&text("profileId"));
+                        let ver = t.as_ref().map(|t| t.2.clone()).unwrap_or_else(|| st.config.selected_version.clone());
+                        (ver, st.paths.clone(), t.map(|t| t.1).unwrap_or_else(|| st.active_game_dir()))
                     };
                     search_modrinth_async(
                         ipc_proxy.clone(),
                         paths,
+                        game_dir,
                         text("query"),
                         Some(text("projectType")).filter(|t| !t.is_empty()).unwrap_or_else(|| "mod".into()),
                         text("sortBy"),
@@ -2188,19 +2240,19 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lumos-import-{}", now_millis()));
         let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
         let jar = b64(b"PK\x03\x04 pretend jar");
-        assert!(import_content(&dir, "mods", "cool-mod.jar", &jar).is_ok());
+        assert!(import_content(&dir, "mods", "cool-mod.jar", &jar, false).is_ok());
         assert!(dir.join("mods/cool-mod.jar").is_file());
         // A disabled copy of the same mod is replaced, not kept next to it.
         fs::write(dir.join("mods/other.jar.disabled"), b"PK").unwrap();
-        assert!(import_content(&dir, "mods", "other.jar", &jar).is_ok());
+        assert!(import_content(&dir, "mods", "other.jar", &jar, false).is_ok());
         assert!(!dir.join("mods/other.jar.disabled").exists());
-        assert!(import_content(&dir, "resourcepacks", "pack.zip", &jar).is_ok());
+        assert!(import_content(&dir, "resourcepacks", "pack.zip", &jar, false).is_ok());
         assert!(dir.join("resourcepacks/pack.zip").is_file());
         // Wrong type, not an archive, or a path instead of a name: refused.
-        assert!(import_content(&dir, "mods", "pack.zip", &jar).is_err());
-        assert!(import_content(&dir, "mods", "fake.jar", &b64(b"hello")).is_err());
-        assert!(import_content(&dir, "mods", "../evil.jar", &jar).is_err());
-        assert!(import_content(&dir, "saves", "x.jar", &jar).is_err());
+        assert!(import_content(&dir, "mods", "pack.zip", &jar, false).is_err());
+        assert!(import_content(&dir, "mods", "fake.jar", &b64(b"hello"), false).is_err());
+        assert!(import_content(&dir, "mods", "../evil.jar", &jar, false).is_err());
+        assert!(import_content(&dir, "saves", "x.jar", &jar, false).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 
