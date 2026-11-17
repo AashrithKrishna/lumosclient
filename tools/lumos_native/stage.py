@@ -88,6 +88,16 @@ def main():
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with open(dest, "wb") as out:
                 out.write(z.read(n))
+    if g.get("combined"):
+        # Retarget: each mod declares the commit it was made for; the combined game is one commit.
+        import re
+        for root, _, files in os.walk(mods):
+            for f in files:
+                if f == "horizon-mixin.toml":
+                    path = os.path.join(root, f)
+                    text = open(path, encoding="utf-8").read()
+                    text = re.sub(r'(horizon_revision\s*=\s*")[0-9a-f]{40}(")', lambda m: m.group(1) + g["commit"] + m.group(2), text)
+                    open(path, "w", encoding="utf-8").write(text)
     print(g["mixins"])
 
 

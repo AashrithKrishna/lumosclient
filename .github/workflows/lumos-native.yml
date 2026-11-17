@@ -13,6 +13,10 @@ on:
         description: Commit prefixes to build, comma-separated (empty = every group)
         type: string
         default: ""
+      combined:
+        description: Build ONE game with every native mod retargeted to this Horizon commit (full sha); empty = per-commit groups
+        type: string
+        default: ""
       platforms:
         description: Which games to build
         type: choice
@@ -39,8 +43,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           ONLY: ${{ inputs.only }}
+          COMBINED: ${{ inputs.combined }}
         run: |
-          python3 tools/lumos_native/plan.py --out plan.json --only "$ONLY" --matrix > matrix.json
+          python3 tools/lumos_native/plan.py --out plan.json --only "$ONLY" --combined "$COMBINED" --matrix > matrix.json
           echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
         with:
@@ -96,7 +101,8 @@ jobs:
           retention-days: 7
 
   build:
-    needs: plan
+    needs: [plan, exporters]
+    if: ${{ !cancelled() }}
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -167,75 +173,32 @@ jobs:
             python ../src/tools/ci/fetch_dxc.py "$GITHUB_WORKSPACE/work/bin" || echo "DXC not added (the game falls back to FXC)"
           fi
           ls -l "$GITHUB_WORKSPACE/work/bin"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: build-${{ matrix.commit }}-${{ runner.os }}
-          path: |
-            work/bin/
-            work/applied.json
-          retention-days: 7
-      - name: Keep the staged source files the package needs
-        run: |
-          mkdir -p keep/mods
-          cp work/src/research-lock.json keep/
-          cp -R work/src/mods/horizon keep/mods/
-          cp -R work/mods keep/native-mods
-      - uses: actions/upload-artifact@v7
-        with:
-          name: src-${{ matrix.commit }}-${{ runner.os }}
-          path: keep/
-          retention-days: 7
-
-  package:
-    needs: [plan, exporters, build]
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      max-parallel: 20
-      matrix:
-        commit: ${{ fromJSON(needs.plan.outputs.matrix).commit }}
-        target: [{os: macOS, platform: macos-arm64}, {os: Windows, platform: windows-x64}]
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v8
-        with:
-          name: plan
-      - id: get
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          pattern: "{build,src}-${{ matrix.commit }}-${{ matrix.target.os }}"
-          path: in
+      # Publish this game right away (not after the whole batch), then refresh the index.
       - id: exp
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
           name: exporters-${{ matrix.commit }}
-          path: in/exporters
+          path: work/exporters
       - name: Package and publish
-        if: steps.get.outcome == 'success' && steps.exp.outcome == 'success' && hashFiles(format('in/build-{0}-{1}/applied.json', matrix.commit, matrix.target.os)) != ''
+        if: steps.exp.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          b="in/build-${{ matrix.commit }}-${{ matrix.target.os }}"
-          s="in/src-${{ matrix.commit }}-${{ matrix.target.os }}"
-          mkdir -p work/src/mods
-          cp "$s/research-lock.json" work/src/
-          cp -R "$s/mods/horizon" work/src/mods/
-          cp -R "$s/native-mods" work/mods
-          cp "$b/applied.json" work/
-          python3 tools/lumos_native/package.py --plan plan.json --commit "${{ matrix.commit }}" --work work \
-            --bin "$b/bin" --exporters in/exporters --platform "${{ matrix.target.platform }}" --out dist
+          platform=macos-arm64; [ "$RUNNER_OS" = Windows ] && platform=windows-x64
+          python tools/lumos_native/package.py --plan plan.json --commit "${{ matrix.commit }}" --work work \
+            --bin work/bin --exporters work/exporters --platform "$platform" --out dist
           gh release view "$RELEASE" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$RELEASE" -R "$GITHUB_REPOSITORY" --prerelease --title "Native mod builds" \
-              --notes "Horizon native mods built into ready-to-play games, used by Lumos Client's Discover page. Not meant to be downloaded by hand."
+              --notes "Horizon native mods built into ready-to-play games, used by Lumos Client's Discover page. Not meant to be downloaded by hand." || true
           gh release upload "$RELEASE" dist/* --clobber -R "$GITHUB_REPOSITORY"
+          mkdir -p parts
+          gh release download "$RELEASE" -R "$GITHUB_REPOSITORY" -p 'lumos-native-*.json' -D parts --clobber
+          python tools/lumos_native/index.py --dir parts --out native-index.json
+          gh release upload "$RELEASE" native-index.json --clobber -R "$GITHUB_REPOSITORY"
 
   index:
-    needs: package
+    needs: build
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:

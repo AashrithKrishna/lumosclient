@@ -45,6 +45,7 @@ def main():
     ap.add_argument("--out", default="plan.json")
     ap.add_argument("--only", default="", help="comma-separated commit prefixes to keep")
     ap.add_argument("--matrix", action="store_true")
+    ap.add_argument("--combined", default="", help="one group: every native mod retargeted to this Horizon commit")
     a = ap.parse_args()
     token = os.environ.get("GITHUB_TOKEN")
     idx = get_json(INDEX)
@@ -73,6 +74,21 @@ def main():
         g["mixins_revs"].add(mixins)
         g["mods"].append({"id": p["id"], "version": v["version"], "name": p.get("name", p["id"]),
                           "url": f["url"], "sha256": f["sha256"].lower(), "size": f["size"], "mixins": mixins})
+    if a.combined:
+        # Every mod into one game at one commit, with the newest horizon-mixins any mod pins
+        # (stage.py rewrites each mod's declared revision; apply.py keeps those that still apply).
+        if not SHA.fullmatch(a.combined):
+            sys.exit("--combined needs a full 40-character commit")
+        mods = [m for g in groups.values() for m in g["mods"]]
+        revs = sorted({m["mixins"] for m in mods}, key=lambda r: commit_date(r, token))
+        g = {"commit": a.combined, "short": a.combined[:8], "combined": True, "mixins": revs[-1],
+             "mods": sorted(mods, key=lambda m: m["id"])}
+        with open(a.out, "w") as fh:
+            json.dump({"groups": [g]}, fh, indent=1)
+        print(f"combined: {len(mods)} native mods at {a.combined[:8]} (horizon-mixins {revs[-1][:8]})", file=sys.stderr)
+        if a.matrix:
+            print(json.dumps({"commit": [a.combined]}))
+        return
     only = [o.strip() for o in a.only.split(",") if o.strip()]
     out = []
     for g in sorted(groups.values(), key=lambda g: -len(g["mods"])):

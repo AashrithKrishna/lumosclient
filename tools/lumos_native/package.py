@@ -47,9 +47,10 @@ def main():
         # A built-in mod honours horizon-mods.txt only when its own hooks ask native_on().
         mods.append({"id": i, "version": m["version"], "name": m["name"], "sha256": m["sha256"], "can_turn_off": "native_on(" in text})
     native = {"schema": 1, "commit": g["commit"], "short": g["short"], "mixins": g["mixins"], "platform": a.platform,
+              "combined": bool(g.get("combined")),
               "mods": mods, "left_out": applied["failed"]}
     os.makedirs(a.out, exist_ok=True)
-    name = f"lumos-native-{g['short']}-{a.platform}"
+    name = f"lumos-native-{'all-' if g.get('combined') else ''}{g['short']}-{a.platform}"
     zpath = os.path.join(a.out, name + ".zip")
     src = os.path.join(a.work, "src")
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
