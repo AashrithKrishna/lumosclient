@@ -149,7 +149,6 @@ pub fn search(game_dir: &Path, query: &str, tab: &str, sort: &str, offset: usize
                 "project_type": if tab == "shader" || tab == "resourcepack" { tab } else { "mod" },
                 "source": "horizon",
                 "native": kind == "native-mod",
-                "signed": p.get("key").is_some_and(|k| !k.is_null()),
                 "installed": installed.iter().any(|f| f == file),
                 "view_url": format!("{SITE}/{}", s(p, "id")),
             })
@@ -206,19 +205,16 @@ pub fn install(game_dir: &Path, id: &str) -> Result<String, String> {
     if got != sha {
         return Err(format!("{name} failed its integrity check, so it wasn't installed."));
     }
+    // A project with an author key: the file must carry that author's signature.
+    if let Some(key) = p.get("key").and_then(Value::as_str).filter(|k| !k.is_empty()) {
+        verify_signature(key, s(f, "signature"), &bytes).map_err(|why| format!("{name}'s signature doesn't check out ({why}), so it wasn't installed."))?;
+    }
     let dir = game_dir.join(folder);
     fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
     if kind == "mod" {
         let manifest_id = manifest_id_from_bytes(&bytes).ok_or(format!("{name} isn't a valid Horizon mod."))?;
         if manifest_id != id {
             return Err(format!("{name} says it is \"{manifest_id}\", not \"{id}\", so it wasn't installed."));
-        }
-        // Replace an older version of the same mod.
-        for old in fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
-            let path = old.path();
-            if path.file_name().is_some_and(|n| n != name) && manifest_id_of(&path).as_deref() == Some(id) {
-                let _ = fs::remove_file(&path);
-            }
         }
     }
     let tmp = dir.join(format!(".{name}.part"));
@@ -228,9 +224,61 @@ pub fn install(game_dir: &Path, id: &str) -> Result<String, String> {
         format!("Couldn't save {name}: {e}")
     })?;
     if kind == "mod" {
+        // Only now that the new file is saved: older versions of the same mod go (two copies
+        // of one id stop Horizon from loading mods).
+        remove_other_copies(&dir, id, name);
         set_enabled(game_dir, id, true)?;
     }
     Ok(name.to_owned())
+}
+
+/// Checks a registry file's minisign signature against its project's public key.
+fn verify_signature(key: &str, signature: &str, bytes: &[u8]) -> Result<(), String> {
+    let pk = minisign_verify::PublicKey::from_base64(key.trim()).map_err(|_| "bad key".to_owned())?;
+    let sig = minisign_verify::Signature::decode(&signature.replace("\r\n", "\n")).map_err(|_| "no valid signature".to_owned())?;
+    pk.verify(bytes, &sig, false).map_err(|_| "signed by someone else".to_owned())
+}
+
+/// Deletes every other file in `dir` that is the same content mod (same manifest id).
+pub fn remove_other_copies(dir: &Path, id: &str, keep: &str) {
+    if let Ok(rd) = fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let path = e.path();
+            if path.file_name().is_some_and(|n| n != keep) && manifest_id_of(&path).as_deref() == Some(id) {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+}
+
+/// True when another file in `dir` (besides `except`) is the content mod `id`.
+pub fn other_copy_exists(dir: &Path, id: &str, except: &str) -> bool {
+    fs::read_dir(dir).is_ok_and(|rd| {
+        rd.flatten().any(|e| {
+            let path = e.path();
+            path.file_name().is_some_and(|n| n != except) && manifest_id_of(&path).as_deref() == Some(id)
+        })
+    })
+}
+
+/// The registry's take-down reason for an installed file, from the last index fetched (no network).
+pub fn revoked_reason(id: &str, path: &Path) -> Option<String> {
+    let idx = INDEX.lock().unwrap().as_ref().map(|(_, i)| i.clone())?;
+    let list = idx.get("revoked")?.as_array()?;
+    let mut sha: Option<String> = None;
+    list.iter().find_map(|r| {
+        if s(r, "id") != id {
+            return None;
+        }
+        let file = s(r, "sha256");
+        if !file.is_empty() {
+            let got = sha.get_or_insert_with(|| fs::read(path).map(|b| format!("{:x}", Sha256::digest(&b))).unwrap_or_default());
+            if !got.eq_ignore_ascii_case(file) {
+                return None;
+            }
+        }
+        Some(s(r, "reason").to_owned())
+    })
 }
 
 /// A content mod's id, from the `horizon-mod.toml` inside it.
@@ -251,10 +299,19 @@ fn manifest_id_from_reader<R: std::io::Read + std::io::Seek>(r: R) -> Option<Str
     let mut zip = zip::ZipArchive::new(r).ok()?;
     let mut text = String::new();
     zip.by_name("horizon-mod.toml").ok()?.take(64 * 1024).read_to_string(&mut text).ok()?;
-    text.lines().find_map(|l| {
-        let (k, v) = l.split_once('=')?;
-        (k.trim() == "id").then(|| v.trim().trim_matches('"').to_owned())
-    })
+    // The top-level `id` (before any [table]); TOML basic or literal string, with an optional comment.
+    text.lines()
+        .take_while(|l| !l.trim_start().starts_with('['))
+        .find_map(|l| {
+            let (k, v) = l.split_once('=')?;
+            if k.trim() != "id" {
+                return None;
+            }
+            let v = v.trim();
+            let q = v.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+            let rest = &v[1..];
+            Some(rest[..rest.find(q)?].to_owned())
+        })
     .filter(|id| !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
 }
 
@@ -325,6 +382,19 @@ mod tests {
         assert_eq!(manifest_id_from_bytes(&hmod("flesh_to_leather")).as_deref(), Some("flesh_to_leather"));
         assert_eq!(manifest_id_from_bytes(&hmod("../evil")), None);
         assert_eq!(manifest_id_from_bytes(b"not a zip"), None);
+        let toml = |body: &str| {
+            let mut buf = std::io::Cursor::new(Vec::new());
+            {
+                let mut z = zip::ZipWriter::new(&mut buf);
+                z.start_file("horizon-mod.toml", zip::write::SimpleFileOptions::default()).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+                z.finish().unwrap();
+            }
+            manifest_id_from_bytes(&buf.into_inner())
+        };
+        assert_eq!(toml("id = 'lit_id'\n").as_deref(), Some("lit_id"));
+        assert_eq!(toml("id = \"x\" # the id\n").as_deref(), Some("x"));
+        assert_eq!(toml("name = \"n\"\n[native]\nid = \"inner\"\n"), None);
     }
 
     #[test]
@@ -369,6 +439,8 @@ mod tests {
         assert!(is_enabled(&dir, "flesh_to_leather"));
         assert_eq!(search(&dir, "leather", "mod", "relevance", 0)["hits"][0]["installed"], true);
         assert!(install(&dir, "zoom").unwrap_err().contains("native Rust mod"));
+        // A signed project: its minisign signature is checked against the author's key.
+        assert!(install(&dir, "compass_bar").is_ok());
         assert!(install(&dir, "notenoughanimations").is_err()); // taken down by the registry
         let _ = fs::remove_dir_all(&dir);
     }

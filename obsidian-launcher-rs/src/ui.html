@@ -1154,7 +1154,7 @@
         <div class="sec col hidden" data-sec="hud" style="gap:12px">
           <div class="set-group">
             <div class="set-row" data-k="lumoshud hud fps cps keystrokes coordinates overlay">
-              <div class="txt"><b>Enable LumosHUD</b><span>Built-in overlay for Fabric 1.21.11: FPS, CPS, coordinates + facing and keystrokes. Synced into the instance's mods folder on launch.</span></div>
+              <div class="txt"><b>Enable LumosHUD</b><span>Built-in overlay for Fabric 1.21.x: FPS, CPS, coordinates + facing and keystrokes. Synced into the instance's mods folder on launch.</span></div>
               <label class="switch"><input type="checkbox" id="setHud" aria-label="Enable LumosHUD" /><span></span></label>
             </div>
             <div class="set-row" data-k="controller gamepad xbox playstation pad horizon cursor pointer">
@@ -1748,8 +1748,8 @@
     $('heroLoaderChip').stableHTML = icon('box') + esc(m.label || m.loader);
     $('metaRam').stableHTML = icon('cpu') + fmtGb(state.memoryMb || 0);
     $('metaRes').stableHTML = icon('monitor') + (state.fullscreen ? 'Fullscreen' : `${state.resolutionWidth}×${state.resolutionHeight}`);
-    const hudLive = state.lumosHudEnabled !== false && /fabric/i.test(state.selectedVersion) && /1\.21\.11/.test(state.selectedVersion);
-    $('metaHud').stableHTML = icon('hud') + (state.lumosHudEnabled === false ? 'LumosHUD off' : hudLive ? 'LumosHUD on' : 'LumosHUD (Fabric 1.21.11 only)');
+    const hudLive = state.lumosHudEnabled !== false && /^Fabric 1\.21(\.\d+)?$/.test(state.selectedVersion);
+    $('metaHud').stableHTML = icon('hud') + (state.lumosHudEnabled === false ? 'LumosHUD off' : hudLive ? 'LumosHUD on' : 'LumosHUD (Fabric 1.21.x only)');
     $('horizonBanner').classList.toggle('hidden', !horizonFirstRun() || busy());
 
     // Quick play: instances (switch) + servers (join)
@@ -1870,7 +1870,11 @@
     $('contentList').classList.toggle('hidden', on);
     $('contentTools').classList.toggle('hidden', on);
     document.querySelector('#libDetail .drop-hint').classList.toggle('hidden', on);
-    if (on) renderInstSettings(true);
+    if (on) {
+      ui.instSettingsFor = state.activeProfileId; ui.instSettingsFill = false;
+      $('isSaved').textContent = '';
+      renderInstSettings(true);
+    }
   }
   function renderInstSettings(fill) {
     const p = activeProfile();
@@ -1878,8 +1882,12 @@
     const only = (state.profiles || []).length <= 1;
     $('isDelHint').textContent = only ? 'This is your only instance. Make another one before deleting this one.'
       : `Removes it from LumosClient. Its folder (worlds, mods, screenshots) goes to the ${TRASH}, so you can get it back.`;
-    if (!fill) return;
     const gMem = state.memoryMb || 4096;
+    if (!fill) {
+      if ($('isMem').options[0]) $('isMem').options[0].textContent = `Launcher default (${fmtGb(gMem)})`;
+      if (!$('isResOwn').checked && $('isFs').value === '') $('isResHint').textContent = `Launcher default (${state.resolutionWidth}×${state.resolutionHeight})`;
+      return;
+    }
     const opts = [[ '', `Launcher default (${fmtGb(gMem)})` ], ...[2048, 3072, 4096, 6144, 8192, 12288, 16384].filter(m => !state.systemMemoryMb || m <= state.systemMemoryMb).map(m => [String(m), fmtGb(m)])];
     $('isMem').innerHTML = opts.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('');
     $('isMem').value = p.memoryMb ? String(p.memoryMb) : '';
@@ -1893,7 +1901,6 @@
     $('isFs').value = p.fullscreen === true ? 'true' : p.fullscreen === false ? 'false' : '';
     $('isResHint').textContent = ownRes || typeof p.fullscreen === 'boolean' ? 'Own setting' : `Launcher default (${state.resolutionWidth}×${state.resolutionHeight})`;
     $('isJvm').value = p.jvmArgs ?? '';
-    $('isSaved').textContent = '';
   }
   function saveInstSettings(reset) {
     const own = $('isResOwn').checked && !reset;
@@ -2025,7 +2032,8 @@
     }
     $('modResults').innerHTML = items.map(m => {
       const slug = m.slug || m.project_id;
-      const done = m.installed === true || !!(ui.installed[state.activeProfileId] && ui.installed[state.activeProfileId].has(slug));
+      // The backend reads the instance's folder: trust it; this session's installs fill in otherwise.
+      const done = typeof m.installed === 'boolean' ? m.installed : !!(ui.installed[state.activeProfileId] && ui.installed[state.activeProfileId].has(slug));
       const viewUrl = m.view_url || `https://modrinth.com/${m.project_type}/${slug}`;
       const action = m.native
         ? `<button class="btn sm" disabled title="Native Rust mods are compiled on your PC against an official Horizon release. Lumos can't do that yet.">${icon('engine')}Native mod</button>`
@@ -2404,7 +2412,7 @@
   // ───────────────────────── Event wiring ─────────────────────────
   const armed = new WeakMap(); // two-step confirm for destructive buttons
   function confirmClick(btn, label) {
-    if (armed.get(btn)) return true;
+    if (armed.get(btn)) { armed.delete(btn); return true; }
     const prev = btn.innerHTML;
     armed.set(btn, true); btn.innerHTML = label; btn.classList.add('danger');
     setTimeout(() => { armed.delete(btn); if (btn.isConnected) btn.innerHTML = prev; }, 2600);
@@ -2448,8 +2456,9 @@
       case 'inst-reset': saveInstSettings(true); break;
       case 'instance-settings':
         e.stopPropagation(); selectProfile(d.id); go('library');
+        showLibDetail(true);
         document.querySelectorAll('#contentSeg button').forEach(x => x.classList.toggle('active', x.dataset.kind === 'settings'));
-        showLibDetail(true); showInstSettings(true); break;
+        showInstSettings(true); break;
       case 'delete-instance':
         if ((state.profiles || []).length <= 1) { toast('You need at least one instance.', 'err'); break; }
         if (!confirmClick(el, icon('trash') + 'Click again')) break;

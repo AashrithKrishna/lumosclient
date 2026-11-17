@@ -422,6 +422,13 @@ fn list_content_json(game_dir: &Path, kind: &str, profile_id: &str, horizon: boo
                 if horizon_mods && mod_id.is_none() && !meta.as_ref().is_some_and(|m| m.is_dir()) {
                     continue; // not a Horizon mod (e.g. a stray file)
                 }
+                // A file Horizon's registry took down is switched off, with the reason shown.
+                let revoked = mod_id.as_ref().and_then(|id| horizon_mods::revoked_reason(id, &entry.path()));
+                if let (Some(id), Some(_)) = (&mod_id, &revoked) {
+                    if horizon_mods::is_enabled(game_dir, id) {
+                        let _ = horizon_mods::set_enabled(game_dir, id, false);
+                    }
+                }
                 let enabled = match &mod_id {
                     Some(id) => horizon_mods::is_enabled(game_dir, id),
                     None => !name.ends_with(".disabled"),
@@ -429,6 +436,7 @@ fn list_content_json(game_dir: &Path, kind: &str, profile_id: &str, horizon: boo
                 items.push(json!({
                     "file": name,
                     "enabled": enabled,
+                    "revoked": revoked,
                     "isDir": meta.as_ref().map(|m| m.is_dir()).unwrap_or(false),
                     "size": meta.as_ref().map(|m| m.len()).unwrap_or(0),
                     "modified": modified,
@@ -1128,12 +1136,18 @@ fn migrate_legacy_names(config: &mut LauncherConfig) {
     }
 }
 
+/// LumosHUD hooks Fabric's stable (intermediary) names, the same in every 1.21.x, and is built
+/// for Java 21, which every 1.21.x runs on.
+fn hud_supported(version: &str) -> bool {
+    matches!(installer::parse_spec(version), installer::Spec::Fabric(mc) if mc == "1.21" || mc.starts_with("1.21."))
+}
+
 fn sync_lumos_hud(game_dir: &Path, version: &str, enabled: bool) {
     let mods_dir = game_dir.join("mods");
     // Earlier builds shipped the HUD under its old name; two copies would draw it twice.
     let _ = fs::remove_file(mods_dir.join(LEGACY_HUD_JAR));
     let dest = mods_dir.join("lumoshud-1.21.11.jar");
-    let wants = enabled && version.contains("Fabric") && version.contains("1.21.11");
+    let wants = enabled && hud_supported(version);
     if wants {
         if let Some(src) = bundled_hud() {
             let _ = fs::create_dir_all(&mods_dir);
@@ -1324,6 +1338,20 @@ fn search_modrinth_async(proxy: EventLoopProxy<UserEvent>, paths: installer::Pat
             Ok(_) => json!({"hits": [], "total_hits": 0, "error": "Modrinth sent an answer LumosClient couldn't read."}),
             Err(e) => json!({"hits": [], "total_hits": 0, "error": e}),
         };
+        // Mark what this instance already has, from the files in its folder (switched-off ones
+        // count), so Discover shows Installed after a restart or for files copied in by hand.
+        let folder = match project_type.as_str() {
+            "resourcepack" => "resourcepacks",
+            "shader" => "shaderpacks",
+            _ => "mods",
+        };
+        let installed = installed_projects_cached(&game_dir.join(folder));
+        if let Some(hits) = payload.get_mut("hits").and_then(|h| h.as_array_mut()) {
+            for hit in hits {
+                let on = hit.get("project_id").and_then(|p| p.as_str()).is_some_and(|p| installed.contains_key(p));
+                hit["installed"] = json!(on);
+            }
+        }
         payload["seq"] = json!(seq);
         call_js(&proxy, "renderModResults", payload);
     });
@@ -1376,6 +1404,8 @@ fn import_content(game_dir: &Path, kind: &str, file: &str, data_b64: &str, horiz
     // The new file replaces a switched-off copy of the same name (only once it's safely saved).
     let _ = fs::remove_file(dir.join(format!("{file}.disabled")));
     if let Some(id) = horizon_id {
+        // An older copy of the same mod would stop Horizon from loading mods.
+        horizon_mods::remove_other_copies(&dir, &id, file);
         horizon_mods::set_enabled(game_dir, &id, true)?;
     }
     Ok(())
@@ -1447,6 +1477,33 @@ fn jar_matches_fabric_loader(jar_path: &Path, installed_loader: Option<(u64, u64
         Some(serde_json::Value::Array(reqs)) => reqs.iter().filter_map(|r| r.as_str()).any(|r| satisfies_loader_req(r, installed)),
         _ => true,
     }
+}
+
+/// [`installed_projects`], remembered per folder until a file in it is added, removed, renamed or
+/// changed, so Discover can mark what's installed on every search without hashing again.
+fn installed_projects_cached(dir: &Path) -> HashMap<String, String> {
+    type Seen = HashMap<PathBuf, (Vec<(String, u64, u128)>, HashMap<String, String>)>;
+    static CACHE: Mutex<Option<Seen>> = Mutex::new(None);
+    let mut signature: Vec<(String, u64, u128)> = fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| {
+                    let m = e.metadata().ok()?;
+                    let mtime = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+                    Some((e.file_name().to_string_lossy().into_owned(), m.len(), mtime))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    signature.sort();
+    if let Some((sig, found)) = CACHE.lock().unwrap().as_ref().and_then(|c| c.get(dir)) {
+        if *sig == signature {
+            return found.clone();
+        }
+    }
+    let found = installed_projects(dir);
+    CACHE.lock().unwrap().get_or_insert_with(HashMap::new).insert(dir.to_path_buf(), (signature, found.clone()));
+    found
 }
 
 /// project_id → file name for jars/zips already in a content folder, asked from Modrinth by hash.
@@ -1908,7 +1965,8 @@ fn main() {
                         let base = ipc_state.lock().unwrap().base_dir.clone();
                         match move_to_trash(&base, &src, &file) {
                             Ok(_) => {
-                                if let Some(id) = &mod_id {
+                                // Keep the switch while another copy of the same mod is still there.
+                                if let Some(id) = mod_id.as_ref().filter(|id| !horizon_mods::other_copy_exists(&game_dir.join(folder), id, &file)) {
                                     let _ = horizon_mods::forget(&game_dir, id);
                                 }
                                 call_js(&ipc_proxy, "onNotice", json!({"message": format!("Moved {file} to {TRASH_NAME}"), "kind": "info"}))
@@ -2036,11 +2094,14 @@ fn main() {
                 }
                 "refresh_versions" => refresh_catalog_async(ipc_proxy.clone(), ipc_state.clone()),
                 "search_modrinth" => {
-                    let (selected, paths, game_dir) = {
+                    let (target, paths) = {
                         let st = ipc_state.lock().unwrap();
-                        let t = st.target_instance(&text("profileId"));
-                        let ver = t.as_ref().map(|t| t.2.clone()).unwrap_or_else(|| st.config.selected_version.clone());
-                        (ver, st.paths.clone(), t.map(|t| t.1).unwrap_or_else(|| st.active_game_dir()))
+                        (st.target_instance(&text("profileId")), st.paths.clone())
+                    };
+                    let Some((_, game_dir, selected)) = target else {
+                        let seq = v.get("seq").and_then(|x| x.as_u64()).unwrap_or(0);
+                        call_js(&ipc_proxy, "renderModResults", json!({"hits": [], "total_hits": 0, "error": GONE_INSTANCE, "seq": seq}));
+                        return;
                     };
                     search_modrinth_async(
                         ipc_proxy.clone(),
@@ -2344,6 +2405,12 @@ mod tests {
         // Unset overrides aren't written back out.
         let saved = serde_json::to_value(Profile { id: "b".into(), ..Default::default() }).unwrap();
         assert!(saved.get("memoryMb").is_none() && saved.get("jvmArgs").is_none());
+    }
+
+    #[test]
+    fn lumoshud_goes_into_every_fabric_1_21() {
+        assert!(hud_supported("Fabric 1.21.11") && hud_supported("Fabric 1.21") && hud_supported("Fabric 1.21.4"));
+        assert!(!hud_supported("1.21.11") && !hud_supported("Fabric 1.20.1") && !hud_supported("Horizon 26.3 (Rust)"));
     }
 
     #[test]

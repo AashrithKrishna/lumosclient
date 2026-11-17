@@ -1645,6 +1645,56 @@ mod tests {
         assert!(out.contains("Loading Minecraft") || out.contains("Fabric Loader") || out.contains("Setting user"), "no boot markers in log");
     }
 
+    /// Live: plays a copy of a world with only LumosHUD installed and checks the HUD hooked in and
+    /// drew. Needs LUMOS_TEST_WORLD (a Fabric 1.21.11 world folder) and LUMOS_HUD_JAR. Run with --ignored.
+    #[test]
+    #[ignore]
+    fn live_lumoshud_in_world() {
+        let world = PathBuf::from(std::env::var("LUMOS_TEST_WORLD").expect("set LUMOS_TEST_WORLD"));
+        let hud = PathBuf::from(std::env::var("LUMOS_HUD_JAR").expect("set LUMOS_HUD_JAR"));
+        let root = std::env::temp_dir().join("lumos-live-install");
+        let paths = Paths::new(&root, None);
+        let (r, prep, java) = install(&paths, "Fabric 1.21.11", &|_: &str, _: f64| {}).expect("install");
+        let game_dir = root.join("hud-instance");
+        let _ = fs::remove_dir_all(&game_dir);
+        fs::create_dir_all(game_dir.join("mods")).unwrap();
+        fs::copy(&hud, game_dir.join("mods/lumoshud-1.21.11.jar")).unwrap();
+        let status = Command::new("cp").arg("-R").arg(&world).arg(game_dir.join("saves/HudTest")).status();
+        if status.map(|s| !s.success()).unwrap_or(true) {
+            fs::create_dir_all(game_dir.join("saves")).unwrap();
+            assert!(Command::new("cp").arg("-R").arg(&world).arg(game_dir.join("saves/HudTest")).status().unwrap().success());
+        }
+        let _ = fs::remove_file(game_dir.join("saves/HudTest/session.lock"));
+        let auth = Auth { name: "LumosTest".into(), uuid: "0123456789abcdef0123456789abcdef".into(), access_token: "0".into(), user_type: "legacy".into(), javaagent: None };
+        let o = LaunchOpts { memory_mb: 3072, extra_jvm: vec![], width: 854, height: 480, fullscreen: false, server: None, launcher_version: "test".into() };
+        let mut args = build_args(&r, &prep, &game_dir, &auth, &o);
+        args.extend(["--quickPlaySingleplayer".to_owned(), "HudTest".to_owned()]);
+        let log_path = root.join("hud.log");
+        let log = fs::File::create(&log_path).unwrap();
+        let mut child = Command::new(&java).args(&args).current_dir(&game_dir)
+            .stdout(log.try_clone().unwrap()).stderr(log).spawn().expect("spawn");
+        let started = Instant::now();
+        let mut out = String::new();
+        while started.elapsed() < Duration::from_secs(150) {
+            out = fs::read_to_string(&log_path).unwrap_or_default();
+            if out.contains("[LumosHUD] Ready") || out.contains("[LumosHUD] Can't") || out.contains("[LumosHUD] Drawing failed") {
+                std::thread::sleep(Duration::from_secs(4));
+                out = fs::read_to_string(&log_path).unwrap_or_default();
+                break;
+            }
+            if child.try_wait().unwrap().is_some() { break; }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        for l in out.lines().filter(|l| l.contains("LumosHUD") || l.contains("lumoshud") || l.contains("Mixin") && l.contains("WARN")) {
+            eprintln!("{l}");
+        }
+        assert!(!out.contains("was not found lumoshud"), "mixin target missing");
+        assert!(out.contains("[LumosHUD] Ready"), "HUD never drew");
+        assert!(!out.contains("[LumosHUD] Drawing failed") && !out.contains("[LumosHUD] Can't"), "HUD error");
+    }
+
     /// Live: installs vanilla 1.21.11 + Fabric + Java into a temp root (large download). Run with --ignored.
     #[test]
     #[ignore]

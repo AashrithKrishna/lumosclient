@@ -20,6 +20,7 @@ public final class LumosHudRenderer {
 
     private static boolean initAttempted = false;
     private static boolean ready = false;
+    private static boolean reportedDrawError = false;
     private static Method mcGetInstance;
     private static Method mcGetFps;
     private static Field mcFontField;
@@ -37,26 +38,33 @@ public final class LumosHudRenderer {
         if (initAttempted) return;
         initAttempted = true;
         try {
-            Class<?> mcCls = Class.forName("gfj");
-            Class<?> fontCls = Class.forName("gio");
-            Class<?> ctxCls = Class.forName("gir");
-            Class<?> entityCls = Class.forName("cgk");
+            // Fabric's intermediary names (stable across versions); see LumosHudMixin.
+            Class<?> mcCls = Class.forName("net.minecraft.class_310");      // MinecraftClient
+            Class<?> fontCls = Class.forName("net.minecraft.class_327");    // TextRenderer
+            Class<?> ctxCls = Class.forName("net.minecraft.class_332");     // DrawContext
+            Class<?> entityCls = Class.forName("net.minecraft.class_1297"); // Entity
 
-            mcGetInstance = mcCls.getDeclaredMethod("V");
-            mcGetFps = mcCls.getDeclaredMethod("s");
-            mcFontField = mcCls.getDeclaredField("g");
-            mcPlayerField = mcCls.getDeclaredField("s");
+            mcGetInstance = mcCls.getDeclaredMethod("method_1551");         // getInstance()
+            mcGetFps = mcCls.getDeclaredMethod("method_47599");             // getCurrentFps()
+            mcFontField = mcCls.getDeclaredField("field_1772");             // textRenderer
+            mcPlayerField = mcCls.getDeclaredField("field_1724");           // player
 
-            entityGetX = entityCls.getDeclaredMethod("dP");
-            entityGetY = entityCls.getDeclaredMethod("dR");
-            entityGetZ = entityCls.getDeclaredMethod("dV");
-            entityGetYaw = entityCls.getDeclaredMethod("ec");
+            entityGetX = entityCls.getDeclaredMethod("method_23317");       // getX()
+            entityGetY = entityCls.getDeclaredMethod("method_23318");       // getY()
+            entityGetZ = entityCls.getDeclaredMethod("method_23321");       // getZ()
+            entityGetYaw = entityCls.getDeclaredMethod("method_36454");     // getYaw()
 
-            ctxFill = ctxCls.getDeclaredMethod("a", int.class, int.class, int.class, int.class, int.class);
-            ctxDrawText = ctxCls.getDeclaredMethod("b", fontCls, String.class, int.class, int.class, int.class);
+            ctxFill = ctxCls.getDeclaredMethod("method_25294", int.class, int.class, int.class, int.class, int.class); // fill
+            ctxDrawText = ctxCls.getDeclaredMethod("method_25303", fontCls, String.class, int.class, int.class, int.class); // drawTextWithShadow
+            for (java.lang.reflect.AccessibleObject a : new java.lang.reflect.AccessibleObject[] {
+                    mcGetInstance, mcGetFps, mcFontField, mcPlayerField, entityGetX, entityGetY, entityGetZ, entityGetYaw, ctxFill, ctxDrawText }) {
+                a.setAccessible(true);
+            }
             ready = true;
-        } catch (Throwable ignored) {
+            System.out.println("[LumosHUD] Ready");
+        } catch (Throwable e) {
             ready = false;
+            System.err.println("[LumosHUD] Can't draw on this Minecraft version: " + e);
         }
     }
 
@@ -103,7 +111,12 @@ public final class LumosHudRenderer {
                 drawKey(ctx, font, kx + 33, ky + 44, 31, 16, "RMB", rightDown);
                 drawKey(ctx, font, kx, ky + 62, 64, 14, "SPACE", GLFW.glfwGetKey(win, GLFW.GLFW_KEY_SPACE) == GLFW.GLFW_PRESS);
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable e) {
+            if (!reportedDrawError) {
+                reportedDrawError = true;
+                System.err.println("[LumosHUD] Drawing failed: " + e);
+            }
+        }
     }
 
     private static void drawPill(Object ctx, Object font, int x, int y, String text, int color) throws Throwable {

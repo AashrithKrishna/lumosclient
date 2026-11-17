@@ -16,6 +16,7 @@ base64 = "0.22"
 sha1_smol = "1"
 sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+minisign-verify = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = "0.15"
