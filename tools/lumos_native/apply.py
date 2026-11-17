@@ -35,6 +35,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tool", required=True)
     ap.add_argument("--work", required=True)
+    ap.add_argument("--without-crates", action="store_true",
+                    help="leave out mods that bring their own Rust crates ([[crate]]): used when the full build failed")
     a = ap.parse_args()
     src = os.path.join(a.work, "src")
     mods = os.path.join(a.work, "mods")
@@ -42,6 +44,13 @@ def main():
     scratch = os.path.join(a.work, "scratch-stage")
     ids = sorted(os.listdir(mods))
     failed, good = {}, []
+    if a.without_crates:
+        for i in list(ids):
+            tomls = [os.path.join(r, f) for r, _, fs in os.walk(os.path.join(mods, i)) for f in fs if f == "horizon-mixin.toml"]
+            if any("[[crate]]" in open(t, encoding="utf-8", errors="ignore").read() for t in tomls):
+                ids.remove(i)
+                failed[i] = "its own Rust crate didn't compile with this Horizon version"
+                print(f"skip {i}: brings its own crate", file=sys.stderr)
     for i in ids:
         ok, why = apply(a.tool, src, [i], mods, scratch)
         (good.append(i) if ok else failed.__setitem__(i, why))

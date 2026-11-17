@@ -150,7 +150,15 @@ jobs:
           profile=release
           grep -q '^\[profile.fast\]' Cargo.toml && profile=fast
           export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/work/target"
-          cargo build --locked --profile "$profile" -p "$pkg" --bin horizon-client -p horizon-prepare --bin horizon-prepare
+          build() { cargo build --locked --profile "$profile" -p "$pkg" --bin horizon-client -p horizon-prepare --bin horizon-prepare; }
+          if ! build; then
+            # A mod's own crate (e.g. a voice-chat library) can fail to compile: build the group without those.
+            echo "::warning::full build failed; retrying without mods that bring their own crates"
+            tool=$GITHUB_WORKSPACE/tools-bin/bin/horizon-mixins; [ -x "$tool.exe" ] && tool="$tool.exe"
+            (cd "$GITHUB_WORKSPACE" && python tools/lumos_native/apply.py --tool "$tool" --work work --without-crates)
+            cat "$GITHUB_WORKSPACE/work/applied.json"
+            build
+          fi
           out="$CARGO_TARGET_DIR/$profile"
           mkdir -p "$GITHUB_WORKSPACE/work/bin"
           ext=""; [ "$RUNNER_OS" = Windows ] && ext=".exe"

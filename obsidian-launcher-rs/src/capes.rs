@@ -20,7 +20,7 @@ use crate::elyby::{ElySession, AUTH_BASE};
 /// Address of the deployed capes server, without a trailing slash. Empty until it is deployed
 /// (see capes-server/README.md); the launcher then says the capes server isn't set up yet.
 /// `LUMOS_CAPES_URL` in the environment overrides it (for trying a local `wrangler dev`).
-pub const LUMOS_CAPES_URL: &str = "";
+pub const LUMOS_CAPES_URL: &str = "https://lumos-capes.aa-hl-question-bank.workers.dev";
 
 /// The in-game mod's file name inside an instance's mods folder.
 pub const MOD_JAR: &str = "lumoscapes-1.21.11.jar";
@@ -243,7 +243,8 @@ pub fn sync_mod(game_dir: &Path, version: &str, enabled: bool, bundled: Option<&
     let mods_dir = game_dir.join("mods");
     let dest = mods_dir.join(MOD_JAR);
     match (enabled && mod_supported(version), bundled, base) {
-        (true, Some(src), Some(base)) => {
+        // A copy the player switched off (e.g. from the crash card) stays off.
+        (true, Some(src), Some(base)) if !mods_dir.join(format!("{MOD_JAR}.disabled")).exists() => {
             let _ = fs::create_dir_all(&mods_dir);
             fs::copy(src, &dest).ok()?;
             Some(format!("-D{URL_PROPERTY}={base}"))

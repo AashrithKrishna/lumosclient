@@ -975,6 +975,8 @@ fn spawn_streaming_exe(
                 let retry = lock(&s).horizon_retry.take();
                 if let Some(r) = retry {
                     push_log(&p, "[Horizon] The engine stopped while starting (a known startup hiccup). Starting it again…");
+                    // The crash explainer judges the new run only, not the first run's panic.
+                    crash_help::begin_session();
                     if spawn_streaming_exe(&p, &s, &r.exe, &r.args, &r.cwd, &[], Some(r.session)).is_ok() {
                         break;
                     }
@@ -1199,6 +1201,10 @@ fn sync_lumos_hud(game_dir: &Path, version: &str, enabled: bool) {
         }
     }
     if let (Some(name), Some(mc)) = (want, hud_mc(version)) {
+        // A copy the player switched off (e.g. from the crash card) stays off.
+        if mods_dir.join(format!("{name}.disabled")).exists() {
+            return;
+        }
         if let Some(src) = bundled_hud(&mc) {
             let _ = fs::create_dir_all(&mods_dir);
             let _ = fs::copy(src, mods_dir.join(name));

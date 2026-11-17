@@ -1566,7 +1566,7 @@
     return { loader: 'Vanilla', cls: 'vanilla', mc: mc || s };
   }
   // Mirrors extract_mc_version() in main.rs: the game version Modrinth results are filtered for.
-  function modFilterVersion(v) { const s = String(v || ''); return s.includes('26.3') ? '1.21.11' : (s.trim().split(/\s+/).pop() || '1.21.11'); }
+  function modFilterVersion(v) { const s = String(v || ''); return /horizon/i.test(s) ? '26.3' : (s.trim().split(/\s+/).pop() || '1.21.11'); }
   // The loader Discover filters mods for (mirrors mod_loader() in main.rs; Fabric when there's none).
   function modLoaderName(v) { const m = verMeta(v); return ['vanilla', 'horizon'].includes(m.cls) ? 'Fabric' : m.loader; }
   function loaderChip(v) { const m = verMeta(v); return `<span class="chip loader-${m.cls}">${icon('box')}${esc(m.loader)}</span>`; }
@@ -1943,6 +1943,8 @@
     const p = activeProfile();
     $('isVersion').textContent = profVersion(p);
     $('isBoostRow').classList.toggle('hidden', !/^Fabric /.test(profVersion(p)));
+    // The HUD card depends on the version (LumosHUD for Fabric, Horizon's own for 26.3): reload when it changes.
+    if (ui.hudFor !== state.activeProfileId + '|' + profVersion(p)) { ui.hudFor = state.activeProfileId + '|' + profVersion(p); if (!fill) hudLoad(); }
     const only = (state.profiles || []).length <= 1;
     $('isDelHint').textContent = only ? 'This is your only instance. Make another one before deleting this one.'
       : `Removes it from LumosClient. Its folder (worlds, mods, screenshots) goes to the ${TRASH}, so you can get it back.`;

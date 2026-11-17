@@ -56,6 +56,8 @@ fn kinds_for(tab: &str) -> &'static [&'static str] {
     match tab {
         "shader" => &["shader"],
         "resourcepack" => &["resourcepack"],
+        // Horizon's registry has modpacks (.hpack) Lumos doesn't install yet.
+        "modpack" => &[],
         _ => &["mod", "native-mod"],
     }
 }

@@ -10,7 +10,7 @@ directory = "./public"
 # Replace the id below with the one `npx wrangler kv namespace create CAPES` prints.
 [[kv_namespaces]]
 binding = "CAPES"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "f212e6b047914071b6b1df58c390d192"
 
 # Free rate limiting: at most 10 cape changes per minute from one address.
 [[ratelimits]]
