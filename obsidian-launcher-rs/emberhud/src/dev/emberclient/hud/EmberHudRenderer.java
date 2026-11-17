@@ -87,7 +87,7 @@ public final class EmberHudRenderer {
             int z = (int) Math.floor((double) entityGetZ.invoke(player));
             String dir = facing((float) entityGetYaw.invoke(player));
 
-            drawPill(ctx, font, 8, 8, "EMBERCLIENT", EMBER);
+            drawPill(ctx, font, 8, 8, "LUMOS", EMBER);
             drawPill(ctx, font, 8, 26, "FPS: " + fps, GREEN);
             drawPill(ctx, font, 8, 44, "CPS: " + leftClicks.size() + " | " + rightClicks.size(), TEXT);
             drawPill(ctx, font, 8, 62, "XYZ: " + x + ", " + y + ", " + z + " (" + dir + ")", TEXT);

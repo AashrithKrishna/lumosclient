@@ -599,6 +599,12 @@ impl Game<'_> {
         self.build_screen();
     }
 
+    /// Waits for the background world-resource load and applies it. For callers outside the
+    /// world module that read `Resources.rest` during startup (see `publish_initial_client_models`).
+    pub(in crate::game) fn ensure_world_rest(&mut self) -> Result<()> {
+        self.join_world_rest()
+    }
+
     pub(super) fn join_world_rest(&mut self) -> Result<()> {
         if self.rest_loader.is_some() {
             let waited = Instant::now();
