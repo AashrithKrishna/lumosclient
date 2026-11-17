@@ -1,5 +1,5 @@
 # Builds every Lumos Client download and attaches them to a draft GitHub release "v<version>":
-#   Lumos-macOS-universal.dmg  one Lumos.app for Apple silicon and Intel Macs (arm64 + x86_64 joined with lipo)
+#   Lumos.dmg                  one Lumos.app for Apple silicon and Intel Macs (arm64 + x86_64 joined with lipo)
 #   Lumos-Linux-x86_64.tar.gz  built on Ubuntu 22.04 (glibc 2.35), with a desktop entry installer
 #   Lumos-Windows-x64.zip      the "lumos windows" workflow's build, packaged by package_windows.sh
 # The platform-independent parts are made once on Linux: Horizon's compiled exporters (from the pinned
@@ -132,11 +132,11 @@ jobs:
           cp common/lumoshud-*.jar obsidian-launcher-rs/lumoshud/
           cp common/authlib-injector-1.2.8.jar .local/vendor/
           obsidian-launcher-rs/build_app.sh --prebuilt universal
-          mv dist/Lumos.dmg dist/Lumos-macOS-universal.dmg
+          ls -l dist/Lumos.dmg  # this name: the updater looks for Lumos.dmg
       - uses: actions/upload-artifact@v7
         with:
           name: lumos-macos
-          path: dist/Lumos-macOS-universal.dmg
+          path: dist/Lumos.dmg
           if-no-files-found: error
           retention-days: 14
 
@@ -261,8 +261,8 @@ jobs:
         run: |
           v="${VERSION#v}"
           mkdir -p upload
-          cp in/lumos-macos/Lumos-macOS-universal.dmg in/lumos-linux/Lumos-Linux-x86_64.tar.gz dist/Lumos-Windows-x64.zip upload/
-          (cd upload && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          cp in/lumos-macos/Lumos.dmg in/lumos-linux/Lumos-Linux-x86_64.tar.gz dist/Lumos-Windows-x64.zip upload/
+          (cd upload && sha256sum * > SHA256SUMS && cat SHA256SUMS)
           gh release create "v$v" upload/* -R "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
             --title "Lumos Client $v" \
             --notes "Lumos Client $v for Mac (Apple silicon and Intel), Windows x64 and Linux x86_64. See the README for how to install each one."
