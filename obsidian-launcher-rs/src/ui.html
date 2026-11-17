@@ -585,9 +585,10 @@
   .new-inst { width: min(460px, calc(100vw - 80px)); padding: 22px; display: flex; flex-direction: column; gap: 16px; }
   .new-inst h2 { font-size: 18px; font-weight: 750; }
 
-  .toasts { position: fixed; right: 20px; bottom: 20px; z-index: 100; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }
+  /* Top right, under the header: clear of Discover's paging and every bottom-row button; clicks pass through. */
+  .toasts { position: fixed; right: 20px; top: 70px; z-index: 100; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }
   .toast {
-    pointer-events: auto; display: flex; align-items: center; gap: 10px; max-width: 380px; padding: 11px 14px; border-radius: 12px;
+    pointer-events: none; display: flex; align-items: center; gap: 10px; max-width: 380px; padding: 11px 14px; border-radius: 12px;
     background: var(--bg-3); border: 1px solid var(--line-2); box-shadow: var(--shadow); font-weight: 600; font-size: 12.5px;
     animation: toastIn .22s var(--ease);
   }
@@ -1591,12 +1592,26 @@
   // ───────────────────────── Toasts ─────────────────────────
   function toast(msg, kind = 'ok') {
     const box = $('toasts');
+    // Several installs finishing close together become one notice ("Installed A, B and 3 more").
+    const m = kind === 'ok' && /^Installed (.+?)(?: \(| \+|$)/.exec(msg);
+    if (m) {
+      const g = ui.installToast;
+      if (g && g.el.isConnected && Date.now() - g.at < 6000) {
+        g.names.push(m[1]); g.at = Date.now();
+        const n = g.names;
+        g.el.querySelector('span').textContent = n.length <= 3 ? `Installed ${n.join(', ')}` : `Installed ${n.slice(0, 2).join(', ')} and ${n.length - 2} more`;
+        clearTimeout(g.timer);
+        g.timer = setTimeout(() => { g.el.style.transition = 'opacity .25s'; g.el.style.opacity = '0'; setTimeout(() => g.el.remove(), 260); }, 3800);
+        return;
+      }
+    }
     const el = document.createElement('div');
     el.className = 'toast ' + kind;
     el.innerHTML = `${icon(kind === 'err' ? 'alert' : kind === 'info' ? 'info' : 'check', '')}<span>${esc(msg)}</span>`;
     box.appendChild(el);
-    while (box.children.length > 4) box.firstChild.remove();
-    setTimeout(() => { el.style.transition = 'opacity .25s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 260); }, 3800);
+    while (box.children.length > 3) box.firstChild.remove();
+    const timer = setTimeout(() => { el.style.transition = 'opacity .25s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 260); }, 3800);
+    if (m) ui.installToast = { el, names: [m[1]], at: Date.now(), timer };
   }
 
   // ───────────────────────── Navigation ─────────────────────────
@@ -2184,9 +2199,15 @@
   function skeletonRows(n, h = 64) {
     return Array.from({ length: n }, () => `<div class="row" style="padding:12px;gap:14px"><div class="skeleton" style="width:${h}px;height:${h}px;border-radius:12px"></div><div class="col" style="flex:1;gap:8px"><div class="skeleton" style="height:13px;width:40%"></div><div class="skeleton" style="height:11px;width:85%"></div></div></div>`).join('');
   }
-  function searchMods() {
+  function searchMods(force) {
+    const q = { profileId: state.activeProfileId, query: $('modQuery').value.trim(), projectType: ui.modType, sortBy: $('modSort').value, offset: ui.modOffset };
+    // The same search twice in a row (typing pause, then Enter or leaving the box) runs once:
+    // the results stay put instead of flashing back to loading.
+    const key = JSON.stringify(q);
+    if (!force && key === ui.lastSearchKey) return;
+    ui.lastSearchKey = key;
     $('modResults').innerHTML = `<div class="card">${skeletonRows(5)}</div>`;
-    send('search_modrinth', { profileId: state.activeProfileId, query: $('modQuery').value.trim(), projectType: ui.modType, sortBy: $('modSort').value, offset: ui.modOffset, seq: ++ui.modSeq });
+    send('search_modrinth', { ...q, seq: ++ui.modSeq });
   }
   window.renderModResults = function (data) {
     if (typeof data.seq === 'number' && data.seq !== ui.modSeq) return; // an older search finished late
@@ -2704,7 +2725,7 @@
       case 'ely-logout': send('ely_logout'); ui.skin = null; ui.acctTab = 'elyby'; toast('Signed out of Ely.by'); break;
       case 'open-ely': send('open_ely', { path: d.url || '' }); break;
       case 'skin-refresh': send('refresh_skin'); toast('Refreshing your skin…', 'info'); break;
-      case 'mod-retry': searchMods(); break;
+      case 'mod-retry': searchMods(true); break;
       case 'refresh-versions': e.stopPropagation(); send('refresh_versions'); toast('Checking for versions…', 'info'); break;
     }
   });
