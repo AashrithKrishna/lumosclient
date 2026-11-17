@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import dev.lumosclient.hud.core.Theme;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -20,6 +21,12 @@ import java.nio.file.StandardCopyOption;
  *   "version": 1,
  *   "editorKey": "key.keyboard.right.shift",   // Minecraft key name (as options.txt), opens the editor
  *   "snapping": true,                          // editor snaps to screen edges and other modules
+ *   "theme": {                                 // how modules are drawn (core/Theme.java)
+ *     "style": "lunar",                        // lunar (rounded panels, icons) | minimal (flat, text only)
+ *     "accent": "#FF6B2C",                     // pressed keys, icon highlights, the editor
+ *     "cornerRadius": 3,                       // 0 – 6
+ *     "panelOpacity": 45                       // percent; the default for modules' backgroundOpacity
+ *   },
  *   "modules": {
  *     "&lt;id&gt;": {                                 // fps, cps, keystrokes, coordinates, direction, biome,
  *                                                // armor, potions, ping, clock, server, day, speed,
@@ -33,8 +40,9 @@ import java.nio.file.StandardCopyOption;
  *       "textColor": "#FFFFFF",                  // #RRGGBB or #AARRGGBB
  *       "background": true,
  *       "backgroundColor": "#000000",
- *       "backgroundOpacity": 45,                 // percent, 0 – 100
+ *       "backgroundOpacity": 45,                 // percent, 0 – 100 (theme.panelOpacity when missing)
  *       "shadow": true,                          // text shadow
+ *       "icon": true,                            // Lunar style: the module's icon
  *       ...                                      // module options, e.g. "showLabel", "format24h"
  *     }
  *   }
@@ -113,6 +121,34 @@ public final class HudConfig {
 
     public synchronized void setSnapping(boolean on) {
         root.addProperty("snapping", on);
+    }
+
+    private JsonObject cachedThemeSrc;
+    private String cachedThemeJson;
+    private Theme cachedTheme = Theme.DEFAULT;
+
+    /** The "theme" object, read once per change (modules ask for it every frame). */
+    public synchronized Theme theme() {
+        JsonObject t = root.has("theme") && root.get("theme").isJsonObject() ? root.getAsJsonObject("theme") : null;
+        if (t == null) return Theme.DEFAULT;
+        String key = t.toString();
+        if (t != cachedThemeSrc || !key.equals(cachedThemeJson)) {
+            cachedThemeSrc = t;
+            cachedThemeJson = key;
+            cachedTheme = Theme.of(str(t, "style", null), str(t, "accent", null),
+                num(t, "cornerRadius", Double.NaN), num(t, "panelOpacity", Double.NaN));
+        }
+        return cachedTheme;
+    }
+
+    /** Sets one "theme" key (the editor's Style button). */
+    public synchronized void setTheme(String key, String value) {
+        JsonObject t = root.has("theme") && root.get("theme").isJsonObject() ? root.getAsJsonObject("theme") : null;
+        if (t == null) {
+            t = new JsonObject();
+            root.add("theme", t);
+        }
+        t.addProperty(key, value);
     }
 
     /** The module's own object, created when missing. */

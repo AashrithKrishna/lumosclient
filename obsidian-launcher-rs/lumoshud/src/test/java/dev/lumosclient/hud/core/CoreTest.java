@@ -98,4 +98,108 @@ class CoreTest {
         assertEquals(1, c.perSecond(1600));
         assertEquals(0, c.perSecond(5000));
     }
+
+    @Test
+    void iconsAreNineByNineWithKnownColours() throws Exception {
+        for (var f : Icons.class.getFields()) {
+            if (f.getType() != char[][].class) continue;
+            char[][] g = (char[][]) f.get(null);
+            assertEquals(Icons.SIZE, g.length, f.getName());
+            for (char[] row : g) {
+                assertEquals(Icons.SIZE, row.length, f.getName());
+                for (char ch : row) assertTrue(".#da".indexOf(ch) >= 0 || Icons.color(ch) != 0, f.getName() + ": " + ch);
+            }
+        }
+    }
+
+    @Test
+    void compassNeedlePointsTheWayThePlayerFaces() {
+        // The tip is just inside the ring.
+        assertEquals('a', Icons.compass(180)[1][4]);   // north: up
+        assertEquals('a', Icons.compass(0)[7][4]);     // south: down
+        assertEquals('a', Icons.compass(90)[4][1]);    // west: left
+        assertEquals('a', Icons.compass(-90)[4][7]);   // east: right
+        assertEquals('#', Icons.compass(180)[5][4]);   // the tail
+    }
+
+    @Test
+    void signalBarsFollowLatency() {
+        assertEquals(4, Icons.signalBars(20));
+        assertEquals(3, Icons.signalBars(120));
+        assertEquals(2, Icons.signalBars(250));
+        assertEquals(1, Icons.signalBars(900));
+        char[][] g = Icons.signal(250);
+        assertEquals('O', g[8][1]);
+        assertEquals('d', g[8][7]);
+        assertEquals('.', g[0][1]);
+    }
+
+    /** Every pixel of the rounded shape is covered exactly once; the corners are cut. */
+    @Test
+    void roundedPanelsCoverTheirShapeOnce() {
+        for (int r = 0; r <= 6; r++) {
+            for (boolean border : new boolean[] {true, false}) {
+                int w = 40, h = 17;
+                int[][] hits = new int[h][w];
+                int borderPx = 0;
+                for (Shapes.Run run : Shapes.panel(w, h, r, border)) {
+                    for (int y = run.y0(); y < run.y1(); y++) {
+                        for (int x = run.x0(); x < run.x1(); x++) {
+                            hits[y][x]++;
+                            if (run.kind() == Shapes.BORDER) borderPx++;
+                        }
+                    }
+                }
+                for (int[] row : hits) for (int v : row) assertTrue(v <= 1, "overlap at r=" + r);
+                assertEquals(r == 0 ? 1 : 0, hits[0][0], "corner at r=" + r);
+                assertEquals(1, hits[h / 2][0], "left edge at r=" + r);
+                assertEquals(1, hits[h / 2][w / 2], "middle at r=" + r);
+                if (border) assertTrue(borderPx >= 2 * (w + h) - 8 - 4 * r, "ring at r=" + r);
+                else assertEquals(0, borderPx);
+                // Symmetric left/right and top/bottom.
+                for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+                    assertEquals(hits[y][x], hits[y][w - 1 - x]);
+                    assertEquals(hits[y][x], hits[h - 1 - y][x]);
+                }
+            }
+        }
+        assertEquals(3, Shapes.panel(30, 17, 3, true).stream().filter(x -> x.y0() <= 8 && 8 < x.y1()).count());
+        assertTrue(Shapes.panel(0, 10, 3, true).isEmpty());
+        assertFalse(Shapes.panel(3, 3, 6, true).isEmpty());
+    }
+
+    @Test
+    void keyGlowRisesFastAndFadesBack() {
+        float t = Shapes.approach(0, 1, 16, 35, 200);
+        assertTrue(t > 0.4f && t < 0.5f);
+        assertEquals(1f, Shapes.approach(t, 1, 100, 35, 200));
+        assertEquals(0.92f, Shapes.approach(1, 0, 16, 35, 200), 1e-6);
+        assertEquals(0f, Shapes.approach(0.1f, 0, 1000, 35, 200));
+        assertEquals(0.5f, Shapes.approach(0.5f, 1, 0, 35, 200));
+    }
+
+    @Test
+    void themeDefaultsAndClamps() {
+        Theme d = Theme.of(null, null, Double.NaN, Double.NaN);
+        assertEquals(Theme.DEFAULT, d);
+        assertTrue(d.lunar());
+        assertEquals(0xFFFF6B2C, d.accent());
+        Theme t = Theme.of("Minimal", "#00AAFF", 99, -5);
+        assertFalse(t.lunar());
+        assertEquals("minimal", t.style());
+        assertEquals(0xFF00AAFF, t.accent());
+        assertEquals(Theme.MAX_RADIUS, t.radius());
+        assertEquals(0, t.panelOpacity());
+        assertTrue(Theme.of("anything else", "nope", 2.4, 60).lunar());
+        assertEquals(Theme.DEFAULT_ACCENT, Theme.of("lunar", "nope", 2, 60).accent());
+    }
+
+    @Test
+    void colourBlending() {
+        assertEquals(0xFF808080, Colors.lerp(0xFF000000, 0xFFFFFFFF, 0.5f));
+        assertEquals(0xFFFF6B2C, Colors.lerp(0x00000000, 0xFFFF6B2C, 1f));
+        assertEquals(0x00000000, Colors.lerp(0x00000000, 0xFFFF6B2C, 0f));
+        assertEquals(0x80FFFFFF, Colors.fade(0xFFFFFFFF, 0.5f));
+        assertEquals(0x00FFFFFF, Colors.fade(0xFFFFFFFF, 0f));
+    }
 }

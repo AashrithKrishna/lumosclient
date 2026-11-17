@@ -32,4 +32,21 @@ public final class Colors {
     public static int opaque(int argb) {
         return (argb >>> 24) == 0 ? argb | 0xFF000000 : argb;
     }
+
+    /** a → b by t (0..1), every channel including alpha. */
+    public static int lerp(int a, int b, float t) {
+        t = Math.max(0, Math.min(1, t));
+        int out = 0;
+        for (int sh = 0; sh <= 24; sh += 8) {
+            int ca = (a >>> sh) & 0xFF, cb = (b >>> sh) & 0xFF;
+            out |= (Math.round(ca + (cb - ca) * t) & 0xFF) << sh;
+        }
+        return out;
+    }
+
+    /** The colour with its alpha multiplied by f (0..1). */
+    public static int fade(int argb, float f) {
+        int a = Math.round(((argb >>> 24) & 0xFF) * Math.max(0, Math.min(1, f)));
+        return (a << 24) | (argb & 0xFFFFFF);
+    }
 }

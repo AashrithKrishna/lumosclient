@@ -1,6 +1,8 @@
 package dev.lumosclient.hud;
 
 import dev.lumosclient.hud.LumosHud.Placed;
+import dev.lumosclient.hud.core.Colors;
+import dev.lumosclient.hud.core.Icons;
 import dev.lumosclient.hud.core.Layout;
 import dev.lumosclient.hud.core.Rect;
 import dev.lumosclient.hud.module.HudModule;
@@ -15,15 +17,16 @@ import org.lwjgl.glfw.GLFW;
 /**
  * The HUD editor (Right Shift by default): drag a module to move it (it snaps to the screen's
  * edges and centre and to other modules; hold Shift to place freely), scroll over it or drag its
- * corner to resize, right-click to hide it. "Modules" switches modules on and off. Closing saves.
+ * corner to resize, right-click to hide it. "Modules" switches modules on and off and their
+ * icons (the square on the right of each), "Style" picks Lunar or Minimal. Closing saves.
  */
 public abstract class HudEditorScreen extends Screen {
-    private static final int ACCENT = 0xFFFFB547;
     private static final int OUTLINE = 0x80FFFFFF;
     private static final int HANDLE = 5;
     private static final double SNAP = 4;
 
-    private record Btn(int x, int y, int w, int h, String label, Runnable action) {
+    private record Btn(int x, int y, int w, int h, String label, Runnable action, HudModule iconOf) {
+        Btn(int x, int y, int w, int h, String label, Runnable action) { this(x, y, w, h, label, action, null); }
         boolean hit(double mx, double my) { return mx >= x && mx < x + w && my >= y && my < y + h; }
     }
 
@@ -53,14 +56,20 @@ public abstract class HudEditorScreen extends Screen {
         return new HudModule.Ctx(Minecraft.getInstance(), g, font, true, System.currentTimeMillis());
     }
 
+    private static int accent() {
+        return LumosHud.config().theme().accent();
+    }
+
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        final int ACCENT = accent();
         HudModule.Ctx c = ctx(g);
         placed = LumosHud.layout(c);
         HudModule hover = panelOpen ? null : at(mouseX, mouseY);
 
-        for (double x : guidesX) g.fill((int) Math.round(x), 0, (int) Math.round(x) + 1, height, 0xC0FFB547);
-        for (double y : guidesY) g.fill(0, (int) Math.round(y), width, (int) Math.round(y) + 1, 0xC0FFB547);
+        int guide = (ACCENT & 0xFFFFFF) | 0xC0000000;
+        for (double x : guidesX) g.fill((int) Math.round(x), 0, (int) Math.round(x) + 1, height, guide);
+        for (double y : guidesY) g.fill(0, (int) Math.round(y), width, (int) Math.round(y) + 1, guide);
 
         for (Placed p : placed) {
             LumosHud.draw(c, p);
@@ -96,14 +105,16 @@ public abstract class HudEditorScreen extends Screen {
     private void layoutButtons() {
         buttons.clear();
         HudConfig cfg = LumosHud.config();
-        String[] labels = {"Modules", "Snapping: " + (cfg.snapping() ? "On" : "Off"), "Reset", "Done"};
+        boolean lunar = cfg.theme().lunar();
+        String[] labels = {"Modules", "Style: " + (lunar ? "Lunar" : "Minimal"), "Snapping: " + (cfg.snapping() ? "On" : "Off"), "Reset", "Done"};
         Runnable[] actions = {
             () -> panelOpen = !panelOpen,
+            () -> cfg.setTheme("style", lunar ? "minimal" : "lunar"),
             () -> cfg.setSnapping(!cfg.snapping()),
             () -> { cfg.resetModules(); selected = null; },
             this::onClose,
         };
-        int bw = 84, gap = 6, total = labels.length * bw + (labels.length - 1) * gap;
+        int bw = 80, gap = 5, total = labels.length * bw + (labels.length - 1) * gap;
         int x = (width - total) / 2, y = height / 2 - 10;
         for (int i = 0; i < labels.length; i++) {
             buttons.add(new Btn(x + i * (bw + gap), y, bw, 20, labels[i], actions[i]));
@@ -113,26 +124,38 @@ public abstract class HudEditorScreen extends Screen {
     private void drawPanel(GuiGraphics g, int mouseX, int mouseY) {
         cells.clear();
         List<HudModule> all = LumosHud.modules();
-        int cols = 3, cw = 110, ch = 18, gap = 4;
+        int cols = 3, cw = 122, ch = 18, gap = 4;
         int rows = (all.size() + cols - 1) / cols;
         int pw = cols * cw + (cols - 1) * gap + 16, ph = rows * ch + (rows - 1) * gap + 34;
         int px = (width - pw) / 2, py = Math.max(4, (height - ph) / 2);
-        g.fill(px, py, px + pw, py + ph, 0xF0101014);
-        outline(g, new Rect(px, py, pw, ph), 0x60FFFFFF);
-        g.drawString(font, "Modules — click to switch on or off", px + 8, py + 8, 0xFFFFFFFF, false);
+        Draw.panel(g, px, py, pw, ph, 4, 0xF0101014);
+        g.drawString(font, "Modules — click to switch on or off; the square switches the icon", px + 8, py + 8, 0xFFFFFFFF, false);
         for (int i = 0; i < all.size(); i++) {
             HudModule m = all.get(i);
             int cx = px + 8 + (i % cols) * (cw + gap), cy = py + 24 + (i / cols) * (ch + gap);
-            Btn b = new Btn(cx, cy, cw, ch, m.name, () -> m.setEnabled(!m.enabled()));
+            int nw = m.hasIcon() ? cw - ch - 2 : cw;
+            Btn b = new Btn(cx, cy, nw, ch, m.name, () -> m.setEnabled(!m.enabled()));
             cells.add(b);
             button(g, b, b.hit(mouseX, mouseY), m.enabled());
+            if (m.hasIcon()) {
+                Btn ib = new Btn(cx + nw + 2, cy, ch, ch, "", () -> m.setIcon(!m.iconOn()), m);
+                cells.add(ib);
+                button(g, ib, ib.hit(mouseX, mouseY), m.iconOn());
+            }
         }
     }
 
     private void button(GuiGraphics g, Btn b, boolean hover, boolean on) {
-        int bg = on ? (hover ? 0xF0D9952E : 0xE0B87A1E) : (hover ? 0xE0404048 : 0xD0202026);
-        g.fill(b.x(), b.y(), b.x() + b.w(), b.y() + b.h(), bg);
-        outline(g, new Rect(b.x(), b.y(), b.w(), b.h()), hover ? ACCENT : 0x40FFFFFF);
+        int accent = accent();
+        int onBg = Colors.withOpacity(accent, hover ? 94 : 80);
+        int bg = on ? onBg : (hover ? 0xE0404048 : 0xD0202026);
+        Draw.panel(g, b.x(), b.y(), b.w(), b.h(), 3, bg);
+        if (hover) outline(g, new Rect(b.x(), b.y(), b.w(), b.h()), (accent & 0xFFFFFF) | 0x90000000);
+        if (b.iconOf() != null) {
+            int fg = on ? 0xFFFFFFFF : 0xFF8A8A92;
+            Draw.icon(g, b.iconOf().menuIcon(), b.x() + (b.w() - Icons.SIZE) / 2, b.y() + (b.h() - Icons.SIZE) / 2, fg, on ? 0xFFFFFFFF : fg);
+            return;
+        }
         g.drawString(font, b.label(), b.x() + (b.w() - font.width(b.label())) / 2, b.y() + (b.h() - 8) / 2, 0xFFFFFFFF, false);
     }
 

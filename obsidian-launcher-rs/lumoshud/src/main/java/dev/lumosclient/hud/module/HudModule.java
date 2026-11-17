@@ -6,6 +6,8 @@ import dev.lumosclient.hud.LumosHud;
 import dev.lumosclient.hud.core.Anchor;
 import dev.lumosclient.hud.core.Colors;
 import dev.lumosclient.hud.core.Layout;
+import dev.lumosclient.hud.core.Theme;
+import dev.lumosclient.hud.Draw;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import net.minecraft.client.Minecraft;
@@ -27,7 +29,6 @@ public abstract class HudModule {
     private final double defX, defY;
     /** Module-specific options and their defaults (Boolean, Number or String). */
     public final Map<String, Object> options = new LinkedHashMap<>();
-    private int defBgOpacity = 45;
     private boolean defBackground = true;
 
     protected HudModule(String id, String name, boolean enabled, Anchor anchor, double x, double y) {
@@ -78,9 +79,24 @@ public abstract class HudModule {
     public boolean background() { return bool("background", defBackground); }
     public int backgroundColor() {
         int rgb = Colors.parse(str("backgroundColor", null), 0xFF000000);
-        return Colors.withOpacity(rgb, (int) Math.round(num("backgroundOpacity", defBgOpacity)));
+        return Colors.withOpacity(rgb, (int) Math.round(num("backgroundOpacity", theme().panelOpacity())));
     }
     public boolean shadow() { return bool("shadow", true); }
+
+    public Theme theme() { return LumosHud.config().theme(); }
+    /** Lunar style (rounded panels, icons) rather than Minimal (flat boxes, text only). */
+    public boolean lunar() { return theme().lunar(); }
+    /** Whether the module has an icon the player can switch off ("icon"). */
+    public boolean hasIcon() { return menuIcon() != null; }
+    /** The module's icon setting; drawn only in the Lunar style. */
+    public boolean iconOn() { return bool("icon", true); }
+    public void setIcon(boolean on) { json().addProperty("icon", on); }
+    /** Whether to draw the icon now. */
+    public boolean showIcon() { return lunar() && iconOn() && hasIcon(); }
+    /** The icon in the editor's module list (null: none). */
+    public char[][] menuIcon() { return null; }
+    /** The text colour, dimmed: labels and units next to a value. */
+    public int dimColor() { return Colors.lerp(textColor(), 0xFF000000, 0.32f); }
 
     public void place(Anchor a, double x, double y) {
         JsonObject o = json();
@@ -121,11 +137,23 @@ public abstract class HudModule {
 
     // ── drawing helpers ──
 
-    protected void box(Ctx c, int w, int h) {
-        if (background()) c.g().fill(0, 0, w, h, backgroundColor());
+    /** The module's box: a rounded panel in the Lunar style, a flat one in Minimal. */
+    public void box(Ctx c, int w, int h) {
+        box(c, 0, 0, w, h, backgroundColor());
     }
 
-    protected void text(Ctx c, String s, int x, int y, int color) {
+    public void box(Ctx c, int x, int y, int w, int h, int color) {
+        if (!background()) return;
+        if (lunar()) Draw.panel(c.g(), x, y, w, h, theme().radius(), color);
+        else c.g().fill(x, y, x + w, y + h, color);
+    }
+
+    /** The module's icon at (x, y) in its text colour and the theme's accent. */
+    protected void icon(Ctx c, char[][] grid, int x, int y) {
+        Draw.icon(c.g(), grid, x, y, textColor(), theme().accent());
+    }
+
+    public void text(Ctx c, String s, int x, int y, int color) {
         c.g().drawString(c.font(), s, x, y, Colors.opaque(color), shadow());
     }
 }
