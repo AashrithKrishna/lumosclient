@@ -22,6 +22,7 @@ use wry::{WebContext, WebView, WebViewBuilder};
 
 mod elyby;
 mod horizon_mods;
+mod native_builds;
 mod installer;
 mod net;
 
@@ -376,6 +377,9 @@ fn content_extension_ok(kind: &str, file: &str, horizon: bool) -> bool {
     }
 }
 
+/// How the Mods tab names a native mod (not a file) in toggle/remove requests.
+const NATIVE_PREFIX: &str = "native:";
+
 /// Shown when a request names an instance that was deleted in the meantime.
 const GONE_INSTANCE: &str = "That instance no longer exists, so nothing was changed.";
 
@@ -445,6 +449,12 @@ fn list_content_json(game_dir: &Path, kind: &str, profile_id: &str, horizon: boo
         }
     }
     items.sort_by_key(|a| a["file"].as_str().unwrap_or("").to_lowercase());
+    // Native mods are built into the instance's game, not files: listed with their own switch.
+    if horizon_mods {
+        for (id, name, on) in native_builds::list(game_dir) {
+            items.push(json!({"file": format!("{NATIVE_PREFIX}{id}"), "label": name, "enabled": on, "native": true, "isDir": false, "size": 0, "modified": 0}));
+        }
+    }
     json!({ "kind": kind, "profileId": profile_id, "horizon": horizon, "items": items }).to_string()
 }
 
@@ -1217,13 +1227,32 @@ fn launch_horizon(
 ) -> Result<(), String> {
     let cfg = &snap.config;
     let auth = build_auth(shared, cfg, &snap.paths, rep)?;
-    prepare_horizon(shared, rep, &snap.paths, &snap.horizon_output)?;
+    let base_dir = shared.lock().unwrap().base_dir.clone();
+    // An instance with native mods plays the cloud build made for them (native_builds).
+    let (client, resources) = match native_builds::launch_parts(&base_dir, &snap.game_dir) {
+        Some((client, prepare, root, short)) => {
+            let output = snap.horizon_output.with_file_name(format!("26.3-{short}"));
+            rep.log(&format!("[Horizon] Using the native mod build {short}"));
+            let report = |l: &str, f: f64| rep.report(l, f);
+            let log = |l: &str| rep.log(l);
+            rep.report("Getting Horizon ready", -1.0);
+            installer::ensure_horizon(&snap.paths, &prepare, &root, &output, &report, &log)?;
+            (client, output)
+        }
+        None => {
+            if native_builds::read_state(&snap.game_dir).is_some() {
+                return Err("This instance's native mod build is missing. Reinstall one of its native mods from Discover.".into());
+            }
+            prepare_horizon(shared, rep, &snap.paths, &snap.horizon_output)?;
+            let client = resolve_binary("horizon-client").ok_or("This LumosClient build is missing the Horizon engine. Reinstall LumosClient.")?;
+            (client, snap.horizon_output.clone())
+        }
+    };
     set_horizon_controller(&snap.game_dir, cfg.horizon_controller);
-    let client = resolve_binary("horizon-client").ok_or("This LumosClient build is missing the Horizon engine. Reinstall LumosClient.")?;
     let session = json!({"name": auth.name, "uuid": auth.uuid, "access_token": auth.access_token}).to_string();
     let mut args: Vec<String> = vec![
         "--resources".into(),
-        snap.horizon_output.to_string_lossy().into_owned(),
+        resources.to_string_lossy().into_owned(),
         "--game-dir".into(),
         snap.game_dir.to_string_lossy().into_owned(),
         "--home".into(),
@@ -1675,6 +1704,17 @@ fn download_modrinth_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<A
             return;
         };
         let push_install_status = |proxy: &EventLoopProxy<UserEvent>, slug: &str, state: &str, msg: &str| push_install_status(proxy, slug, state, msg, &pid);
+        if selected == HORIZON_ID && horizon_mods::is_native(&slug) {
+            push_install_status(&proxy, &slug, "installing", &format!("Installing {slug}..."));
+            let base_dir = shared.lock().unwrap().base_dir.clone();
+            let p2 = proxy.clone();
+            let report = |m: &str| push_log(&p2, &format!("[LumosClient] {m}"));
+            match native_builds::install(&base_dir, &game_dir, &slug, &report) {
+                Ok(msg) => push_install_status(&proxy, &slug, "installed", &msg),
+                Err(err) => push_install_status(&proxy, &slug, "error", &err),
+            }
+            return;
+        }
         if selected == HORIZON_ID {
             push_install_status(&proxy, &slug, "installing", &format!("Installing {slug}..."));
             match horizon_mods::install(&game_dir, &slug) {
@@ -1920,6 +1960,15 @@ fn main() {
                     let (kind, file) = (text("kind"), text("file"));
                     let enable = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
                     let target = ipc_state.lock().unwrap().target_instance(&text("profileId"));
+                    if let (Some(id), Some((pid, game_dir, ver))) = (file.strip_prefix(NATIVE_PREFIX), target.as_ref()) {
+                        if native_builds::installed_ids(game_dir).iter().any(|m| m == id) {
+                            if let Err(e) = horizon_mods::set_enabled(game_dir, id, enable) {
+                                call_js(&ipc_proxy, "onNotice", json!({"message": e, "kind": "err"}));
+                            }
+                        }
+                        push_content(&ipc_proxy, game_dir, &kind, pid, ver == HORIZON_ID);
+                        return;
+                    }
                     if target.is_none() {
                         call_js(&ipc_proxy, "onNotice", json!({"message": GONE_INSTANCE, "kind": "err"}));
                     }
@@ -1955,6 +2004,14 @@ fn main() {
                 "trash_content" => {
                     let (kind, file) = (text("kind"), text("file"));
                     let target = ipc_state.lock().unwrap().target_instance(&text("profileId"));
+                    if let (Some(id), Some((pid, game_dir, ver))) = (file.strip_prefix(NATIVE_PREFIX), target.as_ref()) {
+                        match native_builds::remove(game_dir, id) {
+                            Ok(()) => call_js(&ipc_proxy, "onNotice", json!({"message": "Removed. It leaves the instance's game the next time you play.", "kind": "info"})),
+                            Err(e) => call_js(&ipc_proxy, "onNotice", json!({"message": e, "kind": "err"})),
+                        }
+                        push_content(&ipc_proxy, game_dir, &kind, pid, ver == HORIZON_ID);
+                        return;
+                    }
                     if target.is_none() {
                         call_js(&ipc_proxy, "onNotice", json!({"message": GONE_INSTANCE, "kind": "err"}));
                     }

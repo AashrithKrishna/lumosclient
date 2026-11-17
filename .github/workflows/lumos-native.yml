@@ -95,7 +95,7 @@ jobs:
       max-parallel: 12
       matrix:
         commit: ${{ fromJSON(needs.plan.outputs.matrix).commit }}
-        os: [macos-14, windows-latest]
+        os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:

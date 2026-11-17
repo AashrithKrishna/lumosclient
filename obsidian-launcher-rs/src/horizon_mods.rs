@@ -104,6 +104,7 @@ pub fn search(game_dir: &Path, query: &str, tab: &str, sort: &str, offset: usize
     let kinds = kinds_for(tab);
     let q = query.trim().to_lowercase();
     let installed = installed_files(game_dir);
+    let native_installed = crate::native_builds::installed_ids(game_dir);
     let mut hits: Vec<(&Value, &Value)> = idx
         .get("projects")
         .and_then(Value::as_array)
@@ -149,12 +150,21 @@ pub fn search(game_dir: &Path, query: &str, tab: &str, sort: &str, offset: usize
                 "project_type": if tab == "shader" || tab == "resourcepack" { tab } else { "mod" },
                 "source": "horizon",
                 "native": kind == "native-mod",
-                "installed": installed.iter().any(|f| f == file),
+                // A native mod installs when Lumos's cloud builds have it for this computer.
+                "native_ready": kind == "native-mod" && crate::native_builds::build_for_mod(s(p, "id")).is_some(),
+                "installed": installed.iter().any(|f| f == file) || native_installed.iter().any(|i| i == s(p, "id")),
                 "view_url": format!("{SITE}/{}", s(p, "id")),
             })
         })
         .collect();
     json!({"hits": page, "total_hits": total, "source": "horizon"})
+}
+
+/// True when the registry lists `id` as a native (compiled-in) mod.
+pub fn is_native(id: &str) -> bool {
+    index().ok().and_then(|idx| {
+        idx.get("projects")?.as_array()?.iter().find(|p| s(p, "id") == id).map(|p| s(p, "kind") == "native-mod")
+    }) == Some(true)
 }
 
 /// File names already in the instance's Horizon folders.

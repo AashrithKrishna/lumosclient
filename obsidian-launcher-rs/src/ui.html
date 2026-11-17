@@ -1960,9 +1960,9 @@
     $('contentList').innerHTML = shown.map(it => `
       <div class="content-row ${it.enabled ? '' : 'off'}">
         ${it.isDir ? `<span class="ic">${icon('folder', '')}</span>` : pxTile(pxKind, 'sm')}
-        <div class="meta"><div class="name">${esc(prettyName(it.file))}</div><div class="file">${esc(it.file)} · ${fmtBytes(it.size)}</div></div>
+        <div class="meta"><div class="name">${esc(it.label || prettyName(it.file))}${it.native ? ' <span class="chip">native Rust</span>' : ''}${it.revoked ? ' <span class="chip" style="color:var(--bad)">taken down</span>' : ''}</div><div class="file">${it.native ? 'Built into this instance\'s Horizon game' : `${esc(it.file)} · ${fmtBytes(it.size)}`}${it.revoked ? ` · ${esc(it.revoked)}` : ''}</div></div>
         ${it.enabled ? '' : '<span class="chip">Disabled</span>'}
-        <label class="switch" title="${it.enabled ? 'Disable' : 'Enable'}"><input type="checkbox" aria-label="${it.enabled ? 'Disable' : 'Enable'} ${esc(prettyName(it.file))}" ${it.enabled ? 'checked' : ''} data-act="toggle-content" data-file="${esc(it.file)}" /><span></span></label>
+        <label class="switch" title="${it.enabled ? 'Disable' : 'Enable'}"><input type="checkbox" aria-label="${it.enabled ? 'Disable' : 'Enable'} ${esc(it.label || prettyName(it.file))}" ${it.enabled ? 'checked' : ''} data-act="toggle-content" data-file="${esc(it.file)}" /><span></span></label>
         <button class="btn ghost sm icon danger" data-act="trash-content" data-file="${esc(it.file)}" title="Move to ${TRASH}" aria-label="Move to ${TRASH}">${icon('trash')}</button>
       </div>`).join('') || `<div class="empty"><b>No matches</b></div>`;
   }
@@ -1993,7 +1993,7 @@
       ? `<button class="opt active">Horizon registry</button><button class="opt" data-act="url" data-url="https://playhorizon.dev/mods">Website${icon('external')}</button>`
       : `<button class="opt active">Modrinth</button><button class="opt" data-act="url" data-url="https://www.curseforge.com/minecraft">CurseForge${icon('external')}</button>`;
     $('compat2').textContent = hz ? 'Size and checksum checked on install' : 'Fabric Loader checked on install';
-    $('compat3').textContent = hz ? 'Native Rust mods are listed, not installed yet' : 'Required dependencies auto-installed';
+    $('compat3').textContent = hz ? 'Native Rust mods arrive as a ready-made Horizon build' : 'Required dependencies auto-installed';
     $('discSiteBtn').dataset.url = hz ? 'https://playhorizon.dev/mods' : 'https://modrinth.com/mods';
     $('discSiteBtn').querySelector('span').textContent = hz ? 'Open Horizon mods' : 'Open Modrinth';
     $('compatVer').textContent = hz ? 'Horizon 26.3: Horizon’s own mods, shaders and packs'
@@ -2035,8 +2035,8 @@
       // The backend reads the instance's folder: trust it; this session's installs fill in otherwise.
       const done = typeof m.installed === 'boolean' ? m.installed : !!(ui.installed[state.activeProfileId] && ui.installed[state.activeProfileId].has(slug));
       const viewUrl = m.view_url || `https://modrinth.com/${m.project_type}/${slug}`;
-      const action = m.native
-        ? `<button class="btn sm" disabled title="Native Rust mods are compiled on your PC against an official Horizon release. Lumos can't do that yet.">${icon('engine')}Native mod</button>`
+      const action = m.native && !m.native_ready && !done
+        ? `<button class="btn sm" disabled title="Lumos's cloud builds don't have this native mod for your computer yet.">${icon('engine')}Not built yet</button>`
         : `<button class="btn sm ${done ? 'ok' : 'primary'}" data-act="install" data-slug="${esc(slug)}" data-type="${esc(m.project_type)}" id="dl-${esc(slug)}" ${done ? 'disabled' : ''}>${done ? icon('check') + 'Installed' : icon('download') + 'Install'}</button>`;
       const cats = (m.categories || []).filter(c => !['fabric', 'forge', 'quilt', 'neoforge', 'minecraft'].includes(c)).slice(0, 3);
       const iconEl = m.icon_url ? `<img src="${esc(m.icon_url)}" alt="" loading="lazy" />` : `<div class="noicon">${icon('box', 'lg')}</div>`;
