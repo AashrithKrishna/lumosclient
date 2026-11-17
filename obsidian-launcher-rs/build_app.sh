@@ -114,7 +114,7 @@ cp -R "$EXPORTERS/server" "$EXPORTERS/client" "$EXPORTERS/manifest.json" "$HROOT
 cat > "$RESOURCES/THIRD_PARTY_NOTICES.txt" <<NOTICE
 LumosClient bundles authlib-injector ${AUTHLIB_VERSION} (GNU AGPL-3.0), unmodified,
 to show Ely.by skins in Java versions. Source: https://github.com/yushijinhun/authlib-injector
-Horizon (MIT) — https://github.com/horizon-rust/horizon
+Horizon (GNU LGPL-3.0-or-later; older code MIT) — source: https://github.com/horizon-rust/horizon
 Minecraft is not included: the launcher downloads the player's game files from Mojang.
 NOTICE
 chmod +x "$MACOS/lumos-launcher" "$RES_BIN/horizon-client" "$RES_BIN/horizon-prepare"

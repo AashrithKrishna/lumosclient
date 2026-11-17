@@ -1,76 +1,57 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/media/readme/title-dark.png">
-    <img src="docs/media/readme/title-light.png" alt="Horizon" width="320">
-  </picture>
+  <img src="obsidian-launcher-rs/assets/lumos_logo_128.png" alt="Lumos Client" width="96">
+</p>
+
+<h1 align="center">Lumos Client</h1>
+
+<p align="center">
+  <b>A fast, good-looking Minecraft: Java Edition launcher for macOS and Windows.</b><br>
+  Pick a version, press Launch. Lumos downloads the game, Java and your mods for you.
 </p>
 
 <p align="center">
-  <b>Minecraft: Java Edition 26.3, rewritten from scratch in Rust.</b><br>
-  It opens your worlds, generates the same terrain and plays by the same rules, without Java.
+  <a href="https://github.com/AashrithKrishna/lumosclient/releases/latest"><b>⬇ Download Lumos Client</b></a>
 </p>
 
-<p align="center">
-  <a href="https://playhorizon.dev/download"><img src="docs/media/readme/download-button.png" alt="Download the Horizon launcher for Windows, macOS and Linux" width="400"></a><br>
-  <sub>You need your own copy of Minecraft: Java Edition.</sub>
-</p>
+## Download
 
-<p align="center">
-  <a href="https://playhorizon.dev/docs/install"><b>Install guide</b></a> ·
-  <a href="https://playhorizon.dev/docs/"><b>Docs</b></a> ·
-  <a href="https://playhorizon.dev/mods"><b>Mods</b></a> ·
-  <a href="https://discord.gg/playhorizon"><b>Discord</b></a>
-</p>
+Get the latest version from the [Releases page](https://github.com/AashrithKrishna/lumosclient/releases/latest):
 
-<p align="center">
-  <img src="docs/media/readme/hero-lookout.webp" alt="A player's view from a wooden lookout over a village: a friend in diamond armour sneaks at the edge while a creeper flashes white behind her, another friend rides a horse between the houses below, and forest, snowy peaks and the sea run to the horizon" width="100%">
-</p>
+| Computer | File | How to install |
+|---|---|---|
+| **Mac** (Apple silicon or Intel, macOS 13+) | `Lumos.dmg` | Open it and drag **Lumos** into Applications. The first time, right-click Lumos and choose **Open**. |
+| **Windows** 10 or 11 (64-bit) | `Lumos-Windows-x64.zip` | Unzip it anywhere and double-click **Lumos.exe**. If Windows shows "Windows protected your PC", click **More info**, then **Run anyway**. |
 
-<p align="center">
-  <img src="docs/media/readme/signs.webp" alt="Three wooden signs: 3.5x faster start than modded Java, 38 percent more FPS than Java with Sodium, and a mod API to port your mods to Rust" width="100%">
-</p>
+These are the only official Lumos Client downloads. Lumos isn't signed with a paid certificate yet, which is why your computer asks before opening it.
 
-<p align="center">
-  <sub>Against Java Edition with Sodium, Lithium, FerriteCore and ImmediatelyFast on a Ryzen 7 9800X3D with an RTX 5080. More computers on the <a href="https://playhorizon.dev/benchmarks">benchmarks page</a>.</sub>
-</p>
+## What you get
 
-<h2 align="center">What you get</h2>
+- **Every version, ready in one click:** vanilla and Fabric releases, with Java downloaded automatically.
+- **Instances:** separate setups, each with its own version, mods, resource packs, shaders and worlds.
+- **Mods & packs per instance:** browse Modrinth inside the launcher and pick which instance to install into. Dependencies come along automatically. You can also add your own `.jar` and `.zip` files, or switch any of them off.
+- **Skins and capes with Ely.by:** sign in with a free Ely.by account and choose a skin or cape from the catalog inside the launcher. Other Ely.by players see them in game.
+- **LumosHUD:** FPS, CPS, coordinates and keystrokes in game (Fabric 1.21.11).
+- **Horizon 26.3 (Rust):** an optional engine that plays Minecraft 26.3 without Java. Lumos sets it up the first time you choose it.
+- **Servers:** save servers, see their ping, join in one click.
 
-- **Vanilla Minecraft:** survival, creative and hardcore in every dimension, with the same terrain, mobs, villagers and redstone. Your saves open as they are.
-- **Multiplayer:** vanilla and Horizon servers, LAN, and invite codes for playing your world with friends. You can [host a server](https://playhorizon.dev/docs/hosting) too.
-- **Mods:** Horizon's own mod system, with mods like zoom and a minimap, and shader packs. Browse the [catalogue](https://playhorizon.dev/mods) or [make a mod](https://playhorizon.dev/docs/make-a-mod).
-- **Beyond vanilla:** terrain up to 1,024 chunks away, HDR, controller support, graphics presets and dynamic lights.
+## What you need
 
-<h2 align="center">What you need</h2>
+- Your own copy of **Minecraft: Java Edition** to play online. Offline play works without an account.
+- An internet connection the first time you play a version.
 
-- **Your own copy of Minecraft: Java Edition.** Horizon ships no Minecraft files. It builds them from the game you bought, so install version 26.3 and start it once.
-- **Windows, macOS or Linux:** Windows on x64 or ARM64, macOS 12 or later, Linux on x86-64.
+Your instances and settings are stored in `~/LumosClient` on a Mac and in `%USERPROFILE%\LumosClient` on Windows.
 
-<h2 align="center">Made by the Horizon Team</h2>
+## Build it yourself
 
-<table align="center">
-  <tr>
-    <td align="center" width="140"><a href="https://github.com/kacpherek"><img src="https://github.com/kacpherek.png?size=160" width="80" alt="Kacper"><br><b>Kacper</b></a></td>
-    <td align="center" width="140"><a href="https://github.com/Online5277"><img src="https://github.com/Online5277.png?size=160" width="80" alt="Cosmic"><br><b>Cosmic</b></a></td>
-    <td align="center" width="140"><a href="https://github.com/levzzz5154"><img src="https://github.com/levzzz5154.png?size=160" width="80" alt="levzzz"><br><b>levzzz</b></a></td>
-    <td align="center" width="140"><a href="https://github.com/rdbtCVS"><img src="https://github.com/rdbtCVS.png?size=160" width="80" alt="rdbt"><br><b>rdbt</b></a></td>
-    <td align="center" width="140"><a href="https://github.com/dezer-x"><img src="https://github.com/dezer-x.png?size=160" width="80" alt="Anthony S"><br><b>Anthony S</b></a></td>
-    <td align="center" width="140"><a href="https://github.com/ludovic111"><img src="https://github.com/ludovic111.png?size=160" width="80" alt="Ludovic Marie"><br><b>Ludovic Marie</b></a><br><sub>Founder</sub></td>
-  </tr>
-</table>
+- **Mac:** `./obsidian-launcher-rs/build_app.sh` creates `dist/Lumos.app` and `dist/Lumos.dmg`.
+- **Windows:** run the **lumos windows** workflow under Actions, then `./obsidian-launcher-rs/package_windows.sh <downloaded programs folder>` to create `dist/Lumos-Windows-x64.zip`.
 
-<p align="center">
-  <sub>and everyone who has contributed</sub><br><br>
-  <a href="https://github.com/horizon-rust/horizon/graphs/contributors"><img src="https://contrib.rocks/image?repo=horizon-rust/horizon&max=72&columns=12" alt="Everyone who has contributed to Horizon"></a>
-</p>
+The launcher's code is in [`obsidian-launcher-rs/`](obsidian-launcher-rs).
 
-<p align="center">
-  <a href="docs/native-client.md#run-from-a-checkout"><b>Build guide</b></a> ·
-  <a href="CONTRIBUTING.md"><b>Contributing</b></a> ·
-  <a href="GOVERNANCE.md"><b>Governance</b></a> ·
-  <a href="https://github.com/sponsors/ludovic111"><b>Sponsor</b></a>
-</p>
+## Credits and licences
 
-<sub>Horizon is released under the [GNU LGPL, version 3 or later](LICENSE), for the project's original work. Code merged before the move from MIT stays available under the [MIT licence](LICENSES/MIT.txt). Dependencies keep their own licences, see the [notices](THIRD_PARTY_NOTICES.md). Founded by [Ludovic Marie](https://lu4ovic.com) and built by the Horizon Team and [its contributors](https://github.com/horizon-rust/horizon/graphs/contributors). You can support it on [GitHub Sponsors](https://github.com/sponsors/ludovic111).</sub>
+Lumos Client includes the **Horizon** engine by the Horizon Team. Horizon is released under the [GNU LGPL, version 3 or later](LICENSE), and its older code under the [MIT licence](LICENSES/MIT.txt). Lumos is not made or endorsed by the Horizon Team. Horizon's own project page is in [HORIZON.md](HORIZON.md), and its upstream repository is [horizon-rust/horizon](https://github.com/horizon-rust/horizon).
 
-<sub>NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT. Minecraft is a trademark of Mojang Synergies AB; its code and assets belong to Mojang and Microsoft under the [Minecraft EULA](https://www.minecraft.net/en-us/eula).</sub>
+Lumos bundles [authlib-injector](https://github.com/yushijinhun/authlib-injector) (AGPL-3.0), unmodified, to show Ely.by skins in game. Other dependencies keep their own licences; see the [notices](THIRD_PARTY_NOTICES.md).
+
+<sub>NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT. Minecraft is a trademark of Mojang Synergies AB. Lumos doesn't include any Minecraft files: it downloads them from Mojang for each player.</sub>
