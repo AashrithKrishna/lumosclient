@@ -324,12 +324,25 @@ fn content_folder(kind: &str) -> Option<&'static str> {
     }
 }
 
+/// File types each content folder takes when the player adds their own files.
+fn content_extension_ok(kind: &str, file: &str) -> bool {
+    let lower = file.to_ascii_lowercase();
+    match kind {
+        "mods" => lower.ends_with(".jar"),
+        "resourcepacks" | "shaderpacks" => lower.ends_with(".zip"),
+        _ => false,
+    }
+}
+
+/// Largest file the player can add through the launcher (bigger ones go in via the folder).
+const MAX_IMPORT_BYTES: usize = 256 * 1024 * 1024;
+
 /// Rejects anything that is not a plain file name (no separators, no `..`).
 fn safe_file_name(name: &str) -> bool {
     !name.is_empty() && !name.contains('/') && !name.contains('\\') && name != "." && name != ".."
 }
 
-fn list_content_json(game_dir: &Path, kind: &str) -> String {
+fn list_content_json(game_dir: &Path, kind: &str, profile_id: &str) -> String {
     let mut items: Vec<serde_json::Value> = Vec::new();
     if let Some(folder) = content_folder(kind) {
         if let Ok(rd) = fs::read_dir(game_dir.join(folder)) {
@@ -356,11 +369,11 @@ fn list_content_json(game_dir: &Path, kind: &str) -> String {
         }
     }
     items.sort_by_key(|a| a["file"].as_str().unwrap_or("").to_lowercase());
-    json!({ "kind": kind, "items": items }).to_string()
+    json!({ "kind": kind, "profileId": profile_id, "items": items }).to_string()
 }
 
-fn push_content(proxy: &EventLoopProxy<UserEvent>, game_dir: &Path, kind: &str) {
-    let js = format!("window.renderContent && window.renderContent({});", list_content_json(game_dir, kind));
+fn push_content(proxy: &EventLoopProxy<UserEvent>, game_dir: &Path, kind: &str, profile_id: &str) {
+    let js = format!("window.renderContent && window.renderContent({});", list_content_json(game_dir, kind, profile_id));
     let _ = proxy.send_event(UserEvent::EvalJs(js));
 }
 
@@ -521,6 +534,27 @@ impl AppState {
             if written.is_ok() {
                 let _ = fs::rename(&tmp, &path);
             }
+        }
+    }
+
+    /// The instance a request names: its id, folder and Minecraft version. An empty or
+    /// unknown id means the active instance, so content never lands in a stranger's folder.
+    fn target_instance(&self, id: &str) -> (String, PathBuf, String) {
+        let active = &self.config.active_profile_id;
+        let chosen = self
+            .config
+            .profiles
+            .iter()
+            .find(|p| !id.is_empty() && p.id == id && safe_file_name(&p.id))
+            .or_else(|| self.config.profiles.iter().find(|p| &p.id == active));
+        match chosen {
+            Some(p) if p.id != *active => {
+                let dir = self.base_dir.join("instances").join(&p.id);
+                let _ = fs::create_dir_all(&dir);
+                let ver = if p.version.is_empty() { self.config.selected_version.clone() } else { p.version.clone() };
+                (p.id.clone(), dir, ver)
+            }
+            _ => (active.clone(), self.active_game_dir(), self.config.selected_version.clone()),
         }
     }
 
@@ -1193,10 +1227,45 @@ fn search_modrinth_async(proxy: EventLoopProxy<UserEvent>, paths: installer::Pat
     });
 }
 
-fn push_install_status(proxy: &EventLoopProxy<UserEvent>, slug: &str, state: &str, msg: &str) {
-    if let (Ok(s), Ok(st), Ok(m)) = (serde_json::to_string(slug), serde_json::to_string(state), serde_json::to_string(msg)) {
-        let _ = proxy.send_event(UserEvent::EvalJs(format!("window.onInstallStatus({s}, {st}, {m});")));
+fn push_install_status(proxy: &EventLoopProxy<UserEvent>, slug: &str, state: &str, msg: &str, profile_id: &str) {
+    if let (Ok(s), Ok(st), Ok(m), Ok(p)) =
+        (serde_json::to_string(slug), serde_json::to_string(state), serde_json::to_string(msg), serde_json::to_string(profile_id))
+    {
+        let _ = proxy.send_event(UserEvent::EvalJs(format!("window.onInstallStatus({s}, {st}, {m}, {p});")));
     }
+}
+
+/// Saves a file the player picked (base64 from the page) into one of an instance's content folders.
+fn import_content(game_dir: &Path, kind: &str, file: &str, data_b64: &str) -> Result<(), String> {
+    use base64::Engine as _;
+    let folder = content_folder(kind).ok_or("Unknown content type.")?;
+    if !safe_file_name(file) || file.starts_with('.') {
+        return Err("That file name can't be used.".into());
+    }
+    if !content_extension_ok(kind, file) {
+        return Err(match kind {
+            "mods" => format!("{file} isn't a mod. Mods are .jar files."),
+            _ => format!("{file} isn't a pack. Packs are .zip files."),
+        });
+    }
+    if data_b64.len() / 4 * 3 > MAX_IMPORT_BYTES {
+        return Err(format!("{file} is too big to add here. Use the Folder button and copy it in."));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data_b64.trim()).map_err(|_| format!("Couldn't read {file}."))?;
+    // A .jar or .zip is a zip archive: catch renamed or broken files before the game trips on them.
+    if bytes.len() < 4 || &bytes[..2] != b"PK" {
+        return Err(format!("{file} isn't a valid {} file.", if kind == "mods" { ".jar" } else { ".zip" }));
+    }
+    let dir = game_dir.join(folder);
+    fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
+    let tmp = dir.join(format!(".{file}.{}.part", now_millis()));
+    fs::write(&tmp, &bytes).map_err(|e| format!("Couldn't save {file}: {e}"))?;
+    // A disabled copy of the same file would otherwise sit next to the new one.
+    let _ = fs::remove_file(dir.join(format!("{file}.disabled")));
+    fs::rename(&tmp, dir.join(file)).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("Couldn't save {file}: {e}")
+    })
 }
 
 /// Fabric Loader version an instance version uses (from its JSON, ours or the official launcher's).
@@ -1424,12 +1493,15 @@ fn install_modrinth_inner(
     Err(format!("No compatible file for Minecraft {mc_ver} could be installed."))
 }
 
-fn download_modrinth_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, slug: String, project_type: String) {
+fn download_modrinth_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, slug: String, project_type: String, profile_id: String) {
     std::thread::spawn(move || {
-        let (game_dir, paths, selected) = {
+        // Everything goes into the instance the player installed to, checked against its own version.
+        let (pid, game_dir, selected, paths) = {
             let st = shared.lock().unwrap();
-            (st.active_game_dir(), st.paths.clone(), st.config.selected_version.clone())
+            let (pid, dir, ver) = st.target_instance(&profile_id);
+            (pid, dir, ver, st.paths.clone())
         };
+        let push_install_status = |proxy: &EventLoopProxy<UserEvent>, slug: &str, state: &str, msg: &str| push_install_status(proxy, slug, state, msg, &pid);
         if project_type == "mod" && !is_fabric_version(&selected) {
             let mc = mc_version_for(&paths, &selected);
             let hint = if selected == HORIZON_ID {
@@ -1586,9 +1658,10 @@ fn main() {
                     let target = text("target");
                     let dir = {
                         let st = ipc_state.lock().unwrap();
+                        let (_, inst, _) = st.target_instance(&text("profileId"));
                         match target.as_str() {
-                            "instance" => st.active_game_dir(),
-                            "mods" | "resourcepacks" | "shaderpacks" | "saves" | "screenshots" | "logs" => st.active_game_dir().join(&target),
+                            "instance" => inst,
+                            "mods" | "resourcepacks" | "shaderpacks" | "saves" | "screenshots" | "logs" => inst.join(&target),
                             _ => st.base_dir.clone(),
                         }
                     };
@@ -1602,14 +1675,24 @@ fn main() {
                     }
                 }
                 "list_content" => {
-                    let game_dir = ipc_state.lock().unwrap().active_game_dir();
-                    push_content(&ipc_proxy, &game_dir, &text("kind"));
+                    let (pid, game_dir, _) = ipc_state.lock().unwrap().target_instance(&text("profileId"));
+                    push_content(&ipc_proxy, &game_dir, &text("kind"), &pid);
+                }
+                "import_content" => {
+                    let (kind, file) = (text("kind"), text("file"));
+                    let (pid, game_dir, _) = ipc_state.lock().unwrap().target_instance(&text("profileId"));
+                    let result = import_content(&game_dir, &kind, &file, &text("data"));
+                    match result {
+                        Ok(()) => call_js(&ipc_proxy, "onNotice", json!({"message": format!("Added {file}"), "kind": "ok"})),
+                        Err(e) => call_js(&ipc_proxy, "onNotice", json!({"message": e, "kind": "err"})),
+                    }
+                    push_content(&ipc_proxy, &game_dir, &kind, &pid);
                 }
                 "toggle_content" => {
                     let (kind, file) = (text("kind"), text("file"));
                     let enable = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
                     if let (Some(folder), true) = (content_folder(&kind), safe_file_name(&file)) {
-                        let game_dir = ipc_state.lock().unwrap().active_game_dir();
+                        let (pid, game_dir, _) = ipc_state.lock().unwrap().target_instance(&text("profileId"));
                         let dir = game_dir.join(folder);
                         let target = if enable {
                             file.strip_suffix(".disabled").unwrap_or(&file).to_owned()
@@ -1623,20 +1706,20 @@ fn main() {
                                 push_log(&ipc_proxy, &format!("[LumosClient] Could not rename {file}: {e}"));
                             }
                         }
-                        push_content(&ipc_proxy, &game_dir, &kind);
+                        push_content(&ipc_proxy, &game_dir, &kind, &pid);
                     }
                 }
                 "trash_content" => {
                     let (kind, file) = (text("kind"), text("file"));
                     if let (Some(folder), true) = (content_folder(&kind), safe_file_name(&file)) {
-                        let game_dir = ipc_state.lock().unwrap().active_game_dir();
+                        let (pid, game_dir, _) = ipc_state.lock().unwrap().target_instance(&text("profileId"));
                         let src = game_dir.join(folder).join(&file);
                         let base = ipc_state.lock().unwrap().base_dir.clone();
                         match move_to_trash(&base, &src, &file) {
                             Ok(_) => call_js(&ipc_proxy, "onNotice", json!({"message": format!("Moved {file} to {TRASH_NAME}"), "kind": "info"})),
                             Err(e) => call_js(&ipc_proxy, "onNotice", json!({"message": format!("Couldn't move {file} to {TRASH_NAME}: {e}"), "kind": "err"})),
                         }
-                        push_content(&ipc_proxy, &game_dir, &kind);
+                        push_content(&ipc_proxy, &game_dir, &kind, &pid);
                     }
                 }
                 "set_profile_icon" => {
@@ -1758,7 +1841,7 @@ fn main() {
                 "search_modrinth" => {
                     let (selected, paths) = {
                         let st = ipc_state.lock().unwrap();
-                        (st.config.selected_version.clone(), st.paths.clone())
+                        (st.target_instance(&text("profileId")).2, st.paths.clone())
                     };
                     search_modrinth_async(
                         ipc_proxy.clone(),
@@ -1778,7 +1861,7 @@ fn main() {
                         _ => "resourcepack",
                     }
                     .to_owned();
-                    download_modrinth_async(ipc_proxy.clone(), ipc_state.clone(), text("slug"), project_type);
+                    download_modrinth_async(ipc_proxy.clone(), ipc_state.clone(), text("slug"), project_type, text("profileId"));
                 }
                 "save_settings" => {
                     let mut st = ipc_state.lock().unwrap();
@@ -2012,6 +2095,28 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_files_land_in_the_named_content_folder() {
+        use base64::Engine as _;
+        let dir = std::env::temp_dir().join(format!("lumos-import-{}", now_millis()));
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        let jar = b64(b"PK\x03\x04 pretend jar");
+        assert!(import_content(&dir, "mods", "cool-mod.jar", &jar).is_ok());
+        assert!(dir.join("mods/cool-mod.jar").is_file());
+        // A disabled copy of the same mod is replaced, not kept next to it.
+        fs::write(dir.join("mods/other.jar.disabled"), b"PK").unwrap();
+        assert!(import_content(&dir, "mods", "other.jar", &jar).is_ok());
+        assert!(!dir.join("mods/other.jar.disabled").exists());
+        assert!(import_content(&dir, "resourcepacks", "pack.zip", &jar).is_ok());
+        assert!(dir.join("resourcepacks/pack.zip").is_file());
+        // Wrong type, not an archive, or a path instead of a name: refused.
+        assert!(import_content(&dir, "mods", "pack.zip", &jar).is_err());
+        assert!(import_content(&dir, "mods", "fake.jar", &b64(b"hello")).is_err());
+        assert!(import_content(&dir, "mods", "../evil.jar", &jar).is_err());
+        assert!(import_content(&dir, "saves", "x.jar", &jar).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn old_settings_carry_over_with_new_names() {

@@ -88,11 +88,14 @@
     content: ""; position: absolute; left: -12px; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent);
   }
   .rail-btn .dot { position: absolute; top: 9px; right: 9px; width: 7px; height: 7px; border-radius: 50%; background: var(--bad); box-shadow: 0 0 0 2px var(--bg-1); }
-  .rail-btn[data-tip]:hover::after {
+  .rail-btn[data-tip]::after {
     content: attr(data-tip); position: absolute; left: 54px; top: 50%; transform: translateY(-50%);
     background: var(--bg-4); color: var(--fg-1); border: 1px solid var(--line-2); padding: 5px 9px; border-radius: 7px;
     font-size: 12px; font-weight: 600; white-space: nowrap; z-index: 50; pointer-events: none; box-shadow: var(--shadow);
+    opacity: 0; visibility: hidden; transition: opacity .12s, visibility 0s .12s;
   }
+  /* Shown after a short pause, so sweeping down the rail doesn't flash every tooltip. */
+  .rail-btn[data-tip]:hover::after { opacity: 1; visibility: visible; transition: opacity .12s .35s, visibility 0s .35s; }
   .rail-spacer { flex: 1; }
   .avatar {
     width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; font-weight: 800; font-size: 14px;
@@ -148,13 +151,13 @@
     display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 34px; padding: 0 14px;
     border-radius: 9px; font-size: 13px; font-weight: 600; white-space: nowrap;
     background: var(--bg-3); border: 1px solid var(--line-2); color: var(--fg-1);
-    transition: background .12s, border-color .12s, filter .12s, transform .12s;
+    transition: background-color .12s, border-color .12s, color .12s;
   }
   .btn:hover { background: var(--bg-4); }
   .btn:active { transform: translateY(1px); }
   .btn:disabled { opacity: .45; cursor: default; transform: none; }
   .btn.primary { background: linear-gradient(115deg, var(--accent-3), var(--accent) 50%, var(--accent-2)); color: var(--on-accent); border-color: transparent; font-weight: 700; }
-  .btn.primary:hover { filter: brightness(1.07); }
+  .btn.primary:hover { background-image: linear-gradient(rgba(255,255,255,.08), rgba(255,255,255,.08)), linear-gradient(115deg, var(--accent-3), var(--accent) 50%, var(--accent-2)); }
   .btn.ghost { background: transparent; border-color: transparent; color: var(--fg-2); }
   .btn.ghost:hover { background: var(--bg-3); color: var(--fg-1); }
   .btn.danger { color: var(--bad); }
@@ -231,7 +234,7 @@
   .tile.lg { width: 64px; height: 64px; border-radius: 15px; }
   .tile.sm { width: 32px; height: 32px; border-radius: 9px; }
   .tile.xs { width: 30px; height: 30px; border-radius: 8px; }
-  button.tile { cursor: pointer; transition: box-shadow .15s, transform .15s; }
+  button.tile { cursor: pointer; transition: box-shadow .15s; }
   button.tile:hover { box-shadow: inset 0 0 0 2px rgba(var(--accent-rgb), .7), inset 0 -6px 10px rgba(0,0,0,.28); }
   .icon-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
   .icon-grid .tile { width: 100%; height: auto; aspect-ratio: 1; border: none; }
@@ -293,9 +296,7 @@
       linear-gradient(105deg, var(--accent-3) 0%, var(--accent) 50%, var(--accent-2) 100%);
     box-shadow: 0 18px 44px rgba(var(--accent-rgb), .34), 0 4px 12px rgba(0,0,0,.35),
                 inset 0 0 0 1px rgba(255,255,255,.16), inset 0 1px 0 rgba(255,255,255,.35);
-    transition: box-shadow .2s, transform .15s;
   }
-  .launch-group:hover { box-shadow: 0 22px 54px rgba(var(--accent-rgb), .45), 0 4px 12px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.2), inset 0 1px 0 rgba(255,255,255,.4); }
   .launch-group::after {
     content: ""; position: absolute; top: 0; bottom: 0; left: -45%; width: 35%; z-index: 1; pointer-events: none;
     background: linear-gradient(100deg, transparent, rgba(255,255,255,.30), transparent); transform: skewX(-20deg);
@@ -325,9 +326,9 @@
   .inst-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(188px, 1fr)); gap: 14px; }
   .inst-card {
     position: relative; display: flex; flex-direction: column; border-radius: 16px; overflow: hidden; text-align: left; cursor: pointer;
-    background: var(--bg-2); border: 1px solid var(--line); transition: border-color .15s, transform .15s, box-shadow .15s;
+    background: var(--bg-2); border: 1px solid var(--line); transition: border-color .15s, box-shadow .15s;
   }
-  .inst-card:hover { border-color: rgba(var(--accent-rgb), .45); transform: translateY(-2px); box-shadow: 0 10px 26px rgba(0,0,0,.35); }
+  .inst-card:hover { border-color: rgba(var(--accent-rgb), .45); box-shadow: 0 10px 26px rgba(0,0,0,.35); }
   .inst-card.active { border-color: rgba(var(--accent-rgb), .55); }
   .inst-card .art {
     position: relative; height: 108px; display: grid; place-items: center; border-bottom: 1px solid var(--line);
@@ -344,14 +345,14 @@
     position: absolute; right: 12px; top: 86px; width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; z-index: 2;
     color: var(--on-accent); background: linear-gradient(115deg, var(--accent-3), var(--accent) 55%, var(--accent-2));
     box-shadow: 0 8px 20px rgba(var(--accent-rgb), .4), inset 0 1px 0 rgba(255,255,255,.35);
-    opacity: 0; transform: translateY(6px) scale(.94); transition: opacity .15s, transform .15s;
+    opacity: 0; transition: opacity .15s;
   }
-  .inst-card:hover .fab, .inst-card:focus-within .fab { opacity: 1; transform: none; }
+  .inst-card:hover .fab, .inst-card:focus-within .fab { opacity: 1; }
   .inst-card.new { align-items: center; justify-content: center; gap: 10px; min-height: 206px; border-style: dashed; color: var(--fg-2); font-weight: 650; background: transparent; }
   .inst-card.new:hover { color: var(--fg-1); background: var(--bg-2); }
   .inst-card.new .plus { width: 46px; height: 46px; border-radius: 13px; display: grid; place-items: center; background: var(--bg-3); border: 1px solid var(--line-2); }
   .hero-meta { position: absolute; left: 20px; right: 20px; bottom: 16px; display: flex; align-items: center; gap: 8px; }
-  .hero-meta .chip { background: rgba(12,12,15,.55); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-color: rgba(255,255,255,.1); color: rgba(255,255,255,.82); }
+  .hero-meta .chip { background: rgba(12,12,15,.72); border-color: rgba(255,255,255,.1); color: rgba(255,255,255,.82); }
   .hero-meta .grow { flex: 1; }
   .spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -397,6 +398,9 @@
   .lib-row .sub { display: flex; gap: 14px; color: var(--fg-3); font-size: 12px; }
   .lib-row .sub span { display: inline-flex; align-items: center; gap: 5px; }
   .lib-row .play { opacity: 0; transition: opacity .12s; }
+  .inst-card .mods-link { align-self: flex-start; height: 28px; padding: 0 10px; font-size: 12px; margin-top: -2px; }
+  #contentList.dropping { outline: 2px dashed rgba(var(--accent-rgb), .7); outline-offset: -4px; background: rgba(var(--accent-rgb), .06); }
+  .drop-hint { font-size: 11.5px; color: var(--fg-3); padding: 2px 4px; }
   .lib-row:hover .play, .lib-row:focus-within .play { opacity: 1; }
 
   .inst-head { padding: 20px; display: flex; flex-direction: column; gap: 18px; }
@@ -793,10 +797,13 @@
           <div class="search-box" style="width:200px"><svg class="i sm"><use href="#i-search"/></svg><input class="input" id="contentSearch" aria-label="Filter installed content" placeholder="Filter…" style="height:34px" /></div>
           <button class="btn sm icon" data-act="content-refresh" title="Refresh" aria-label="Refresh"><svg class="i sm"><use href="#i-refresh"/></svg></button>
           <button class="btn sm" data-act="content-folder"><svg class="i sm"><use href="#i-folder"/></svg>Folder</button>
-          <button class="btn primary sm" data-act="content-add"><svg class="i sm"><use href="#i-plus"/></svg>Add content</button>
+          <button class="btn sm" data-act="content-import" title="Add .jar mods or .zip packs from your computer"><svg class="i sm"><use href="#i-plus"/></svg>Add files</button>
+          <input type="file" id="contentFile" multiple hidden />
+          <button class="btn primary sm" data-act="content-add"><svg class="i sm"><use href="#i-compass"/></svg>Browse Discover</button>
         </div>
       </div>
       <div class="card" style="padding:6px" id="contentList"></div>
+      <div class="drop-hint">Changes here only affect this instance. Drop .jar mods or .zip packs onto the list to add them; switch one off to keep it without loading it.</div>
     </div>
   </section>
 
@@ -844,7 +851,8 @@
           <div>
             <h4>Installs into</h4>
             <div class="col" style="gap:6px">
-              <div class="row"><span class="tile sm" id="discTile"></span><div><div style="font-weight:650" id="discInst">Default</div><div class="faint" style="font-size:11.5px" id="discVer">1.21.11</div></div></div>
+              <div class="row"><span class="tile sm" id="discTile"></span><div style="flex:1;min-width:0"><select class="select" id="discTarget" aria-label="Instance to install into" style="width:100%;height:34px;border-radius:9px"></select><div class="faint" style="font-size:11.5px;margin-top:4px" id="discVer">1.21.11</div></div></div>
+              <div class="faint" style="font-size:11.5px">Only this instance gets what you install here.</div>
             </div>
           </div>
           <div>
@@ -1492,6 +1500,13 @@
   }
 
   // ───────────────────────── Render: state ─────────────────────────
+  // Re-renders replace a list only when its markup changed, so a row under the pointer
+  // isn't rebuilt (rebuilding restarts its hover animation, which reads as flicker).
+  Object.defineProperty(Element.prototype, 'stableHTML', {
+    configurable: true,
+    set(html) { if (this.__stable !== html || this.innerHTML === '') { this.innerHTML = html; this.__stable = html; } },
+    get() { return this.innerHTML; },
+  });
   const IS_MAC = /Mac/i.test(navigator.platform || navigator.userAgent);
   const TRASH = IS_MAC ? 'Trash' : /Win/i.test(navigator.platform || navigator.userAgent) ? 'Recycle Bin' : 'trash folder';
   window.renderState = function (next) {
@@ -1633,11 +1648,11 @@
     group.classList.toggle('running', !!state.running);
     btn.disabled = !!state.running || busy();
     $('verCaret').disabled = busy();
-    $('launchTitle').innerHTML = state.running ? `<span class="led" style="width:9px;height:9px;border-radius:50%;background:var(--ok)"></span>PLAYING`
+    $('launchTitle').stableHTML = state.running ? `<span class="led" style="width:9px;height:9px;border-radius:50%;background:var(--ok)"></span>PLAYING`
       : busy() ? `<span class="spinner"></span>GETTING READY` : `${icon('play', 'lg')}LAUNCH GAME`;
     const dp = $('detPlay');
     dp.disabled = !!state.running || busy();
-    dp.innerHTML = state.running ? 'Playing' : busy() ? '<span class="spinner"></span>Getting ready' : `${icon('play', '')}Play`;
+    dp.stableHTML = state.running ? 'Playing' : busy() ? '<span class="spinner"></span>Getting ready' : `${icon('play', '')}Play`;
     $('detStatus').textContent = state.running ? 'Playing now' : busy() ? 'Getting ready…' : horizonFirstRun() ? 'Sets up on first launch' : 'Ready to play';
     renderTask();
   }
@@ -1657,18 +1672,18 @@
     $('launchSub').textContent = `${state.selectedVersion} · ${ap.name}`;
     const m = verMeta(state.selectedVersion);
     $('heroLoaderChip').className = 'chip loader-' + m.cls;
-    $('heroLoaderChip').innerHTML = icon('box') + esc(m.label || m.loader);
-    $('metaRam').innerHTML = icon('cpu') + fmtGb(state.memoryMb || 0);
-    $('metaRes').innerHTML = icon('monitor') + (state.fullscreen ? 'Fullscreen' : `${state.resolutionWidth}×${state.resolutionHeight}`);
+    $('heroLoaderChip').stableHTML = icon('box') + esc(m.label || m.loader);
+    $('metaRam').stableHTML = icon('cpu') + fmtGb(state.memoryMb || 0);
+    $('metaRes').stableHTML = icon('monitor') + (state.fullscreen ? 'Fullscreen' : `${state.resolutionWidth}×${state.resolutionHeight}`);
     const hudLive = state.lumosHudEnabled !== false && /fabric/i.test(state.selectedVersion) && /1\.21\.11/.test(state.selectedVersion);
-    $('metaHud').innerHTML = icon('hud') + (state.lumosHudEnabled === false ? 'LumosHUD off' : hudLive ? 'LumosHUD on' : 'LumosHUD (Fabric 1.21.11 only)');
+    $('metaHud').stableHTML = icon('hud') + (state.lumosHudEnabled === false ? 'LumosHUD off' : hudLive ? 'LumosHUD on' : 'LumosHUD (Fabric 1.21.11 only)');
     $('horizonBanner').classList.toggle('hidden', !horizonFirstRun() || busy());
 
     // Quick play: instances (switch) + servers (join)
     const qi = $('quickItems');
     const profs = sortedProfiles('recent').slice(0, 5);
     const srvs = (state.servers || []).slice(0, 4);
-    qi.innerHTML = profs.map(p => `<button class="quick-item ${p.id === state.activeProfileId ? 'active' : ''}" data-act="quick-profile" data-id="${esc(p.id)}" title="Make active and launch">${pxTile(profileIcon(p), 'xs')}${esc(p.name)}</button>`).join('')
+    qi.stableHTML = profs.map(p => `<button class="quick-item ${p.id === state.activeProfileId ? 'active' : ''}" data-act="quick-profile" data-id="${esc(p.id)}" title="Make active and launch">${pxTile(profileIcon(p), 'xs')}${esc(p.name)}</button>`).join('')
       + srvs.map(s => `<button class="quick-item" data-act="join" data-addr="${esc(s.address)}" title="Join ${esc(s.address)}">${pxTile(serverIcon(s), 'xs')}${esc(s.name)}</button>`).join('')
       || '<span class="faint">Create an instance or save a server to pin it here.</span>';
 
@@ -1681,7 +1696,7 @@
     $('homeLower').className = grid ? 'col' : 'grid-2';
     document.querySelectorAll('[data-act="home-layout"]').forEach(b => b.classList.toggle('active', b.dataset.v === (state.homeLayout || 'launchpad')));
     if (grid) {
-      $('instGrid').innerHTML = sortedProfiles('recent').map(p => {
+      $('instGrid').stableHTML = sortedProfiles('recent').map(p => {
         const v = profVersion(p), act = p.id === state.activeProfileId;
         return `<div class="inst-card ${act ? 'active' : ''}" role="button" tabindex="0" data-act="open-instance" data-id="${esc(p.id)}" title="Open ${esc(p.name)}">
           <div class="art">${act ? '<span class="chip accent">Active</span>' : ''}${pxTile(profileIcon(p))}</div>
@@ -1690,26 +1705,28 @@
             <div class="name">${esc(p.name)}</div>
             <div class="chips">${loaderChip(v)}${versionChip(v)}</div>
             <div class="sub"><span>${icon('clock')}${fmtDuration(p.playtimeSecs)}</span><span>${fmtAgo(p.lastPlayed)}</span></div>
+            <button class="btn ghost sm mods-link" data-act="manage-content" data-id="${esc(p.id)}" title="Mods and packs for ${esc(p.name)}">${icon('box')}Mods &amp; packs</button>
           </div>
         </div>`;
       }).join('') + `<button class="inst-card new" data-act="new-instance"><span class="plus">${icon('plus', '')}</span>New instance</button>`;
     }
 
     // Recent instances
-    $('recentCards').innerHTML = sortedProfiles('recent').slice(0, 4).map(p => `
+    $('recentCards').stableHTML = sortedProfiles('recent').slice(0, 4).map(p => `
       <div class="recent-row" role="button" tabindex="0" data-act="open-instance" data-id="${esc(p.id)}">
         ${pxTile(profileIcon(p), 'sm')}
         <div class="meta">
           <div class="name">${esc(p.name)}${p.id === state.activeProfileId ? '<span class="chip accent">Active</span>' : ''}</div>
           <div class="sub"><span>${icon('clock')}${fmtDuration(p.playtimeSecs)}</span><span>${fmtAgo(p.lastPlayed)}</span></div>
         </div>
+        <button class="btn ghost sm" data-act="manage-content" data-id="${esc(p.id)}" title="Mods and packs for ${esc(p.name)}">${icon('box')}Mods</button>
         <button class="btn sm" data-act="quick-profile" data-id="${esc(p.id)}">${icon('play')}Play</button>
       </div>`).join('');
 
     // Servers (home)
     const hs = $('homeServers');
     const list = (state.servers || []).slice(0, 4);
-    hs.innerHTML = list.length ? list.map(s => `
+    hs.stableHTML = list.length ? list.map(s => `
       <div class="srv-row">
         ${pxTile(serverIcon(s), 'sm')}
         <div class="meta"><div class="name">${esc(s.name)}</div><div class="addr">${esc(s.address)}</div></div>
@@ -1738,13 +1755,14 @@
   function renderLibrary() {
     const q = $('libSearch').value.trim().toLowerCase();
     const rows = sortedProfiles($('libSort').value).filter(p => !q || p.name.toLowerCase().includes(q));
-    $('libRows').innerHTML = rows.length ? rows.map(p => `
+    $('libRows').stableHTML = rows.length ? rows.map(p => `
       <div class="lib-row" role="button" tabindex="0" data-act="open-instance" data-id="${esc(p.id)}">
         ${pxTile(profileIcon(p))}
         <div class="meta">
           <div class="title">${esc(p.name)} ${versionChip(profVersion(p))}${loaderChip(profVersion(p))}${p.id === state.activeProfileId ? '<span class="chip accent">Active</span>' : ''}</div>
           <div class="sub"><span>${icon('clock')}${fmtDuration(p.playtimeSecs)}</span><span>${icon('cal')}${fmtAgo(p.lastPlayed)}</span><span>${icon('box')}${esc(profVersion(p))}</span></div>
         </div>
+        <button class="btn ghost sm" data-act="manage-content" data-id="${esc(p.id)}" title="Mods and packs for ${esc(p.name)}">${icon('box')}Mods &amp; packs</button>
         <button class="btn primary sm play" data-act="quick-profile" data-id="${esc(p.id)}">${icon('play')}Play</button>
       </div>`).join('')
       : `<div class="card empty">${icon('library', '')}<b>No instances match “${esc(q)}”</b></div>`;
@@ -1760,16 +1778,30 @@
   }
   function renderDetail() {
     const p = activeProfile();
-    $('detTile').innerHTML = pxSvg(profileIcon(p));
+    $('detTile').stableHTML = pxSvg(profileIcon(p));
     setVal('detName', p.name);
-    $('detChips').innerHTML = loaderChip(profVersion(activeProfile())) + versionChip(profVersion(activeProfile()));
+    $('detChips').stableHTML = loaderChip(profVersion(activeProfile())) + versionChip(profVersion(activeProfile()));
     $('detLast').textContent = fmtAgo(p.lastPlayed);
     $('detTime').textContent = fmtDuration(p.playtimeSecs);
     $('detVersion').textContent = profVersion(p);
   }
   function loadContent() {
+    if (ui.contentFor !== state.activeProfileId) { ui.content = {}; ui.contentFor = state.activeProfileId; }
     $('contentList').innerHTML = skeletonRows(4, 34);
-    send('list_content', { kind: ui.contentKind });
+    send('list_content', { kind: ui.contentKind, profileId: state.activeProfileId });
+  }
+  // Adds the player's own files to the open instance (.jar → Mods, .zip → the packs tab you're on).
+  function importFiles(files, kind) {
+    const pid = state.activeProfileId;
+    for (const f of files) {
+      const k = kind || (/\.jar$/i.test(f.name) ? 'mods' : ui.contentKind === 'shaderpacks' ? 'shaderpacks' : 'resourcepacks');
+      if (!/\.(jar|zip)$/i.test(f.name)) { toast(`${f.name} isn't a mod (.jar) or pack (.zip).`, 'err'); continue; }
+      if (f.size > 256 * 1024 * 1024) { toast(`${f.name} is too big to add here. Use the Folder button.`, 'err'); continue; }
+      const r = new FileReader();
+      r.onload = () => send('import_content', { profileId: pid, kind: k, file: f.name, data: String(r.result).replace(/^data:[^,]*,/, '') });
+      r.onerror = () => toast(`Couldn't read ${f.name}.`, 'err');
+      r.readAsDataURL(f);
+    }
   }
   function prettyName(file) {
     const base = file.replace(/\.disabled$/, '').replace(/\.(jar|zip)$/i, '').replace(/[-_+]/g, ' ')
@@ -1777,6 +1809,7 @@
     return base ? base.replace(/\b\w/g, c => c.toUpperCase()) : file;
   }
   window.renderContent = function (data) {
+    if (data.profileId && data.profileId !== state.activeProfileId) return; // an answer about another instance
     ui.content[data.kind] = data.items || [];
     const c = $('cnt-' + data.kind); if (c) c.textContent = (data.items || []).length;
     if (data.kind === ui.contentKind) renderContentList();
@@ -1804,7 +1837,7 @@
   // ───────────────────────── Servers ─────────────────────────
   function renderServers() {
     const list = state.servers || [];
-    $('serversList').innerHTML = list.length ? list.map(s => `
+    $('serversList').stableHTML = list.length ? list.map(s => `
       <div class="srv-card">
         ${pxTile(serverIcon(s))}
         <div class="meta"><div style="font-weight:700">${esc(s.name)}</div><div class="mono faint" style="font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.address)}</div></div>
@@ -1818,8 +1851,9 @@
   // ───────────────────────── Discover ─────────────────────────
   function renderDiscoverSide() {
     const p = activeProfile();
-    $('discTile').innerHTML = pxSvg(profileIcon(p));
-    $('discInst').textContent = p.name;
+    $('discTile').stableHTML = pxSvg(profileIcon(p));
+    $('discTarget').stableHTML = (state.profiles || []).map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
+    $('discTarget').value = state.activeProfileId;
     $('discVer').textContent = state.selectedVersion;
     $('compatVer').textContent = /horizon/i.test(state.selectedVersion) ? 'Horizon 26.3: resource packs only'
       : ui.modType === 'mod' ? `Filtered for ${modFilterVersion(state.selectedVersion)} + Fabric` : ui.modType === 'shader' ? 'Shaders need Fabric + Iris' : `Filtered for ${modFilterVersion(state.selectedVersion)}`;
@@ -1829,7 +1863,7 @@
   }
   function searchMods() {
     $('modResults').innerHTML = `<div class="card">${skeletonRows(5)}</div>`;
-    send('search_modrinth', { query: $('modQuery').value.trim(), projectType: ui.modType, sortBy: $('modSort').value, offset: ui.modOffset, seq: ++ui.modSeq });
+    send('search_modrinth', { profileId: state.activeProfileId, query: $('modQuery').value.trim(), projectType: ui.modType, sortBy: $('modSort').value, offset: ui.modOffset, seq: ++ui.modSeq });
   }
   window.renderModResults = function (data) {
     if (typeof data.seq === 'number' && data.seq !== ui.modSeq) return; // an older search finished late
@@ -1877,9 +1911,10 @@
     }).join('');
     $('modResults').scrollIntoView({ block: 'nearest' });
   };
-  window.onInstallStatus = function (slug, status, msg) {
-    const btn = document.getElementById('dl-' + slug);
-    if (status === 'installed') (ui.installed[state.activeProfileId] ||= new Set()).add(slug);
+  window.onInstallStatus = function (slug, status, msg, profileId) {
+    const pid = profileId || state.activeProfileId;
+    const btn = pid === state.activeProfileId ? document.getElementById('dl-' + slug) : null;
+    if (status === 'installed') (ui.installed[pid] ||= new Set()).add(slug);
     if (btn) {
       btn.disabled = status !== 'error';
       btn.className = 'btn sm ' + (status === 'installed' ? 'ok' : 'primary');
@@ -1887,7 +1922,7 @@
         : status === 'installed' ? icon('check') + 'Installed' : icon('refresh') + 'Retry';
     }
     if (status !== 'installing') toast(msg, status === 'error' ? 'err' : 'ok');
-    if (status === 'installed' && ui.libDetail) loadContent();
+    if (status === 'installed' && ui.libDetail && pid === state.activeProfileId) loadContent();
   };
 
   // ───────────────────────── Logs ─────────────────────────
@@ -1957,22 +1992,22 @@
   function renderSettingsValues() {
     const max = memMax();
     $('setMemory').max = max; $('setMemoryNum').max = max;
-    $('memScale').innerHTML = `<span>1 GB</span><span>${fmtGb(Math.round(max / 2 / 1024) * 1024)}</span><span>${fmtGb(max)}</span>`;
+    $('memScale').stableHTML = `<span>1 GB</span><span>${fmtGb(Math.round(max / 2 / 1024) * 1024)}</span><span>${fmtGb(max)}</span>`;
     setVal('setMemory', state.memoryMb); setVal('setMemoryNum', state.memoryMb);
     const rec = recommendedMemory();
     $('memHint').textContent = state.systemMemoryMb ? `This computer has ${fmtGb(state.systemMemoryMb)}. Recommended: ${fmtGb(rec)}.` : 'How much RAM the game may use.';
-    $('memPresets').innerHTML = [['Recommended', rec], ['2 GB', 2048], ['4 GB', 4096], ['6 GB', 6144], ['8 GB', 8192]]
+    $('memPresets').stableHTML = [['Recommended', rec], ['2 GB', 2048], ['4 GB', 4096], ['6 GB', 6144], ['8 GB', 8192]]
       .filter(([l, v], i) => v <= max && (i === 0 || v !== rec))
       .map(([l, v]) => `<button class="opt ${state.memoryMb === v ? 'active' : ''}" data-act="mem-preset" data-v="${v}">${l === 'Recommended' ? icon('sparkle') + 'Recommended · ' + fmtGb(v) : l}</button>`).join('');
     setVal('setWidth', state.resolutionWidth); setVal('setHeight', state.resolutionHeight);
-    $('resPresets').innerHTML = [[854, 480], [1280, 720], [1600, 900], [1920, 1080], [2560, 1440]]
+    $('resPresets').stableHTML = [[854, 480], [1280, 720], [1600, 900], [1920, 1080], [2560, 1440]]
       .map(([w, h]) => `<button class="opt ${state.resolutionWidth === w && state.resolutionHeight === h ? 'active' : ''}" data-act="res-preset" data-w="${w}" data-h="${h}">${w}×${h}</button>`).join('');
     setChecked('setFullscreen', state.fullscreen);
     document.querySelectorAll('.radio-card[data-hide]').forEach(b => b.classList.toggle('active', String(!!state.hideOnLaunch) === b.dataset.hide));
     setVal('javaHome', state.javaHome || ''); setVal('setJvmArgs', state.jvmArgs || '');
     setChecked('setHud', state.lumosHudEnabled !== false);
     document.querySelectorAll('[data-theme-opt]').forEach(b => b.classList.toggle('active', b.dataset.themeOpt === (state.uiTheme || 'dark')));
-    $('swatches').innerHTML = ACCENTS.map(([k, name, a, b]) => `<button class="swatch ${state.uiAccent === k ? 'active' : ''}" style="background:linear-gradient(135deg,${a},${b})" data-act="accent" data-k="${k}" title="${name}" aria-label="${name}"></button>`).join('');
+    $('swatches').stableHTML = ACCENTS.map(([k, name, a, b]) => `<button class="swatch ${state.uiAccent === k ? 'active' : ''}" style="background:linear-gradient(135deg,${a},${b})" data-act="accent" data-k="${k}" title="${name}" aria-label="${name}"></button>`).join('');
     $('accentName').textContent = (ACCENTS.find(a => a[0] === state.uiAccent) || ACCENTS[0])[1];
     setChecked('setMotion', state.uiMotion !== false);
     $('mcDirLabel').textContent = state.minecraftDir || 'Not found on this computer';
@@ -1980,7 +2015,7 @@
     $('footVersion').textContent = 'LumosClient ' + (state.launcherVersion || '');
     const rc = $('resChip');
     rc.className = 'chip ' + (state.resourcesReady ? 'ok' : '');
-    rc.innerHTML = `<span class="led"></span>${state.resourcesReady ? 'Ready' : 'Sets up on first launch'}`;
+    rc.stableHTML = `<span class="led"></span>${state.resourcesReady ? 'Ready' : 'Sets up on first launch'}`;
     $('baseDirLabel').textContent = state.baseDir;
     $('instDirLabel').textContent = 'instances/' + (state.activeProfileId || 'default');
   }
@@ -2255,7 +2290,7 @@
       case 'pal-run': runPalette(+d.i); break;
       case 'open-settings': openSettings(d.section); break;
       case 'close-settings': closeSettings(); break;
-      case 'open-folder': send('open_folder', d.target === 'instances-root' ? {} : { target: d.target || '' }); break;
+      case 'open-folder': send('open_folder', d.target === 'instances-root' ? {} : { target: d.target || '', profileId: state.activeProfileId }); break;
       case 'url': send('open_url', { url: d.url }); break;
       case 'quick-profile': e.stopPropagation(); selectProfile(d.id); state.activeProfileId = d.id; renderHome(); launch(); break;
       case 'open-instance': selectProfile(d.id); go('library'); showLibDetail(true); break;
@@ -2275,15 +2310,27 @@
         toast(`Instance removed. Its folder is in the ${TRASH} if you need it back.`, 'info');
         break;
       case 'content-refresh': loadContent(); break;
-      case 'content-folder': send('open_folder', { target: ui.contentKind }); break;
+      case 'content-folder': send('open_folder', { target: ui.contentKind, profileId: state.activeProfileId }); break;
+      case 'content-import': {
+        const inp = $('contentFile');
+        inp.accept = ui.contentKind === 'mods' ? '.jar' : '.zip';
+        inp.value = '';
+        inp.click();
+        break;
+      }
+      case 'manage-content':
+        e.stopPropagation(); selectProfile(d.id); go('library');
+        ui.contentKind = 'mods';
+        document.querySelectorAll('#contentSeg button').forEach(x => x.classList.toggle('active', x.dataset.kind === 'mods'));
+        showLibDetail(true); break;
       case 'content-add': ui.modType = { mods: 'mod', resourcepacks: 'resourcepack', shaderpacks: 'shader' }[ui.contentKind];
         document.querySelectorAll('#typeSeg button').forEach(b => b.classList.toggle('active', b.dataset.type === ui.modType));
         ui.modOffset = 0; ui.modLoaded = true; go('discover'); searchMods(); break;
-      case 'toggle-content': send('toggle_content', { kind: ui.contentKind, file: d.file, enabled: el.checked }); break;
+      case 'toggle-content': send('toggle_content', { profileId: state.activeProfileId, kind: ui.contentKind, file: d.file, enabled: el.checked }); break;
       case 'trash-content':
         if (!confirmClick(el, icon('trash'))) { el.title = `Click again to move to ${TRASH}`; break; }
-        send('trash_content', { kind: ui.contentKind, file: d.file }); break;
-      case 'install': send('download_modrinth', { slug: d.slug, projectType: d.type }); window.onInstallStatus(d.slug, 'installing', ''); break;
+        send('trash_content', { profileId: state.activeProfileId, kind: ui.contentKind, file: d.file }); break;
+      case 'install': send('download_modrinth', { slug: d.slug, projectType: d.type, profileId: state.activeProfileId }); window.onInstallStatus(d.slug, 'installing', '', state.activeProfileId); break;
       case 'page': { const next = Math.max(0, ui.modOffset + (+d.dir) * 20); if (next >= ui.modTotal && +d.dir > 0) break; ui.modOffset = next; searchMods(); break; }
       case 'join': e.stopPropagation(); join(d.addr); break;
       case 'direct-join': join($('quickAddr').value); break;
@@ -2375,6 +2422,19 @@
     if (ui.content[ui.contentKind]) renderContentList(); else loadContent();
   }));
   $('contentSearch').addEventListener('input', renderContentList);
+  $('contentFile').addEventListener('change', e => { importFiles([...e.target.files], ui.contentKind); e.target.value = ''; });
+  const dropZone = $('libDetail');
+  dropZone.addEventListener('dragover', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); $('contentList').classList.add('dropping'); } });
+  dropZone.addEventListener('dragleave', e => { if (!dropZone.contains(e.relatedTarget)) $('contentList').classList.remove('dropping'); });
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault(); $('contentList').classList.remove('dropping');
+    if (e.dataTransfer?.files?.length) importFiles([...e.dataTransfer.files]);
+  });
+  $('discTarget').addEventListener('change', e => {
+    selectProfile(e.target.value);
+    renderDiscoverSide(); renderHome();
+    ui.modOffset = 0; searchMods();
+  });
 
   // Discover
   let modTimer = null;
