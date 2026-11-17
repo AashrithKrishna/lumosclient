@@ -1281,6 +1281,15 @@ fn launch_horizon(
     let auth = build_auth(shared, cfg, &snap.paths, rep)?;
     let base_dir = shared.lock().unwrap().base_dir.clone();
     // An instance with native mods plays the cloud build made for them (native_builds).
+    // An instance on a per-commit native build moves onto the combined build when that has all its mods.
+    {
+        let report = |m: &str| rep.report(m, -1.0);
+        match native_builds::upgrade_to_combined(&base_dir, &snap.game_dir, &report) {
+            Ok(true) => rep.log("[Horizon] Moved this instance's native mods onto the combined build"),
+            Ok(false) => {}
+            Err(e) => rep.log(&format!("[Horizon] Staying on this instance's native build: {e}")),
+        }
+    }
     let (client, resources) = match native_builds::launch_parts(&base_dir, &snap.game_dir) {
         Some((client, prepare, root, short)) => {
             let output = snap.horizon_output.with_file_name(format!("26.3-{short}"));
