@@ -276,6 +276,25 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Live: installs Zoom from the published cloud build. Run with --ignored.
+    #[test]
+    #[ignore]
+    fn live_install_native_zoom() {
+        let base = std::env::temp_dir().join(format!("lumos-native-live-{}", std::process::id()));
+        let game = base.join("instance");
+        let msg = install(&base, &game, "zoom", &|m| eprintln!("{m}")).expect("install");
+        eprintln!("{msg}");
+        let (client, prepare, root, short) = launch_parts(&base, &game).expect("parts");
+        assert!(client.is_file() && prepare.is_file() && root.join("exporters/manifest.json").is_file(), "{short}");
+        assert!(horizon_mods::is_enabled(&game, "zoom") && !horizon_mods::is_enabled(&game, "minimap"));
+        let out = std::process::Command::new(&client).arg("--help").output().expect("runs");
+        assert!(out.status.success() || !out.stdout.is_empty() || !out.stderr.is_empty(), "game binary doesn't run");
+        // A second mod from the same build joins it.
+        install(&base, &game, "minimap", &|_| {}).expect("second");
+        assert_eq!(installed_ids(&game), vec!["zoom".to_owned(), "minimap".to_owned()]);
+        let _ = fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn builds_with_odd_names_are_ignored() {
         let ok = serde_json::json!({"short": "6f8c7a0e", "asset": "lumos-native-6f8c7a0e-macos-arm64.zip", "sha256": "ab", "size": 3, "mods": []});

@@ -30,13 +30,15 @@ These are the only official Lumos Client downloads. Lumos isn't signed with a pa
 - **Instances:** separate setups, each with its own version, mods, resource packs, shaders and worlds.
 - **Mods & packs per instance:** browse Modrinth inside the launcher and pick which instance to install into. Dependencies come along automatically. You can also add your own `.jar` and `.zip` files, or switch any of them off.
 - **Skins and capes with Ely.by:** sign in with a free Ely.by account and choose a skin or cape from the catalog inside the launcher. Other Ely.by players see them in game.
-- **LumosHUD:** FPS, CPS, coordinates and keystrokes in game (Fabric 1.21.11).
-- **Horizon 26.3 (Rust):** an optional engine that plays Minecraft 26.3 without Java. Lumos sets it up the first time you choose it.
+- **LumosHUD:** FPS, CPS, coordinates and keystrokes in game (Fabric 1.21.x).
+- **Horizon 26.3 (Rust):** an optional engine that plays Minecraft 26.3 without Java. Lumos sets it up the first time you choose it, and installs Horizon's own mods, shaders and packs, including its native Rust mods as ready-made builds.
+- **Boost FPS:** one click per Fabric instance adds the best performance mods for its version and tuned Java settings.
 - **Servers:** save servers, see their ping, join in one click.
 
 ## What you need
 
-- Your own copy of **Minecraft: Java Edition** to play online. Offline play works without an account.
+- Nothing to buy to play: sign in offline, or with a free [Ely.by](https://ely.by) account for skins.
+- Lumos doesn't sign in with Microsoft accounts yet, so it can't join servers that require a paid Minecraft account (online-mode servers such as Hypixel). It plays singleplayer, LAN, and servers that allow offline or Ely.by players.
 - An internet connection the first time you play a version.
 
 Your instances and settings are stored in `~/LumosClient` on a Mac and in `%USERPROFILE%\LumosClient` on Windows.

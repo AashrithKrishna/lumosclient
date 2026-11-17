@@ -816,6 +816,10 @@
             <div class="txt"><b>Version</b><span id="isVersion">–</span></div>
             <button class="btn sm" data-act="version-menu"><svg class="i sm"><use href="#i-box"/></svg>Change version</button>
           </div>
+          <div class="inst-set" id="isBoostRow">
+            <div class="txt"><b>Boost FPS</b><span>Adds the best performance mods this version has (Sodium, Lithium, FerriteCore, ImmediatelyFast, culling, Dynamic FPS, and RetiNO on Mac) and tuned Java settings.</span></div>
+            <button class="btn primary sm" data-act="inst-boost"><svg class="i sm"><use href="#i-sparkle"/></svg>Boost FPS</button>
+          </div>
           <div class="inst-set">
             <div class="txt"><b>Memory</b><span id="isMemHint">Launcher default</span></div>
             <div class="row" style="gap:8px">
@@ -1879,6 +1883,7 @@
   function renderInstSettings(fill) {
     const p = activeProfile();
     $('isVersion').textContent = profVersion(p);
+    $('isBoostRow').classList.toggle('hidden', !/^Fabric /.test(profVersion(p)));
     const only = (state.profiles || []).length <= 1;
     $('isDelHint').textContent = only ? 'This is your only instance. Make another one before deleting this one.'
       : `Removes it from LumosClient. Its folder (worlds, mods, screenshots) goes to the ${TRASH}, so you can get it back.`;
@@ -2453,6 +2458,7 @@
       case 'close-new': $('newInstScrim').classList.remove('open'); break;
       case 'create-instance': createInstance(); break;
       case 'inst-save': saveInstSettings(false); break;
+      case 'inst-boost': send('boost_instance', { profileId: state.activeProfileId }); toast('Boosting FPS: adding performance mods…', 'info'); break;
       case 'inst-reset': saveInstSettings(true); break;
       case 'instance-settings':
         e.stopPropagation(); selectProfile(d.id); go('library');

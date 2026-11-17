@@ -9414,6 +9414,16 @@ impl Game<'_> {
                     self.focus_lost = (!focused).then(Instant::now);
                     if focused {
                         self.regrab_on_refocus();
+                        // The system pointer can be left hidden by a grab or hide that ended
+                        // while the window was opening or unfocused (seen when another app starts
+                        // the game): whenever the game doesn't hold the pointer, show it again.
+                        // Hidden-then-shown, because the window skips a show it thinks is done.
+                        if !self.captured && !self.internal_grab() && self.keyboard_mouse {
+                            if let Some(window) = &self.window {
+                                window.set_cursor_visible(false);
+                                window.set_cursor_visible(true);
+                            }
+                        }
                     } else {
                         // A held pointer goes with the focus, wherever the
                         // system keeps the grab: the window asks for it back

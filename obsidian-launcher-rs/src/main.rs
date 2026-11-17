@@ -1743,6 +1743,74 @@ fn download_modrinth_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<A
     });
 }
 
+/// Performance mods "Boost FPS" adds to a Fabric instance (each only when Modrinth has it for
+/// the instance's version). RetiNO stops a Retina Mac from rendering at 4x the pixels.
+fn boost_mods() -> Vec<&'static str> {
+    let mut v = vec!["sodium", "lithium", "ferrite-core", "immediatelyfast", "entityculling", "moreculling", "dynamic-fps"];
+    if cfg!(target_os = "macos") {
+        v.push("retino");
+    }
+    v
+}
+
+/// Java settings that cut garbage-collection stutter (G1 tuned for a game client).
+const BOOST_JVM_ARGS: &str = "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15";
+
+/// Adds the performance mods missing from a Fabric instance and, unless the player set their
+/// own, the tuned Java settings.
+fn boost_instance_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, profile_id: String) {
+    std::thread::spawn(move || {
+        let target = {
+            let st = shared.lock().unwrap();
+            st.target_instance(&profile_id).map(|(pid, dir, ver)| (pid, dir, ver, st.paths.clone()))
+        };
+        let Some((pid, game_dir, selected, paths)) = target else {
+            call_js(&proxy, "onNotice", json!({"message": GONE_INSTANCE, "kind": "err"}));
+            return;
+        };
+        if !is_fabric_version(&selected) {
+            call_js(&proxy, "onNotice", json!({"message": "Boost FPS works on Fabric instances. Switch this instance to a Fabric version first.", "kind": "err"}));
+            return;
+        }
+        let mc_ver = mc_version_for(&paths, &selected);
+        let loader = detect_fabric_loader_version(&paths, &selected);
+        let have = installed_projects(&game_dir.join("mods"));
+        let mut added = Vec::new();
+        let mut skipped = Vec::new();
+        for slug in boost_mods() {
+            // Modrinth answers by project id; ask for the slug's id to compare with what's there.
+            let id = net::get_json(&format!("https://api.modrinth.com/v2/project/{slug}")).ok().and_then(|v| v.get("id").and_then(|i| i.as_str()).map(str::to_owned));
+            if id.as_ref().is_some_and(|i| have.contains_key(i)) {
+                continue;
+            }
+            call_js(&proxy, "onNotice", json!({"message": format!("Adding {slug}..."), "kind": "info"}));
+            match install_modrinth_project(&proxy, &game_dir, slug, "mod", &mc_ver, loader, 0) {
+                Ok(f) if !f.is_empty() => added.push(slug),
+                Ok(_) => {}
+                Err(_) => skipped.push(slug),
+            }
+        }
+        {
+            let mut st = shared.lock().unwrap();
+            let global_empty = st.config.jvm_args.trim().is_empty();
+            if let Some(p) = st.config.profiles.iter_mut().find(|p| p.id == pid) {
+                if p.jvm_args.as_deref().unwrap_or("").trim().is_empty() && global_empty {
+                    p.jvm_args = Some(BOOST_JVM_ARGS.to_owned());
+                }
+            }
+            st.save_config();
+            push_state(&proxy, &st);
+        }
+        push_content(&proxy, &game_dir, "mods", &pid, false);
+        let mut msg = if added.is_empty() { "This instance already had every performance mod.".to_owned() } else { format!("Added {}.", added.join(", ")) };
+        if !skipped.is_empty() {
+            msg.push_str(&format!(" Not available for Minecraft {mc_ver}: {}.", skipped.join(", ")));
+        }
+        msg.push_str(" Tuned Java settings are on for this instance.");
+        call_js(&proxy, "onNotice", json!({"message": msg, "kind": "ok"}));
+    });
+}
+
 fn url_encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
@@ -2181,6 +2249,7 @@ fn main() {
                     .to_owned();
                     download_modrinth_async(ipc_proxy.clone(), ipc_state.clone(), text("slug"), project_type, text("profileId"));
                 }
+                "boost_instance" => boost_instance_async(ipc_proxy.clone(), ipc_state.clone(), text("profileId")),
                 "save_instance_settings" => {
                     // Each field: a value sets this instance's own setting, null goes back to the global one.
                     let id = text("id");
