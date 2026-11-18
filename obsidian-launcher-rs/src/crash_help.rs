@@ -559,6 +559,7 @@ fn parse_frame(line: &str) -> Option<(String, Option<String>)> {
     let parts: Vec<&str> = method.split('$').collect();
     let from_mixin = (parts.len() >= 4
         && parts[1].len() == 6
+        && parts[1].is_ascii() // byte slicing below; Java method names can be non-ASCII
         && parts[1][..3].chars().all(|c| c.is_ascii_lowercase())
         && parts[1][3..].chars().all(|c| c.is_ascii_digit()))
     .then(|| mod_id_token(parts[2]))
@@ -892,6 +893,8 @@ Could not reserve enough space for 16777216KB object heap";
         assert_eq!(parse_frame("\tat app//dev.cool.X.y(X.java:1)"), Some(("dev.cool.X".into(), None)));
         assert_eq!(parse_frame("\tat net.minecraft.class_1.handler$abc123$mymod$tick(class_1.java:1)").unwrap().1.as_deref(), Some("mymod"));
         assert_eq!(parse_frame("not a frame"), None);
+        // A 6-byte non-ASCII segment used to panic on a char boundary.
+        assert_eq!(parse_frame("\tat a.B.handler$ab\u{20ac}d$mod$x(B.java:1)"), Some(("a.B".into(), None)));
         assert_eq!(mixin_config("in config [mixins.sodium.json] FAILED").as_deref(), Some("mixins.sodium.json"));
         assert_eq!(config_mod_guess("mixins.sodium.json"), "sodium");
         assert_eq!(config_mod_guess("coolmod.client.mixins.json"), "coolmod");

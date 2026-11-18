@@ -516,8 +516,9 @@ struct AppState {
     catalog_error: Option<String>,
     active_child: Option<Child>,
     system_memory_mb: u64,
-    /// Set by launches so `spawn_streaming_exe` can tell a game apart from tools.
-    pending_launch: bool,
+    /// Set by launches so `spawn_streaming_exe` can tell a game apart from tools: the id of the
+    /// instance being launched (the player may select another one while it downloads).
+    pending_launch: Option<String>,
     /// Profile id + start time of the running game session (for playtime).
     session: Option<(String, Instant)>,
     /// Horizon start command kept for one automatic retry: the engine has an intermittent
@@ -540,7 +541,7 @@ impl AppState {
             catalog_error: None,
             active_child: None,
             system_memory_mb: 0,
-            pending_launch: false,
+            pending_launch: None,
             session: None,
             horizon_retry: None,
             task: None,
@@ -642,7 +643,7 @@ impl AppState {
             catalog_error: None,
             active_child: None,
             system_memory_mb: system_memory_mb(),
-            pending_launch: false,
+            pending_launch: None,
             session: None,
             horizon_retry: None,
             task: None,
@@ -919,7 +920,7 @@ fn spawn_streaming_exe(
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            shared.lock().unwrap().pending_launch = false;
+            shared.lock().unwrap().pending_launch = None;
             return Err(format!("Couldn't start {}: {e}", exe.file_name().unwrap_or_default().to_string_lossy()));
         }
     };
@@ -932,8 +933,7 @@ fn spawn_streaming_exe(
     {
         let mut st = shared.lock().unwrap();
         st.active_child = Some(child);
-        if std::mem::take(&mut st.pending_launch) {
-            let pid = st.config.active_profile_id.clone();
+        if let Some(pid) = st.pending_launch.take() {
             if let Some(p) = st.config.profiles.iter_mut().find(|p| p.id == pid) {
                 p.last_played = now_millis();
             }
@@ -1111,7 +1111,7 @@ fn launch_game(proxy: &EventLoopProxy<UserEvent>, shared: &Arc<Mutex<AppState>>,
             let mut st = lock(&shared);
             st.task = None;
             if result.is_err() {
-                st.pending_launch = false;
+                st.pending_launch = None;
             }
             st.catalog = catalog;
             push_state(&proxy, &st);
@@ -1265,7 +1265,7 @@ fn launch_java(
         auth.name,
         java.display()
     ));
-    shared.lock().unwrap().pending_launch = true;
+    shared.lock().unwrap().pending_launch = Some(cfg.active_profile_id.clone());
     spawn_streaming_exe(proxy, shared, &java, &args, &snap.game_dir, &[], None)
 }
 
@@ -1344,10 +1344,9 @@ fn launch_horizon(
     }
     rep.report("Starting Horizon", -1.0);
     rep.log(&format!("[Horizon] Launching as {}", auth.name));
-    shared.lock().unwrap().pending_launch = true;
     {
         let mut st = lock(shared);
-        st.pending_launch = true;
+        st.pending_launch = Some(snap.config.active_profile_id.clone());
         st.horizon_retry = Some(HorizonRetry { exe: client.clone(), args: args.clone(), cwd: snap.game_dir.clone(), session: session.clone() });
     }
     spawn_streaming_exe(proxy, shared, &client, &args, &snap.game_dir, &[], Some(session))
@@ -2009,6 +2008,12 @@ fn discover_install(proxy: &EventLoopProxy<UserEvent>, shared: &Arc<Mutex<AppSta
                 None => PackSource::Modrinth(id),
             },
         ),
+        // Horizon registry ids and Modrinth slugs are different namespaces: sent to the other kind
+        // of instance, download_modrinth_async would look the name up in the wrong one.
+        (src, _) if discover_target(shared, &profile_id).is_some_and(|t| (t.2 == HORIZON_ID) != (src == "horizon")) => {
+            let msg = if src == "horizon" { "Horizon's own mods only go into Horizon 26.3 instances." } else { "Horizon 26.3 instances install from Horizon's own registry." };
+            push_install_status(proxy, &key, "error", msg, &profile_id)
+        }
         ("horizon", _) => download_modrinth_async(proxy.clone(), shared.clone(), id, ptype, profile_id, force),
         (_, "world") => push_install_status(proxy, &key, "error", "Modrinth doesn't host worlds.", &profile_id),
         (_, "datapack") => install_modrinth_version_async(proxy.clone(), shared.clone(), key, id, version_id, ptype, profile_id, force, text("world"), retry),
@@ -2243,8 +2248,9 @@ fn install_cf_modpack_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<
             let plan = match curseforge::plan(&api, mod_id, file_id.and_then(|f| f.parse().ok()), "modpack", "", None, &Default::default()) {
                 Ok(p) => p,
                 Err(curseforge::PlanError::Manual(title, url)) => {
-                    manual_page = Some(url);
-                    return Err(format!("{title} can only be downloaded on CurseForge's website."));
+                    let e = format!("{title} can only be downloaded on CurseForge's website.");
+                    manual_page = Some((title, url));
+                    return Err(e);
                 }
                 Err(curseforge::PlanError::Failed(e)) => return Err(e),
             };
@@ -2299,8 +2305,9 @@ fn install_cf_modpack_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<
             Ok(()) => push_install_status(&proxy, &key, "installed", &done_msg, ""),
             Err(e) => {
                 push_log(&proxy, &format!("[LumosClient] modpack: {e}"));
-                if let Some(url) = manual_page {
-                    call_js(&proxy, "onDiscoverManual", json!({"key": key, "title": e, "url": url, "profileId": ""}));
+                if let Some((title, url)) = manual_page {
+                    // The page adds "can only be downloaded on CurseForge's website" itself.
+                    call_js(&proxy, "onDiscoverManual", json!({"key": key, "title": title, "url": url, "profileId": ""}));
                     push_install_status(&proxy, &key, "blocked", "", "");
                 } else {
                     push_install_status(&proxy, &key, "error", &e, "");
@@ -2902,7 +2909,8 @@ fn repair_instance(proxy: &EventLoopProxy<UserEvent>, shared: &Arc<Mutex<AppStat
         match result {
             Err(e) => {
                 push_log(&proxy, &format!("[LumosClient] Repair stopped: {e}"));
-                call_js(&proxy, "onTask", json!({"error": e}));
+                // onRepair shows the error (an onTask error too would toast it a second time).
+                call_js(&proxy, "onTask", json!({"done": true}));
                 call_js(&proxy, "onRepair", json!({"profileId": pid, "error": e}));
             }
             Ok(fixed) => {
