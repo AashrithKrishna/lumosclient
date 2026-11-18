@@ -217,6 +217,7 @@ pub fn launch_parts(base_dir: &Path, game_dir: &Path) -> Option<(PathBuf, PathBu
         return None;
     }
     pin_manifest(&root);
+    switch_off_unpicked(game_dir, &dir, &st);
     Some((client, prepare, root, st.build))
 }
 
@@ -243,6 +244,28 @@ fn pin_manifest(root: &Path) {
 }
 
 /// Writes the switches: the player's native mods on, the build's others off.
+/// Every mod compiled into the build the player didn't pick is written off before each launch.
+/// The build's own list (native.json, plus bin/mods.txt for a locally built game) is used, not just
+/// the instance's remembered `known` list, so a mod that list lacks can't start switched on.
+fn switch_off_unpicked(game_dir: &Path, build: &Path, st: &InstanceNative) {
+    let mut ids: Vec<String> = st.known.iter().map(|k| k.0.clone()).collect();
+    if let Ok(v) = fs::read_to_string(build.join("native.json")).map(|s| serde_json::from_str::<Value>(&s)) {
+        if let Ok(v) = v {
+            ids.extend(v.get("mods").and_then(Value::as_array).into_iter().flatten().filter_map(|m| m.get("id")?.as_str().map(str::to_owned)));
+        }
+    }
+    if let Ok(s) = fs::read_to_string(build.join("bin").join("mods.txt")) {
+        ids.extend(s.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned));
+    }
+    ids.sort();
+    ids.dedup();
+    for id in ids {
+        if id.len() <= 64 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+            let _ = horizon_mods::set_enabled(game_dir, &id, st.mods.contains(&id));
+        }
+    }
+}
+
 fn apply_switches(game_dir: &Path, st: &InstanceNative) -> Result<(), String> {
     for (id, _, _) in &st.known {
         horizon_mods::set_enabled(game_dir, id, st.mods.contains(id))?;
