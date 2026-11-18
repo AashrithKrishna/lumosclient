@@ -434,6 +434,12 @@ struct State {
     pending_export: bool,
     /// A notice on the map's bar, until when.
     notice: Option<(String, Instant)>,
+    /// The map closed on the next frame (the "New waypoint" box opened with the key is done),
+    /// with what to say on the action bar: the waypoint made, and its colour.
+    pending_close: Option<Option<(String, u32)>>,
+    /// The character of the key that just opened the "New waypoint" box, and when: the game
+    /// hands it to the screen the key opened, and it mustn't land in the name box.
+    swallow: Option<(char, Instant)>,
 }
 
 thread_local! {
@@ -473,7 +479,7 @@ fn player_pos(game: &Game<'_>) -> Option<[f64; 3]> {
 }
 
 fn block_of(p: [f64; 3]) -> [i32; 3] {
-    p.map(|c| c.floor() as i32)
+    m::block_at(p)
 }
 
 fn save_book(s: &State) {
@@ -997,6 +1003,13 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
         game.clipboard.set(&text);
         game.native_client_action_bar(Text::literal(format!("Copied {text}")), false);
     }
+    if let Some(said) = with(|s| s.pending_close.take()) {
+        game.native_mod_screen_close(m::ID);
+        if let Some((text, rgb)) = said {
+            game.native_client_action_bar(Text::colored(text, rgb), false);
+        }
+        return;
+    }
     if let Some(command) = with(|s| s.pending_command.take()) {
         game.native_mod_screen_close(m::ID);
         game.send_command(&command);
@@ -1112,7 +1125,8 @@ fn fill_polygon(game: &Game<'_>, batch: &mut HudBatch, poly: &[[f32; 2]], argb: 
     }
 }
 
-/// `native_key`: M opens (or closes) the world map, B adds a waypoint where you stand.
+/// `native_key`: M opens (or closes) the world map, B opens the "New waypoint" box (or, with
+/// "B adds instantly", adds one where you stand).
 pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
     if !pressed || !game.native_on(m::ID) || game.player.is_none() {
         return;
@@ -1159,6 +1173,33 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
         };
         let dim = game.dim.id();
         let set = settings(game);
+        if !set.instant_add {
+            // The box, prefilled with the block you stand in, the next name, the current set.
+            let draft = with(|s| {
+                s.world_dir.as_ref()?;
+                let mut wp = s.book.draft(block_of(p), dim, now_secs());
+                m::style_new(&mut wp, set.wp_colour, set.wp_symbol);
+                Some(wp)
+            });
+            let Some(wp) = draft else {
+                return;
+            };
+            if game.native_mod_screen_open(m::ID) {
+                let typed = key.strip_prefix("key.keyboard.").and_then(|k| {
+                    let mut c = k.chars();
+                    c.next().filter(|_| c.next().is_none())
+                });
+                with(|s| {
+                    s.screen.view.x = p[0];
+                    s.screen.view.z = p[2];
+                    s.screen.press = None;
+                    s.screen.searching = false;
+                    s.screen.page = m::Page::new_waypoint(wp, true);
+                    s.swallow = typed.map(|c| (c, Instant::now()));
+                });
+            }
+            return;
+        }
         let added = with(|s| {
             s.world_dir.as_ref()?;
             let i = s.book.add(block_of(p), dim, now_secs());
@@ -1503,7 +1544,8 @@ fn draw_entities(
     let near = |x: f64, z: f64| range.is_none_or(|r| (x - p[0]).powi(2) + (z - p[2]).powi(2) <= r * r);
     // Above or below you by more than a few blocks: fainter.
     let alpha = |y: f64| if (y - p[1]).abs() > 8.0 { 95u8 } else { 255 };
-    // Dots, or (holding the player list key, or always) faces as faint badges with names.
+    // Dots, or (holding the player list key, or always) faces as faint badges: players with
+    // their names, mobs without (unless "Show mob names").
     let details = s.always_details || (s.tab_details && keys::vanilla_held(game, "key.playerlist"));
     if s.items {
         let items: Vec<(String, [f64; 3])> = game
@@ -1557,7 +1599,8 @@ fn draw_entities(
         let name = if kind == m::DotKind::Player {
             s.names.then(|| game.remote_player_name(mob.id).map(str::to_owned)).flatten()
         } else {
-            Some(mob.custom_name.clone().unwrap_or_else(|| m::pretty_id(&mob.kind.id)))
+            // Mobs show their faces only, unless their names are turned on.
+            s.mob_names.then(|| mob.custom_name.clone().unwrap_or_else(|| m::pretty_id(&mob.kind.id)))
         };
         list.push((kind, texture.into_owned(), model.into_owned(), [at.x, at.y, at.z], name));
     }
@@ -1739,7 +1782,7 @@ fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings)
             game.native_fill(batch, [x - r, y - r, r * 2.0, r * 2.0], a | rgb);
             game.native_fill(batch, [x - r, y - r, r * 2.0, r], (alpha * 50 / 255) << 24 | 0xFF_FFFF);
         }
-        // Initials, dark on a light colour and light on a dark one.
+        // Its letter (or symbol), dark on a light colour and light on a dark one.
         let lum = ((rgb >> 16) & 255) * 3 + ((rgb >> 8) & 255) * 6 + (rgb & 255);
         let ink = if lum > 1300 { 0x000000 } else { 0xFFFFFF };
         let text: String = initials.chars().take(2).collect();
@@ -2011,6 +2054,10 @@ struct EditLayout {
     delete: [f32; 4],
     done: [f32; 4],
     panel: [f32; 4],
+    /// The "New waypoint" box's buttons and its (shorter) panel.
+    create: [f32; 4],
+    cancel: [f32; 4],
+    new_panel: [f32; 4],
 }
 
 fn edit_layout(w: f32, h: f32) -> EditLayout {
@@ -2054,6 +2101,9 @@ fn edit_layout(w: f32, h: f32) -> EditLayout {
         delete: third(5.0, 1),
         done: third(5.0, 2),
         panel: [x - 8.0, y - 6.0, pw + 16.0, 76.0 + 6.0 * 20.0 + 10.0],
+        create: half(1.0, 0),
+        cancel: half(1.0, 1),
+        new_panel: [x - 8.0, y - 6.0, pw + 16.0, 76.0 + 2.0 * 20.0 + 10.0],
     }
 }
 
@@ -2130,12 +2180,19 @@ pub(super) fn on_render(game: &Game<'_>, batch: &mut HudBatch, screen: &NativeSc
     }
     let (w, h) = (batch.width, batch.height);
     let mouse = screen.mouse;
-    game.native_fill(batch, [0.0, 0.0, w, h], 0xFF10_1014);
+    // Opened with the key from the world, the "New waypoint" box lets the world show behind it.
+    let over_world = with(|s| matches!(&s.screen.page, m::Page::Edit { draft: Some(d), .. } if d.close));
+    game.native_fill(batch, [0.0, 0.0, w, h], if over_world { 0x9010_1014 } else { 0xFF10_1014 });
     let settings = settings(game);
     with(|s| match s.screen.page.clone() {
         m::Page::Map => draw_map(game, batch, s, &settings, mouse),
         m::Page::List { scroll } => draw_list(game, batch, s, &settings, scroll, mouse),
-        m::Page::Edit { index, form } => draw_edit(game, batch, s, index, &form, mouse),
+        m::Page::Edit { form, draft: Some(d), .. } => draw_edit(game, batch, &d.wp, true, &form, mouse),
+        m::Page::Edit { index, form, draft: None } => {
+            if let Some(wp) = s.book.list.get(index) {
+                draw_edit(game, batch, wp, false, &form, mouse);
+            }
+        }
         m::Page::Confirm { delete } => {
             let q = format!("Delete {} waypoint{}?", delete.len(), if delete.len() == 1 { "" } else { "s" });
             draw_dialog(game, batch, &q, None, "Delete", mouse);
@@ -2227,7 +2284,7 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
         }
     }
     let dim = game.dim.id();
-    // Waypoints with their initials; names shown when zoomed in or pointed at.
+    // Waypoints with their letter or symbol; names shown when zoomed in or pointed at.
     for wp in s.book.list.iter().filter(|w| on_map(s, w)) {
         let Some(c) = wp.place_in(dim, settings.convert) else {
             continue;
@@ -2392,14 +2449,13 @@ fn draw_list(game: &Game<'_>, batch: &mut HudBatch, s: &State, settings: &m::Set
     game.native_text(batch, &tip, [panel[0] + 6.0, h - 68.0], 0x909090, false);
 }
 
-fn draw_edit(game: &Game<'_>, batch: &mut HudBatch, s: &State, index: usize, form: &m::Form, mouse: [f32; 2]) {
+/// The editor for `wp`; `new`: the "New waypoint" box (the boxes, colour, place, dimension and
+/// set, then Create and Cancel).
+fn draw_edit(game: &Game<'_>, batch: &mut HudBatch, wp: &m::Waypoint, new: bool, form: &m::Form, mouse: [f32; 2]) {
     let (w, h) = (batch.width, batch.height);
-    let Some(wp) = s.book.list.get(index) else {
-        return;
-    };
     let l = edit_layout(w, h);
-    game.native_fill(batch, l.panel, 0xD000_0000);
-    let kind = if wp.death { "Death point" } else { "Waypoint" };
+    game.native_fill(batch, if new { l.new_panel } else { l.panel }, 0xD000_0000);
+    let kind = if new { "New waypoint" } else if wp.death { "Death point" } else { "Waypoint" };
     let title = format!("{kind} in {}", m::pretty_id(&wp.dim));
     game.native_text(batch, &title, [l.fields[0][0], l.fields[0][1] - 11.0], 0xFFFFFF, true);
     draw_mark(game, batch, [l.fields[0][0] + l.fields[0][2] - 8.0, l.fields[0][1] - 7.0], wp, false);
@@ -2417,11 +2473,18 @@ fn draw_edit(game: &Game<'_>, batch: &mut HudBatch, s: &State, index: usize, for
         }
         let empty = form.fields[i].is_empty() && !focused;
         let hint = match i {
+            m::F_NAME if new => wp.name.as_str(),
             m::F_SYMBOL => "Aa",
             m::F_HEX => "#custom",
             _ => "",
         };
-        if empty && !hint.is_empty() {
+        if new && i == m::F_NAME && form.fields[i].is_empty() {
+            // The name it will get, faint behind the caret.
+            game.native_text(batch, hint, [r[0] + 3.0, r[1] + 4.0], 0x606060, false);
+            if focused && blink {
+                game.native_text(batch, "_", [r[0] + 3.0, r[1] + 4.0], 0xFFFFFF, false);
+            }
+        } else if empty && !hint.is_empty() {
             game.native_text(batch, hint, [r[0] + 3.0, r[1] + 4.0], 0x606060, false);
         } else {
             game.native_text(batch, &text, [r[0] + 3.0, r[1] + 4.0], 0xFFFFFF, false);
@@ -2440,6 +2503,13 @@ fn draw_edit(game: &Game<'_>, batch: &mut HudBatch, s: &State, index: usize, for
     button(game, batch, l.use_pos, "Use my position", mouse);
     button(game, batch, l.dim, &format!("Dim: {}", m::pretty_id(&wp.dim)), mouse);
     button(game, batch, l.set, &format!("Set: {}", wp.set), mouse);
+    if new {
+        button(game, batch, l.create, "Create", mouse);
+        button(game, batch, l.cancel, "Cancel", mouse);
+        let tip = "Enter: create. Escape: cancel. Tab: next box.";
+        game.native_text(batch, tip, [l.new_panel[0] + 8.0, l.new_panel[1] + l.new_panel[3] + 3.0], 0xA0A0A0, true);
+        return;
+    }
     button(game, batch, l.visible, &format!("Visible: {}", on(wp.shown)), mouse);
     button(game, batch, l.temporary, &format!("Temporary: {}", on(wp.temporary)), mouse);
     button(game, batch, l.scope, if wp.global { "Kept for: all worlds" } else { "Kept for: this world" }, mouse);
@@ -2531,16 +2601,45 @@ fn draw_settings(game: &Game<'_>, batch: &mut HudBatch, settings: &m::Settings, 
 
 /// What the editor's boxes say put on its waypoint (not saved yet).
 fn apply_form(s: &mut State) {
-    if let m::Page::Edit { index, form } = &s.screen.page
-        && let Some(w) = s.book.list.get_mut(*index)
-    {
-        form.apply(w);
+    match &mut s.screen.page {
+        m::Page::Edit { form, draft: Some(d), .. } => form.apply(&mut d.wp),
+        m::Page::Edit { index, form, draft: None } => {
+            if let Some(w) = s.book.list.get_mut(*index) {
+                form.apply(w);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The "New waypoint" box done: its waypoint added and saved (`create`), or dropped. Opened
+/// with the key, the map closes; from the list, back to the list.
+fn finish_new(s: &mut State, create: bool) {
+    apply_form(s);
+    let m::Page::Edit { draft: Some(d), .. } = std::mem::take(&mut s.screen.page) else {
+        return;
+    };
+    let m::Draft { wp, close } = *d;
+    let added = create.then(|| {
+        let i = s.book.insert(wp);
+        save_book(s);
+        let w = &s.book.list[i];
+        (format!("Added {} at {} {} {}", w.name, w.pos[0], w.pos[1], w.pos[2]), w.rgb())
+    });
+    if close {
+        s.screen.page = m::Page::Map;
+        s.pending_close = Some(added);
+    } else {
+        s.screen.page = m::Page::List { scroll: 0 };
+        if let Some((text, _)) = added {
+            notice(s, text);
+        }
     }
 }
 
 /// The editor's boxes put on its waypoint, saved; back to `to`.
 fn finish_edit(s: &mut State, to: m::Page) {
-    if matches!(s.screen.page, m::Page::Edit { .. }) {
+    if matches!(s.screen.page, m::Page::Edit { draft: None, .. }) {
         apply_form(s);
         save_book(s);
     }
@@ -2550,7 +2649,7 @@ fn finish_edit(s: &mut State, to: m::Page) {
 fn edit(s: &mut State, index: usize) {
     let form = m::Form::of(&s.book.list[index]);
     s.screen.selected.clear();
-    s.screen.page = m::Page::Edit { index, form };
+    s.screen.page = m::Page::Edit { index, form, draft: None };
 }
 
 /// `native_screen_mouse_button_pressed_pre`: buttons, rows, tools, and a press on the map.
@@ -2678,14 +2777,54 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
                     edit(s, i);
                 }
             } else if inside(add, mouse) {
+                // The "New waypoint" box, as the key opens it (Create and Cancel come back here).
                 if let Some(pos) = here {
-                    let i = s.book.add(pos, dim, now_secs());
-                    s.book.style_new(i, settings.wp_colour, settings.wp_symbol);
-                    save_book(s);
-                    edit(s, i);
+                    let mut wp = s.book.draft(pos, dim, now_secs());
+                    m::style_new(&mut wp, settings.wp_colour, settings.wp_symbol);
+                    s.screen.selected.clear();
+                    s.screen.page = m::Page::new_waypoint(wp, false);
                 }
             } else if let Some(i) = row {
                 edit(s, i);
+            }
+        }
+        m::Page::Edit { draft: Some(_), .. } if button == 0 => {
+            let l = edit_layout(w, h);
+            if let Some(f) = l.fields.iter().position(|r| inside(*r, mouse)) {
+                if let m::Page::Edit { form, .. } = &mut s.screen.page {
+                    form.focus = Some(f);
+                }
+                return;
+            }
+            if inside(l.create, mouse) || inside(l.cancel, mouse) {
+                finish_new(s, inside(l.create, mouse));
+                return;
+            }
+            apply_form(s);
+            let sets: Vec<String> = s.book.sets.iter().map(|x| x.name.clone()).collect();
+            if let m::Page::Edit { form, draft: Some(d), .. } = &mut s.screen.page {
+                let wp = &mut d.wp;
+                if let Some(c) = l.swatches.iter().position(|r| inside(*r, mouse)) {
+                    wp.colour = c;
+                    wp.custom = None;
+                } else if inside(l.use_pos, mouse) {
+                    if let Some(pos) = here {
+                        wp.pos = pos;
+                        wp.dim = dim.to_owned();
+                    }
+                } else if inside(l.dim, mouse) {
+                    let all = dimensions(dim);
+                    let at = all.iter().position(|x| *x == wp.dim).unwrap_or(0);
+                    wp.dim = all[(at + 1) % all.len()].clone();
+                } else if inside(l.set, mouse) && !sets.is_empty() {
+                    let at = sets.iter().position(|x| *x == wp.set).unwrap_or(0);
+                    wp.set = sets[(at + 1) % sets.len()].clone();
+                }
+                // The boxes show the waypoint again; the name typed so far and the focus stay.
+                let (name, focus) = (std::mem::take(&mut form.fields[m::F_NAME]), form.focus);
+                *form = m::Form::of(wp);
+                form.fields[m::F_NAME] = name;
+                form.focus = focus;
             }
         }
         m::Page::Edit { index, .. } if button == 0 => {
@@ -2953,6 +3092,7 @@ pub(super) fn on_key_pressed(game: &Game<'_>, screen: &NativeScreenView<'_>, key
                             form.focus = Some(form.focus.map_or(0, |f| (f + 1) % 6));
                         }
                     }
+                    m::Page::Edit { draft: Some(_), .. } => finish_new(s, !escape),
                     m::Page::Edit { .. } if escape => finish_edit(s, m::Page::List { scroll: 0 }),
                     m::Page::Edit { index, .. } => {
                         apply_form(s);
@@ -3023,12 +3163,22 @@ pub(super) fn on_char(game: &Game<'_>, screen: &NativeScreenView<'_>, c: char, c
         return;
     }
     with(|s| {
+        // The add-waypoint key's own character, handed to the box it just opened.
+        if let Some((k, at)) = s.swallow.take()
+            && at.elapsed() < Duration::from_millis(250)
+            && c.to_lowercase().eq(k.to_lowercase())
+        {
+            *canceled = true;
+            return;
+        }
         let searching = s.screen.searching && matches!(s.screen.page, m::Page::List { .. });
         match &mut s.screen.page {
             m::Page::Edit { form, .. } if form.focus.is_some() => {
                 form.type_char(c);
                 *canceled = true;
             }
+            // The "New waypoint" box keeps every character from the game.
+            m::Page::Edit { draft: Some(_), .. } => *canceled = true,
             m::Page::NewSet { name } | m::Page::RenameSet { name } => {
                 if !c.is_control() && name.chars().count() < m::NAME_MAX {
                     name.push(c);

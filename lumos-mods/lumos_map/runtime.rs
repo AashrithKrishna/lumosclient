@@ -15,7 +15,7 @@ pub const ID: &str = "lumos_map";
 pub const NAME: &str = "Map";
 pub const VERSION: &str = "3.0.0";
 pub const DESCRIPTION: &str = "A crisp minimap and world map in the game's own colours, \
-entities as dots with faces and names while Tab is held, waypoints as on-screen markers with a \
+entities as dots with faces (and players' names) while Tab is held, waypoints as on-screen markers with a \
 full manager, and a world map (M) of everywhere you have been, saved per world and server.";
 
 /// The mod's own screen id is the game's for every mod screen.
@@ -61,8 +61,8 @@ pub const UNITS: [&str; 2] = ["Metres", "Blocks"];
 /// A new waypoint's colour: the next in turn, or one of `COLOURS`.
 pub const NEW_COLOURS: [&str; 11] =
     ["Next in turn", "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Pink", "White", "Grey"];
-/// A waypoint's marker text: its initials, or a symbol.
-pub const SYMBOLS: [&str; 8] = ["Initials", "*", "+", "!", "#", "X", "$", "@"];
+/// A waypoint's marker text: its name's first letter, or a symbol.
+pub const SYMBOLS: [&str; 8] = ["First letter", "*", "+", "!", "#", "X", "$", "@"];
 /// Name labels' size in the detail view.
 pub const LABEL_SIZES: [f32; 3] = [0.5, 0.75, 1.0];
 
@@ -128,8 +128,10 @@ pub struct Settings {
     pub map_shade: bool,
     /// Players on the minimap.
     pub players: bool,
-    /// Players' names in the detail view.
+    /// Players' names in the detail view (kept as `names`, as 3.0 stored it).
     pub names: bool,
+    /// Mobs' names in the detail view (players' only by default: mobs show their faces).
+    pub mob_names: bool,
     /// Hostile mobs on the minimap.
     pub hostile: bool,
     /// Passive mobs on the minimap.
@@ -192,6 +194,8 @@ pub struct Settings {
     pub sort: usize,
     /// A beam over each waypoint in the world.
     pub beams: bool,
+    /// The add-waypoint key adds one where you stand at once, without the "New waypoint" box.
+    pub instant_add: bool,
 }
 
 impl Default for Settings {
@@ -228,6 +232,7 @@ impl Default for Settings {
             map_shade: true,
             players: true,
             names: true,
+            mob_names: false,
             hostile: true,
             passive: true,
             items: false,
@@ -259,6 +264,7 @@ impl Default for Settings {
             deaths: 1,
             sort: 1,
             beams: false,
+            instant_add: false,
         }
     }
 }
@@ -293,6 +299,10 @@ impl ShowEntry for usize {
     }
 }
 
+/// The settings file's version (`settings_version`): saved with every setting.
+pub const SETTINGS_VERSION: u32 = 3;
+pub const SETTINGS_VERSION_KEY: &str = "settings_version";
+
 macro_rules! settings_table {
     ($( $field:ident: $kind:ident $(($table:ident))?, $page:expr, $label:expr; )*) => {
         impl Settings {
@@ -310,10 +320,17 @@ macro_rules! settings_table {
                         .unwrap_or(default)
                 };
                 let _ = (&flag, &index);
-                Self { $( $field: settings_table!(@read $kind, flag, index, stringify!($field), d.$field $(, $table)?), )* }
+                let mut s = Self { $( $field: settings_table!(@read $kind, flag, index, stringify!($field), d.$field $(, $table)?), )* };
+                // Before 3.0 `markers` was the beams ("Waypoints in the world"): turning those off
+                // must not hide 3.0's markers. Settings saved before the version key are reset once.
+                let version = get(SETTINGS_VERSION_KEY).and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0);
+                if version < SETTINGS_VERSION {
+                    s.markers = d.markers;
+                }
+                s
             }
             pub fn stored(&self) -> Vec<(&'static str, String)> {
-                vec![ $( (stringify!($field), self.$field.to_string()), )* ]
+                vec![ $( (stringify!($field), self.$field.to_string()), )* (SETTINGS_VERSION_KEY, SETTINGS_VERSION.to_string()) ]
             }
             /// Every setting's page.
             pub const PAGE_OF: [usize; Self::COUNT] = [$($page),*];
@@ -380,7 +397,8 @@ settings_table! {
     map_follow: flag, 2, "Follow you when opened";
     map_shade: flag, 2, "Dim ground not loaded now";
     players: flag, 3, "Players";
-    names: flag, 3, "Player names";
+    names: flag, 3, "Show player names";
+    mob_names: flag, 3, "Show mob names";
     hostile: flag, 3, "Hostile mobs";
     passive: flag, 3, "Passive mobs";
     items: flag, 3, "Dropped items";
@@ -412,6 +430,7 @@ settings_table! {
     deaths: index(DEATHS), 4, "Death points kept";
     sort: index(SORTS), 4, "List order";
     beams: flag, 4, "Beams (old style)";
+    instant_add: flag, 4, "B adds instantly";
 }
 
 impl Settings {
@@ -1687,6 +1706,22 @@ impl Default for Waypoint {
     }
 }
 
+/// `w` given the colour and symbol new waypoints take (`NEW_COLOURS`, `SYMBOLS`).
+pub fn style_new(w: &mut Waypoint, colour: usize, symbol: usize) {
+    if colour > 0 {
+        w.colour = (colour - 1).min(COLOURS.len() - 1);
+    }
+    if symbol > 0 {
+        w.symbol = SYMBOLS.get(symbol).map_or_else(String::new, |s| (*s).to_owned());
+    }
+}
+
+/// The block a position is in: each coordinate floored, so -0.3 is block -1 (not 0). A new
+/// waypoint's default place is `block_at` the player's feet.
+pub fn block_at(p: [f64; 3]) -> [i32; 3] {
+    p.map(|c| c.floor() as i32)
+}
+
 /// A colour typed as hex (`#3fa`, `33FFAA`), as 0xRRGGBB.
 pub fn parse_hex(text: &str) -> Option<u32> {
     let t = text.trim().trim_start_matches('#');
@@ -1737,24 +1772,17 @@ impl Waypoint {
             f64::from(self.pos[2]) + 0.5,
         ]
     }
-    /// Its marker's text: its symbol, else its initials.
+    /// Its marker's text: its symbol, else its name's first letter.
     pub fn mark(&self) -> String {
-        if self.symbol.is_empty() { self.initials() } else { self.symbol.clone() }
+        if self.symbol.is_empty() { self.letter() } else { self.symbol.clone() }
     }
 
-    /// One or two letters for its marker: its words' first letters.
-    pub fn initials(&self) -> String {
-        let mut s: String = self
-            .name
-            .split_whitespace()
-            .filter_map(|w| w.chars().find(|c| c.is_alphanumeric()))
-            .take(2)
-            .flat_map(char::to_uppercase)
-            .collect();
-        if s.is_empty() {
-            s.push('?');
-        }
-        s
+    /// Its name's first letter or digit, in capitals ("?" for a name with none).
+    pub fn letter(&self) -> String {
+        self.name
+            .chars()
+            .find(|c| c.is_alphanumeric())
+            .map_or_else(|| "?".to_owned(), |c| c.to_uppercase().collect())
     }
     /// Where it is in `dim`: its own place, or the converted one between the Overworld and the
     /// Nether when `convert`; None in another dimension.
@@ -1931,10 +1959,11 @@ impl Book {
             .unwrap_or_default()
     }
 
-    /// A waypoint added at `pos` in `dim` to the current set; returns its index.
-    pub fn add(&mut self, pos: [i32; 3], dim: &str, now: u64) -> usize {
+    /// A waypoint `add` would add at `pos` in `dim` (the next name and colour, the current
+    /// set), not in the book yet: the "New waypoint" box edits it before it is added.
+    pub fn draft(&self, pos: [i32; 3], dim: &str, now: u64) -> Waypoint {
         let colour = self.list.iter().filter(|w| !w.death).count() % (COLOURS.len() - 2);
-        let w = Waypoint {
+        Waypoint {
             name: self.next_name(),
             pos,
             dim: dim.to_owned(),
@@ -1944,9 +1973,27 @@ impl Book {
             set: self.current_set().to_owned(),
             created: now,
             ..Waypoint::default()
-        };
+        }
+    }
+
+    /// `w` put in the book (an empty name gets the next "Waypoint N", a set that is gone the
+    /// current one); returns its index.
+    pub fn insert(&mut self, mut w: Waypoint) -> usize {
+        w.name = clean_name(&w.name);
+        if w.name.is_empty() {
+            w.name = self.next_name();
+        }
+        if self.set_index(&w.set).is_none() {
+            w.set = self.current_set().to_owned();
+        }
         self.list.push(w);
         self.list.len() - 1
+    }
+
+    /// A waypoint added at `pos` in `dim` to the current set; returns its index.
+    pub fn add(&mut self, pos: [i32; 3], dim: &str, now: u64) -> usize {
+        let w = self.draft(pos, dim, now);
+        self.insert(w)
     }
 
     /// Where you died: kept with the last `keep` deaths, the oldest going first. The newest is
@@ -1985,12 +2032,7 @@ impl Book {
     /// Waypoint `i` given the colour and symbol new waypoints take (`NEW_COLOURS`, `SYMBOLS`).
     pub fn style_new(&mut self, i: usize, colour: usize, symbol: usize) {
         if let Some(w) = self.list.get_mut(i) {
-            if colour > 0 {
-                w.colour = (colour - 1).min(COLOURS.len() - 1);
-            }
-            if symbol > 0 {
-                w.symbol = SYMBOLS.get(symbol).map_or_else(String::new, |s| (*s).to_owned());
-            }
+            style_new(w, colour, symbol);
         }
     }
 
@@ -2258,10 +2300,10 @@ pub fn marker_scale(d: f64) -> f32 {
     (1.45 - (d.max(1.0).ln() as f32) / 6.5).clamp(0.6, 1.3)
 }
 
-/// A marker's opacity at `d` blocks: clear right beside it, full from 8 blocks, fading again
-/// far away to a third at 2000 blocks.
+/// A marker's opacity at `d` blocks: faint (never gone, so a waypoint just made shows) right
+/// beside it, full from 8 blocks, fading again far away to a third at 2000 blocks.
 pub fn fade(d: f64) -> u8 {
-    let near = ((d - 2.0) / 6.0).clamp(0.0, 1.0);
+    let near = 0.4 + 0.6 * ((d - 2.0) / 6.0).clamp(0.0, 1.0);
     let far = 1.0 - ((d - 300.0) / 1700.0).clamp(0.0, 1.0) * 0.66;
     (near * far * 255.0).round() as u8
 }
@@ -2396,10 +2438,12 @@ pub enum Page {
     List {
         scroll: usize,
     },
-    /// Editing waypoint `index` with its text boxes.
+    /// Editing waypoint `index` with its text boxes; with `draft`, the "New waypoint" box
+    /// (the waypoint isn't in the book until Create, and `index` means nothing).
     Edit {
         index: usize,
         form: Form,
+        draft: Option<Box<Draft>>,
     },
     /// Deleting these waypoints, once confirmed.
     Confirm {
@@ -2423,10 +2467,27 @@ impl Page {
     /// Keys type into a text box on this page.
     pub fn typing(&self) -> bool {
         match self {
-            Page::Edit { form, .. } => form.focus.is_some(),
+            // The "New waypoint" box takes every key while it is open (none moves or acts).
+            Page::Edit { form, draft, .. } => form.focus.is_some() || draft.is_some(),
             Page::NewSet { .. } | Page::RenameSet { .. } => true,
             _ => false,
         }
+    }
+}
+
+/// A waypoint being made in the "New waypoint" box, and whether its Create or Cancel closes
+/// the screen (it was opened with the key while playing) or goes back to the list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Draft {
+    pub wp: Waypoint,
+    pub close: bool,
+}
+
+impl Page {
+    /// The "New waypoint" box for `wp`: the name box empty (its hint the name it will get)
+    /// and focused.
+    pub fn new_waypoint(wp: Waypoint, close: bool) -> Self {
+        Page::Edit { index: 0, form: Form::of_new(&wp), draft: Some(Box::new(Draft { wp, close })) }
     }
 }
 
@@ -2455,6 +2516,13 @@ impl Form {
             ],
             focus: Some(F_NAME),
         }
+    }
+
+    /// The boxes of a waypoint not made yet: its name box empty, typed into.
+    pub fn of_new(w: &Waypoint) -> Self {
+        let mut f = Self::of(w);
+        f.fields[F_NAME].clear();
+        f
     }
 
     /// A character typed into the focused box, if that box takes it.
@@ -2917,6 +2985,69 @@ mod tests {
     }
 
     #[test]
+    fn new_waypoints_start_at_the_block_you_stand_in() {
+        // Floored, not truncated: -0.3 is block -1.
+        assert_eq!(block_at([-0.3, 64.0, -0.3]), [-1, 64, -1]);
+        assert_eq!(block_at([0.3, 63.9999, 0.7]), [0, 63, 0]);
+        assert_eq!(block_at([-16.0, -59.5, 15.99]), [-16, -60, 15]);
+        assert_eq!(block_at([-1e-9, 0.0, -1.0]), [-1, 0, -1]);
+        assert_eq!(block_at([1234.5, 70.2, -9876.5]), [1234, 70, -9877]);
+        // The "New waypoint" box: a draft with the next name, its name box empty and typed into,
+        // keys kept from the game; nothing is added until Create.
+        let mut b = Book::default();
+        b.add([0, 0, 0], OVERWORLD, 1);
+        let mut d = b.draft(block_at([-0.3, 64.0, 2.5]), NETHER, 2);
+        style_new(&mut d, 3, 1);
+        assert_eq!((d.name.as_str(), d.pos, d.colour, d.symbol.as_str()), ("Waypoint 2", [-1, 64, 2], 2, "*"));
+        assert_eq!(b.list.len(), 1);
+        let page = Page::new_waypoint(d.clone(), true);
+        let Page::Edit { form, draft: Some(draft), .. } = &page else { panic!() };
+        assert_eq!((form.fields[F_NAME].as_str(), form.fields[F_X].as_str(), form.focus), ("", "-1", Some(F_NAME)));
+        assert!(draft.close && page.typing());
+        let mut unfocused = page.clone();
+        if let Page::Edit { form, .. } = &mut unfocused {
+            form.focus = None;
+        }
+        assert!(unfocused.typing(), "the box keeps keys from the game without a focus too");
+        // Left empty, the name is the next one; typed, it is what was typed.
+        let mut f = Form::of_new(&d);
+        f.apply(&mut d);
+        assert_eq!(d.name, "Waypoint 2");
+        for c in "Base".chars() {
+            f.type_char(c);
+        }
+        f.apply(&mut d);
+        let i = b.insert(d);
+        assert_eq!((b.list[i].name.as_str(), b.list[i].mark().as_str(), b.list[i].dim.as_str()), ("Base", "*", NETHER));
+        let mut gone = b.draft([0; 3], OVERWORLD, 3);
+        gone.set = "Removed".into();
+        gone.name = " ".into();
+        let j = b.insert(gone);
+        assert_eq!((b.list[j].set.as_str(), b.list[j].name.as_str()), (DEFAULT_SET, "Waypoint 2"));
+    }
+
+    #[test]
+    fn marker_and_name_defaults() {
+        let d = Settings::default();
+        assert!(d.markers && d.waypoints && d.wp_shape == 0 && WP_SHAPES[d.wp_shape] == "Diamond");
+        assert_eq!(WP_RANGES[d.wp_range], "Any distance");
+        assert!(d.names && !d.mob_names && !d.instant_add && d.tab_details && !d.always_details);
+        // 2.0 kept its beams as `markers`: one turned off there doesn't hide 3.0's markers...
+        let old = Settings::read(|k| (k == "markers").then(|| "false".into()));
+        assert!(old.markers);
+        // ...but one turned off since is kept.
+        let mut s = Settings::default();
+        s.markers = false;
+        let stored = s.stored();
+        assert!(stored.iter().any(|(k, v)| *k == SETTINGS_VERSION_KEY && v == "3"));
+        let read = Settings::read(|k| stored.iter().find(|p| p.0 == k).map(|p| p.1.clone()));
+        assert!(!read.markers);
+        let w = Waypoint { name: "nether hub".into(), ..Waypoint::default() };
+        assert_eq!(w.mark(), "N");
+        assert_eq!(Waypoint::default().mark(), "?");
+    }
+
+    #[test]
     fn png_is_well_formed() {
         let p = png(2, 1, &[255, 0, 0, 255, 0, 255, 0, 255]);
         assert_eq!(&p[..8], b"\x89PNG\r\n\x1a\n");
@@ -2945,7 +3076,7 @@ mod tests {
         st.style_new(0, 2, 1);
         assert_eq!((st.list[0].colour, st.list[0].mark().as_str()), (1, "*"));
         assert_eq!(Book::from_text(&st.to_text()).list[0].symbol, "*");
-        assert_eq!(st.list[1].mark(), "BW");
+        assert_eq!(st.list[1].mark(), "B");
         // Every field of a waypoint survives the file.
         let mut full = Book::default();
         full.add([1, 2, 3], NETHER, 7);
@@ -3016,7 +3147,10 @@ mod tests {
         assert_eq!(b.order(0, None), vec![1, 0]);
         assert_eq!(b.order(1, Some([0.0, 0.0, 0.0])), vec![1, 0]);
         assert_eq!(b.order(2, None), vec![1, 0]);
-        assert_eq!(b.list[1].initials(), "AB");
+        assert_eq!(b.list[1].letter(), "A");
+        b.list[0].name = "  #3 east".into();
+        assert_eq!(b.list[0].mark(), "3");
+        b.list[0].name = "beta".into();
         assert_eq!(b.listed(0, None, "ALPHA", None), vec![1]);
         assert_eq!(b.listed(0, None, "", Some("Nope")), Vec::<usize>::new());
         assert_eq!(b.listed(0, None, " ", Some(DEFAULT_SET)), vec![1, 0]);
@@ -3024,7 +3158,7 @@ mod tests {
         assert!(!b.set_shown(&[0, 1], false));
         assert!(b.list.iter().all(|w| !w.shown));
         let mut f = Form::of(&b.list[0]);
-        assert!(Page::Edit { index: 0, form: f.clone() }.typing());
+        assert!(Page::Edit { index: 0, form: f.clone(), draft: None }.typing());
         f.focus = Some(F_X);
         f.fields[F_X].clear();
         for c in "-12a3".chars() {
@@ -3062,7 +3196,7 @@ mod tests {
         assert_eq!(q, [190.0, 50.0]);
         let (r, _, pushed) = to_edge([100.0, 50.0], 200.0, 100.0, 10.0);
         assert!(!pushed && r == [100.0, 50.0]);
-        assert_eq!(fade(0.0), 0);
+        assert!(fade(0.0) > 90, "a waypoint you stand on still shows");
         assert_eq!(fade(50.0), 255);
         assert!(fade(5000.0) < 100 && fade(5000.0) > 50);
     }
