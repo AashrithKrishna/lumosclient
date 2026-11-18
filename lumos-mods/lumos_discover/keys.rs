@@ -1,0 +1,27 @@
+// Lumos Discover's hotkey: the one place that reads it.
+//
+// Horizon 9f42064c has no key mappings for native mods in Options > Controls, so the key is the
+// mod's own (`NativeMod.keys`): Options > Mods lists it on the mod's page, where the player
+// rebinds it, and `native_mod_key` reads the choice. The table is `HOTKEYS` in runtime.rs.
+// Moving to `Registrar::register_key_mapping` (a newer Horizon) only changes this file.
+use crate::game::Game;
+use crate::game::lumos_discover as m;
+
+/// `NativeMod.keys`: name, label and default key of each hotkey.
+pub(super) fn listed() -> Vec<[String; 3]> {
+    m::HOTKEYS
+        .iter()
+        .map(|(id, label, key)| [(*id).to_owned(), (*label).to_owned(), (*key).to_owned()])
+        .collect()
+}
+
+/// The key hotkey `id` is bound to (`key.keyboard.right.control`).
+pub(super) fn bound(game: &Game<'_>, id: &str) -> String {
+    let default = m::HOTKEYS.iter().find(|k| k.0 == id).map_or("key.keyboard.unknown", |k| k.2);
+    game.native_mod_key(m::ID, id, default)
+}
+
+/// A `native_key` event (`key` going down when `down`) is a press of hotkey `id`.
+pub(super) fn pressed(game: &Game<'_>, id: &str, key: &str, down: bool) -> bool {
+    down && key != "key.keyboard.unknown" && bound(game, id) == key
+}

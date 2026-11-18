@@ -212,6 +212,7 @@ const OWN: &[(&str, &str, &str, &[&str])] = &[
     ("lumos_freelook", "Freelook", "Hold Left Alt to look around while you keep moving the way you face.", &["utility"]),
     ("lumos_map", "Map", "Minimap with nearby mobs, waypoints with a death point, and a saved world map (M).", &["utility", "adventure"]),
     ("lumos_fullbright_key", "Fullbright Key", "A key (G) that turns Horizon's Fullbright on and off, with a notice.", &["utility"]),
+    ("lumos_discover", "Lumos Discover", "Browse and install mods, resource packs and shaders from inside the game. Right Control opens it.", &["utility"]),
 ];
 
 fn own_projects() -> Vec<Value> {

@@ -19,6 +19,7 @@ with them.
 ## Pin
 
 All of them are planned and built against Horizon `9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0`
+| `lumos_discover` | Discover inside the game: Horizon's registry (mods, resource packs, shaders, with its categories and search) and Lumos's own mods, with what this instance has. Right Control or the pause menu's Discover button opens it. Packs and shaders install and apply at once; content mods with only assets and data switch live, others on restart; native mods are added or taken out by Lumos when the game closes (`lumos-requests.json`), and Restart to apply closes the game for Lumos to start it again. Downloads are checked against the index (size, SHA-256, the author's signature, the file's manifest). |
 (Nightly 2026-11-13) with horizon-mixins `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`. The pin is set by
 `[compatibility] horizon_revision` in each manifest. For another Horizon commit, re-plan the mods and
 rebuild them. The hooks they use are listed in each manifest.
@@ -39,7 +40,7 @@ lumos-mods/<id>/
 
 ## On, off and settings
 
-`lumos_hud` also has `keys.rs`, a module (`lumos_hud_keys`) with its hotkeys.
+`lumos_hud` and `lumos_discover` also have `keys.rs`, a module (`<id>_keys`) with their hotkeys.
 
 Every hook checks `game.native_on("<id>")` first. Each mod also adds itself to Options > Mods
 (`native_mods`), so it can be switched off there. That writes `mod.<id>:false` to `horizon-mods.txt`

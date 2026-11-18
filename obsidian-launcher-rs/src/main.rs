@@ -37,6 +37,8 @@ mod updater;
 // feat/discover: Content Hub / Content Browser (Modrinth filters, CurseForge, updates, suggestions)
 mod curseforge;
 mod discover;
+// The in-game Discover's requests between runs (lumos-mods/lumos_discover).
+mod ingame_requests;
 
 const HORIZON_ID: &str = "Horizon 26.3 (Rust)";
 const LAUNCHER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -1065,6 +1067,46 @@ struct LaunchSnapshot {
     paths: installer::Paths,
     game_dir: PathBuf,
     horizon_output: PathBuf,
+}
+
+/// The game Lumos started closed: what its in-game Discover asked for (`lumos-requests.json`:
+/// native mods to add or take out, content mods to delete) is applied, and when it asked for a
+/// restart the same instance starts again.
+fn apply_ingame_requests(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, pid: String) {
+    std::thread::spawn(move || {
+        let Some((game_dir, base_dir)) = ({
+            let st = lock(&shared);
+            st.target_instance(&pid).filter(|t| t.2 == HORIZON_ID).map(|t| (t.1, st.base_dir.clone()))
+        }) else {
+            return;
+        };
+        let Some(req) = ingame_requests::take(&game_dir) else { return };
+        push_log(&proxy, "[LumosClient] Applying what the in-game Discover asked for");
+        let p = proxy.clone();
+        let report = |m: &str| push_log(&p, &format!("[LumosClient] {m}"));
+        let trash = |path: &Path, label: &str| move_to_trash(&base_dir, path, label);
+        let mut live = ingame_requests::Live { base_dir: base_dir.clone(), game_dir: game_dir.clone(), report: &report, trash: &trash };
+        let outcomes = ingame_requests::apply(&req, &mut live);
+        let failed = outcomes.iter().any(|(ok, _)| !ok);
+        for (ok, msg) in &outcomes {
+            push_log(&proxy, &format!("[LumosClient] {}{msg}", if *ok { "" } else { "error: " }));
+        }
+        if !outcomes.is_empty() {
+            let text = outcomes.iter().map(|(_, m)| m.as_str()).collect::<Vec<_>>().join(" ");
+            call_js(&proxy, "onNotice", json!({"message": text, "kind": if failed { "err" } else { "ok" }}));
+        }
+        if !req.restart {
+            return;
+        }
+        // Only the instance that asked, and only while it is still the one selected.
+        let still_selected = lock(&shared).config.active_profile_id == pid;
+        if still_selected {
+            push_log(&proxy, "[LumosClient] Starting the game again");
+            launch_game(&proxy, &shared, None);
+        } else {
+            push_log(&proxy, "[LumosClient] Another instance is selected now, so the game wasn't started again.");
+        }
+    });
 }
 
 /// Starts the selected version: installs whatever is missing, then launches. One at a time.
@@ -3645,9 +3687,11 @@ fn main() {
             }
             Event::UserEvent(UserEvent::ProcessExited(code)) => {
                 let crash_ctx = crash_context(&state); // feat/updater
+                let mut ended = None;
                 {
                     let mut st = state.lock().unwrap();
                     if let Some((pid, started)) = st.session.take() {
+                        ended = Some(pid.clone());
                         let secs = started.elapsed().as_secs();
                         if let Some(p) = st.config.profiles.iter_mut().find(|p| p.id == pid) {
                             p.playtime_secs += secs;
@@ -3663,6 +3707,9 @@ fn main() {
                 let _ = webview.evaluate_script(&format!("window.onGameExit && window.onGameExit({});", json!({"code": code})));
                 explain_crash_async(proxy.clone(), code, crash_ctx); // feat/updater
                 check_resources_async(proxy.clone(), state.clone());
+                if let Some(pid) = ended {
+                    apply_ingame_requests(proxy.clone(), state.clone(), pid);
+                }
             }
             _ => {}
         }
