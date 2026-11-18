@@ -2178,7 +2178,10 @@
   }
   window.renderContent = function (data) {
     if (data.profileId && data.profileId !== state.activeProfileId) return; // an answer about another instance
+    const before = JSON.stringify((ui.content[data.kind] || []).map(i => [i.file, i.enabled]));
     ui.content[data.kind] = data.items || [];
+    if (ui.contentFor === data.profileId && before !== '[]' && before !== JSON.stringify(ui.content[data.kind].map(i => [i.file, i.enabled]))
+        && window.lumosDiscover && window.lumosDiscover.contentChanged) window.lumosDiscover.contentChanged(data.profileId);
     const c = $('cnt-' + data.kind); if (c) c.textContent = (data.items || []).length;
     if (data.kind === ui.contentKind) renderContentList();
   };
@@ -3675,6 +3678,12 @@
       if (D.ctxFor !== instanceKey()) requestContext();
     },
     search(force) { search(force); },
+    // The instance's content changed outside Discover (removed, switched off, added by hand):
+    // forget what this page remembered as installed there and ask again.
+    contentChanged(profileId) {
+      for (const k of [...D.installedKeys]) if (k.startsWith(profileId + '|')) D.installedKeys.delete(k);
+      if (profileId === pid()) search(true);
+    },
     openBrowser(type, q) {
       setMode('browser', true);
       if (type) { cur().type = type; cur().categories = []; }
