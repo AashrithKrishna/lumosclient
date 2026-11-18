@@ -44,6 +44,9 @@ def main():
     g = next(g for g in plan["groups"] if g["commit"] == a.commit)
     applied = json.load(open(os.path.join(a.work, "applied.json")))
     by_id = {m["id"]: m for m in g["mods"]}
+    # gate.py's report: every hook of a mod checks its switch (stage.py runs it with engine patch 04).
+    gates_path = os.path.join(a.work, "gates.json")
+    gates = json.load(open(gates_path)) if os.path.exists(gates_path) else {}
     mods = []
     for i in applied["applied"]:
         folder = os.path.join(a.work, "mods", i)
@@ -53,8 +56,14 @@ def main():
                 if f.endswith(".rs"):
                     text += open(os.path.join(root, f), encoding="utf-8", errors="ignore").read()
         m = by_id.get(i) or own_mod(folder, i)
-        # A built-in mod honours horizon-mods.txt only when its own hooks ask native_on().
-        mods.append({"id": i, "version": m["version"], "name": m["name"], "sha256": m["sha256"], "can_turn_off": "native_on(" in text})
+        # A built-in mod honours horizon-mods.txt when every hook of it was gated (gate.py), or
+        # else when its own hooks ask native_on().
+        gate = gates.get(i)
+        gated = bool(gate) and not gate.get("ungated")
+        row = {"id": i, "version": m["version"], "name": m["name"], "sha256": m["sha256"], "can_turn_off": gated or "native_on(" in text}
+        if gate and gate.get("ungated"):
+            row["not_switchable"] = gate["ungated"]
+        mods.append(row)
     native = {"schema": 1, "commit": g["commit"], "short": g["short"], "mixins": g["mixins"], "platform": a.platform,
               "combined": bool(g.get("combined")),
               "mods": mods, "left_out": applied["failed"]}

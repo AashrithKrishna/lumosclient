@@ -1,0 +1,289 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 63f4827..d583be8 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1854,6 +1854,7 @@ dependencies = [
+ name = "horizon-mods"
+ version = "0.1.0"
+ dependencies = [
++ "horizon-core",
+  "horizon-shader-api",
+  "log",
+  "minisign-verify",
+@@ -2128,6 +2129,7 @@ version = "0.1.0"
+ dependencies = [
+  "addr2line",
+  "framehop",
++ "horizon-core",
+  "libc",
+  "libmimalloc-sys",
+  "memmap2",
+diff --git a/crates/horizon-client-render/src/mod_list.rs b/crates/horizon-client-render/src/mod_list.rs
+index 1652ca6..cf1c36c 100644
+--- a/crates/horizon-client-render/src/mod_list.rs
++++ b/crates/horizon-client-render/src/mod_list.rs
+@@ -59,9 +59,16 @@ pub struct NativePage {
+ 
+ impl ModList {
+     pub fn load(dir: &Path) -> Self {
+-        fs::read_to_string(dir.join(FILE))
++        let list: Self = fs::read_to_string(dir.join(FILE))
+             .map(|t| Self::parse(&t))
+-            .unwrap_or_default()
++            .unwrap_or_default();
++        // Lumos: the built-in native mods' switches, for every hook (horizon_core::lumos_mods).
++        list.publish();
++        list
++    }
++    /// Lumos: hands the switches to every native mod's hooks (`horizon_core::lumos_mods`).
++    pub fn publish(&self) {
++        horizon_core::lumos_mods::publish(&self.disabled);
+     }
+     pub fn parse(text: &str) -> Self {
+         let ids = |value: &str| -> BTreeSet<String> {
+@@ -108,6 +115,7 @@ impl ModList {
+         })
+     }
+     pub fn save(&self, dir: &Path) {
++        self.publish();
+         let path = dir.join(FILE);
+         if self.enabled.is_empty()
+             && self.disabled.is_empty()
+@@ -140,6 +148,7 @@ impl ModList {
+             self.disabled.remove(&m.id);
+         }
+         self.enabled.insert(m.id.clone());
++        self.publish();
+     }
+     pub fn toggle(&mut self, i: usize) {
+         let Some(m) = self.installed.get(i).filter(|m| !m.dev) else {
+@@ -155,6 +164,7 @@ impl ModList {
+         } else if !self.enabled.remove(&m.id) {
+             self.enabled.insert(m.id.clone());
+         }
++        self.publish();
+     }
+ }
+ 
+diff --git a/crates/horizon-client/src/game/mods.rs b/crates/horizon-client/src/game/mods.rs
+index d53f691..40b63e4 100644
+--- a/crates/horizon-client/src/game/mods.rs
++++ b/crates/horizon-client/src/game/mods.rs
+@@ -427,6 +427,8 @@ fn native_mods_detail(built: &str) -> Option<String> {
+     let list = info["mods"]
+         .as_array()?
+         .iter()
++        // Lumos: only the instance's mods, not every one built in.
++        .filter(|m| m["id"].as_str().is_none_or(horizon_core::lumos_mods::shown))
+         .map(|m| {
+             let text = |key: &str| m[key].as_str().unwrap_or("?").to_owned();
+             format!("{} {}", text("id"), text("version"))
+@@ -731,6 +733,7 @@ impl Game<'_> {
+     /// (`mod_api::set_mod_on`): the next dispatch skips a mod turned off.
+     /// Mixin code checks `native_on` itself.
+     pub(super) fn sync_native_switches(&self) {
++        self.settings.mods.publish();
+         for id in horizon_client::mod_api::mod_ids() {
+             let on = !self.settings.mods.disabled.contains(*id);
+             horizon_client::mod_api::set_mod_on(id, on);
+diff --git a/crates/horizon-client/src/game/native_hooks.rs b/crates/horizon-client/src/game/native_hooks.rs
+index 73ad423..1a94960 100644
+--- a/crates/horizon-client/src/game/native_hooks.rs
++++ b/crates/horizon-client/src/game/native_hooks.rs
+@@ -12440,6 +12440,9 @@ impl Game<'_> {
+     pub(super) fn list_native_mods(&mut self) {
+         let mut mods = Vec::new();
+         self.native_mods(&mut mods);
++        // Lumos: a built-in mod the instance doesn't have (off when the game started) is listed
++        // nowhere: not here, so not on Key Binds or in any mod list read from these rows.
++        mods.retain(|m| horizon_core::lumos_mods::shown(&m.id));
+         // A WebAssembly mod of the same id: the native row stands for it,
+         // and alone toggles its `mod.<id>` line.
+         self.settings
+diff --git a/crates/horizon-core/src/lib.rs b/crates/horizon-core/src/lib.rs
+index e6e9970..94c7ae2 100644
+--- a/crates/horizon-core/src/lib.rs
++++ b/crates/horizon-core/src/lib.rs
+@@ -11,6 +11,7 @@ pub mod fast_hash;
+ pub mod geometry;
+ pub mod jmath;
+ pub mod level_key;
++pub mod lumos_mods;
+ pub mod no_ai;
+ pub mod noise;
+ pub mod paletted;
+diff --git a/crates/horizon-core/src/lumos_mods.rs b/crates/horizon-core/src/lumos_mods.rs
+new file mode 100644
+index 0000000..011b504
+--- /dev/null
++++ b/crates/horizon-core/src/lumos_mods.rs
+@@ -0,0 +1,145 @@
++//! Lumos Client: which of the native mods built into this game may run.
++//!
++//! Lumos's all-in-one game has every native mod compiled in, and the player's instance turns on
++//! only the ones they installed (`mod.<id>:true` in `horizon-mods.txt`; every other built-in mod
++//! is `mod.<id>:false`). Lumos's build (tools/lumos_native/gate.py) starts every hook of every
++//! mod with [`lumos_mod_on!`], so a mod turned off does nothing at all, whether or not its own
++//! code asks `native_on`.
++//!
++//! The switches are process-wide (the window's game and the integrated server share them), set
++//! by the settings (`ModList`) whenever they are read or changed. Until then they are read once
++//! from `horizon-mods.txt` in the game folder (the working directory), so hooks that run before
++//! the settings (allocator, registries) follow them too.
++//!
++//! Hidden mods are the ones off when the game started: the instance doesn't have them, so the
++//! game shows them nowhere (Options > Mods, Key Binds, mod lists). A mod the player turns off
++//! during the session stays listed, so it can be turned on again.
++
++use std::collections::BTreeSet;
++use std::sync::RwLock;
++use std::sync::atomic::{AtomicU64, Ordering};
++
++struct Switches {
++    disabled: BTreeSet<String>,
++    hidden: Option<BTreeSet<String>>,
++}
++
++static SWITCHES: RwLock<Option<Switches>> = RwLock::new(None);
++/// Bumped at each change, so that each hook's cached answer ([`cached`]) is asked again. Starts
++/// at 1: a cache of 0 has never been filled.
++static GENERATION: AtomicU64 = AtomicU64::new(1);
++
++/// `mod.<id>:false` lines of a `horizon-mods.txt`.
++pub fn parse_disabled(text: &str) -> BTreeSet<String> {
++    text.lines()
++        .filter_map(|l| l.split_once(':'))
++        .filter(|(_, v)| v.trim() == "false")
++        .filter_map(|(k, _)| k.trim().strip_prefix("mod."))
++        .map(str::to_owned)
++        .collect()
++}
++
++fn from_game_dir() -> BTreeSet<String> {
++    let dir = std::env::current_dir().unwrap_or_default();
++    std::fs::read_to_string(dir.join("horizon-mods.txt"))
++        .map(|t| parse_disabled(&t))
++        .unwrap_or_default()
++}
++
++fn with<R>(f: impl FnOnce(&Switches) -> R) -> R {
++    {
++        let read = SWITCHES.read().unwrap_or_else(|e| e.into_inner());
++        if let Some(s) = read.as_ref() {
++            return f(s);
++        }
++    }
++    let mut write = SWITCHES.write().unwrap_or_else(|e| e.into_inner());
++    if write.is_none() {
++        *write = Some(Switches {
++            disabled: from_game_dir(),
++            hidden: None,
++        });
++        GENERATION.fetch_add(1, Ordering::AcqRel);
++    }
++    f(write.as_ref().expect("set above"))
++}
++
++/// The mods turned off now (`ModList::disabled`). The first call also fixes the hidden mods:
++/// those off when the game started.
++pub fn publish(disabled: &BTreeSet<String>) {
++    let mut write = SWITCHES.write().unwrap_or_else(|e| e.into_inner());
++    match write.as_mut() {
++        Some(s) => {
++            if s.hidden.is_none() {
++                s.hidden = Some(disabled.clone());
++            }
++            if s.disabled != *disabled {
++                s.disabled = disabled.clone();
++                GENERATION.fetch_add(1, Ordering::AcqRel);
++            }
++        }
++        None => {
++            *write = Some(Switches {
++                disabled: disabled.clone(),
++                hidden: Some(disabled.clone()),
++            });
++            GENERATION.fetch_add(1, Ordering::AcqRel);
++        }
++    }
++}
++
++/// Mod `id` may run now.
++pub fn on(id: &str) -> bool {
++    with(|s| !s.disabled.contains(id))
++}
++
++/// Mod `id` is the instance's (on when the game started, or turned on since): the game may list
++/// it. A hidden mod turned on during the session shows again.
++pub fn shown(id: &str) -> bool {
++    with(|s| {
++        !s.disabled.contains(id) || !s.hidden.as_ref().is_some_and(|h| h.contains(id))
++    })
++}
++
++/// [`on`] or [`shown`] (`listing`), remembered in `cache` until the switches change: a hook's
++/// check is two atomic loads.
++#[doc(hidden)]
++pub fn cached(cache: &AtomicU64, id: &str, listing: bool) -> bool {
++    let generation = GENERATION.load(Ordering::Acquire);
++    let c = cache.load(Ordering::Relaxed);
++    if c >> 1 == generation {
++        return c & 1 == 1;
++    }
++    let answer = if listing { shown(id) } else { on(id) };
++    cache.store(generation << 1 | u64::from(answer), Ordering::Relaxed);
++    answer
++}
++
++/// Whether native mod `$id` may run: the first statement of each of its hooks in Lumos's builds.
++#[macro_export]
++macro_rules! lumos_mod_on {
++    ($id:literal) => {{
++        static LUMOS_GATE: ::core::sync::atomic::AtomicU64 = ::core::sync::atomic::AtomicU64::new(0);
++        $crate::lumos_mods::cached(&LUMOS_GATE, $id, false)
++    }};
++}
++
++/// Whether native mod `$id` may list itself (Options > Mods, its settings page).
++#[macro_export]
++macro_rules! lumos_mod_shown {
++    ($id:literal) => {{
++        static LUMOS_GATE: ::core::sync::atomic::AtomicU64 = ::core::sync::atomic::AtomicU64::new(0);
++        $crate::lumos_mods::cached(&LUMOS_GATE, $id, true)
++    }};
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn reads_the_off_lines() {
++        let off = parse_disabled("mod.gyro:false\nmod.zoom:true\nkey.zoom.use:key.keyboard.c\n mod.veinminer : false\n");
++        assert_eq!(off, ["gyro", "veinminer"].map(String::from).into());
++    }
++}
+diff --git a/crates/horizon-mods/Cargo.toml b/crates/horizon-mods/Cargo.toml
+index f1e6b16..c7adaa1 100644
+--- a/crates/horizon-mods/Cargo.toml
++++ b/crates/horizon-mods/Cargo.toml
+@@ -7,6 +7,7 @@ rust-version.workspace = true
+ description = "Horizon's mod files: content mods, modpacks and the registry index (docs/mods.md)"
+ 
+ [dependencies]
++horizon-core = { path = "../horizon-core" }
+ serde = { version = "1", features = ["derive"] }
+ serde_json = "1"
+ toml = "1.1.6"
+diff --git a/crates/horizon-threads/Cargo.toml b/crates/horizon-threads/Cargo.toml
+index 53ae291..60c06a0 100644
+--- a/crates/horizon-threads/Cargo.toml
++++ b/crates/horizon-threads/Cargo.toml
+@@ -7,6 +7,7 @@ rust-version.workspace = true
+ description = "Scheduling hints for the game's threads and its allocator, and the other OS calls the crates that forbid unsafe code can't make"
+ 
+ [dependencies]
++horizon-core = { path = "../horizon-core" }
+ mimalloc = { version = "0.1.52", default-features = false }
+ libmimalloc-sys = { version = "0.1.49", default-features = false, features = ["extended"] }
+ 

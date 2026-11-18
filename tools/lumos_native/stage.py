@@ -6,7 +6,9 @@
 Makes work/src (the commit's source, symlinks removed, `.horizon-revision` written, as
 horizon-mixins expects, and Lumos's engine patches applied: engine-patches/README.md) and
 work/mods/<id>/ (each mod's mixins folder, downloaded from the
-registry and checked against its SHA-256 and size). Prints the group's horizon-mixins rev.
+registry and checked against its SHA-256 and size). With the engine patches applied, gate.py then
+starts every hook of every mod with its mod's switch (work/gates.json). Prints the group's
+horizon-mixins rev.
 """
 import argparse
 import hashlib
@@ -37,11 +39,11 @@ def apply_engine_patches(src, commit):
     here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "engine-patches")
     base = os.path.join(here, "base-commit.txt")
     if not os.path.isfile(base):
-        return
+        return False
     pinned = open(base, encoding="utf-8").read().split()[0]
     if pinned != commit:
         print(f"engine patches are for {pinned[:8]}, not {commit[:8]}: none applied", file=sys.stderr)
-        return
+        return False
     import subprocess
     for name in sorted(f for f in os.listdir(here) if f.endswith(".patch")):
         patch = os.path.abspath(os.path.join(here, name))
@@ -59,6 +61,7 @@ def apply_engine_patches(src, commit):
         if r.returncode != 0:
             sys.exit(f"engine patch {name} doesn't apply to {commit[:8]}: {(r.stderr or r.stdout).strip()}")
         print(f"engine patch: {name}", file=sys.stderr)
+    return True
 
 
 def main():
@@ -101,7 +104,7 @@ def main():
                     os.chmod(dest, 0o755)
     with open(os.path.join(src, ".horizon-revision"), "w") as fh:
         fh.write(g["commit"] + "\n")
-    apply_engine_patches(src, g["commit"])
+    patched = apply_engine_patches(src, g["commit"])
 
     for m in g["mods"]:
         blob = fetch(m["url"], int(m["size"]))
@@ -151,6 +154,11 @@ def main():
                     text = open(path, encoding="utf-8").read()
                     text = re.sub(r'(horizon_revision\s*=\s*")[0-9a-f]{40}(")', lambda m: m.group(1) + g["commit"] + m.group(2), text)
                     open(path, "w", encoding="utf-8").write(text)
+    if patched:
+        # Every hook of every mod checks its mod's switch first (gate.py; the switch is engine patch 04).
+        import subprocess
+        subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "gate.py"),
+                        "--work", a.work], check=True)
     print(g["mixins"])
 
 

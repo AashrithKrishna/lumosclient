@@ -46,7 +46,7 @@ Options > Mods entry).
 
 `lumos_hud` and `lumos_discover` also have `keys.rs`, a module (`<id>_keys`) with their hotkeys.
 
-Every hook checks `game.native_on("<id>")` first. Each mod also adds itself to Options > Mods
+Every hook checks `game.native_on("<id>")` first. (Lumos's builds also start every hook of every mod, these and registry mods alike, with the mod's switch: `tools/lumos_native/gate.py`.) Each mod also adds itself to Options > Mods
 (`native_mods`), so it can be switched off there. That writes `mod.<id>:false` to `horizon-mods.txt`
 and takes effect at runtime with no rebuild. Each mod has its own settings page, saved with
 `native_set_setting`.
