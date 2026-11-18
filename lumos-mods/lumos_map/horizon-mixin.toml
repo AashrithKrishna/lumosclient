@@ -1,0 +1,224 @@
+# Lumos Map: a minimap with entity dots, waypoints, a world map of what you explored.
+[mod]
+id = "lumos_map"
+version = "1.0.0"
+priority = 100
+
+# Horizon Nightly 2026-11-13. Planned with horizon-mixins e59da9094f0c2fdda6c627fe9eff22dec6a906f0.
+[compatibility]
+horizon_revision = "9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0"
+
+# The rules (no game types; its tests run on their own).
+[[module]]
+id = "runtime"
+file = "crates/horizon-client/src/game.rs"
+name = "lumos_map"
+source = "runtime.rs"
+
+[[module]]
+id = "glue"
+file = "crates/horizon-client/src/game.rs"
+name = "lumos_map_glue"
+source = "glue.rs"
+
+# Every key the mod reads, in one place (the page in Options > Mods rebinds them).
+[[module]]
+id = "keys"
+file = "crates/horizon-client/src/game.rs"
+name = "lumos_map_keys"
+source = "keys.rs"
+
+# Horizon's own minimap (its tiles, cave view underground, image, arrow), set up from the settings.
+[[injection]]
+id = "minimap"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_minimap"
+helper = "hooks/minimap.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "minimap", ty = "&mut Option<NativeMinimap>", value = "&mut *minimap" },
+]
+
+# Over the minimap: entity dots and waypoints; under it, coordinates and biome. First of the
+# HUD hooks, so its box is the first after the minimap in that corner (which says where it is).
+[[injection]]
+id = "hud"
+kind = "HEAD"
+priority = 1000
+target = "horizon_client::game::native_hooks::Game<'_>::native_hud"
+helper = "hooks/hud.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "batch", ty = "&mut horizon_client::hud::HudBatch", value = "&mut *batch" },
+  { name = "corners", ty = "&mut horizon_client::extras_hud::Corners", value = "&mut *corners" },
+]
+
+# Once a frame: the world followed, a few chunks explored, a death marked, the map image kept.
+[[injection]]
+id = "frame"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_frame"
+helper = "hooks/frame.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+# M opens and closes the world map, B adds a waypoint.
+[[injection]]
+id = "key"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_key"
+helper = "hooks/key.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "key", ty = "&str", value = "key" },
+  { name = "pressed", ty = "bool", value = "pressed" },
+]
+
+# Waypoints in the world: name and distance through walls, and a beam.
+[[injection]]
+id = "world"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_world_primitives"
+helper = "hooks/world.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "camera", ty = "[f64; 3]", value = "camera" },
+  { name = "primitives", ty = "&mut WorldPrimitives", value = "&mut *primitives" },
+]
+
+# The world map screen (the mod's own screen): the map, the waypoint list, the editor.
+[[injection]]
+id = "render"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_screen_render_post"
+helper = "hooks/render.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "batch", ty = "&mut HudBatch", value = "&mut *batch" },
+  { name = "screen", ty = "&NativeScreenView<'_>", value = "screen" },
+]
+
+# Its buttons and a press on the map.
+[[injection]]
+id = "press"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_button_pressed_pre"
+helper = "hooks/press.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "screen", ty = "&NativeScreenView<'_>", value = "screen" },
+  { name = "button", ty = "i32", value = "button" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+# A click on the map: a waypoint opened, or added there.
+[[injection]]
+id = "release"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_button_released_pre"
+helper = "hooks/release.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "screen", ty = "&NativeScreenView<'_>", value = "screen" },
+  { name = "button", ty = "i32", value = "button" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+# Dragging moves the map.
+[[injection]]
+id = "drag"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_dragged_pre_v2"
+helper = "hooks/drag.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "screen", ty = "&str", value = "screen" },
+  { name = "mouse", ty = "[f32; 2]", value = "mouse" },
+  { name = "delta", ty = "[f32; 2]", value = "delta" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+# The wheel zooms the map about the pointer, or scrolls the list.
+[[injection]]
+id = "scroll"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_scrolled_pre_v2"
+helper = "hooks/scroll.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "screen", ty = "&str", value = "screen" },
+  { name = "mouse", ty = "[f32; 2]", value = "mouse" },
+  { name = "scroll", ty = "[f64; 2]", value = "scroll" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+# Typing a waypoint's name; Escape steps back a page.
+[[injection]]
+id = "screen-key"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_screen_key_pressed_pre"
+helper = "hooks/screen_key.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "screen", ty = "&NativeScreenView<'_>", value = "screen" },
+  { name = "key", ty = "&str", value = "key" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+# A character of a waypoint's name.
+[[injection]]
+id = "char"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_screen_char_typed_pre"
+helper = "hooks/char.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "screen", ty = "&NativeScreenView<'_>", value = "screen" },
+  { name = "c", ty = "char", value = "c" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+# Leaving a level: its explored map is saved.
+[[injection]]
+id = "level-unload"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_client_level_unload"
+helper = "hooks/level_unload.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+# Options > Mods.
+[[injection]]
+id = "list"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_mods"
+helper = "hooks/list.rs"
+bindings = [
+  { name = "mods", ty = "&mut Vec<crate::game::native_hooks::NativeMod>", value = "&mut *mods" },
+]
+
+# Its settings page.
+[[injection]]
+id = "settings"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_settings"
+helper = "hooks/settings.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "buttons", ty = "&mut Vec<String>", value = "&mut *buttons" },
+]
+
+# A click on its settings page.
+[[injection]]
+id = "click"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_settings_click"
+helper = "hooks/click.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "button", ty = "usize", value = "button" },
+]
