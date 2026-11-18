@@ -45,6 +45,12 @@ def apply_engine_patches(src, commit):
     import subprocess
     for name in sorted(f for f in os.listdir(here) if f.endswith(".patch")):
         patch = os.path.abspath(os.path.join(here, name))
+        # Windows checkouts can turn the patch into CRLF lines; the source is LF, so normalise a copy.
+        data = open(patch, "rb").read()
+        if b"\r\n" in data:
+            patch = os.path.join(src, ".." , f".lf-{name}")
+            open(patch, "wb").write(data.replace(b"\r\n", b"\n"))
+            patch = os.path.abspath(patch)
         # The source sits inside the Lumos checkout in CI: keep git from treating it as part of
         # that repository (git apply would then resolve paths from the checkout's root).
         env = dict(os.environ, GIT_CEILING_DIRECTORIES=os.path.dirname(os.path.abspath(src)))
