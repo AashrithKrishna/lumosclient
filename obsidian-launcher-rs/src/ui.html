@@ -2150,6 +2150,9 @@
     if (t.dataset.hud === 'background' || t.dataset.hud === 'shadow' || t.dataset.hud === 'icon') hudChange(t);
   });
   // ── end instance HUD block ──
+  function skeletonRows(n, h = 64) {
+    return Array.from({ length: n }, () => `<div class="row" style="padding:12px;gap:14px"><div class="skeleton" style="width:${h}px;height:${h}px;border-radius:12px"></div><div class="col" style="flex:1;gap:8px"><div class="skeleton" style="height:13px;width:40%"></div><div class="skeleton" style="height:11px;width:85%"></div></div></div>`).join('');
+  }
   function loadContent() {
     if (ui.contentFor !== state.activeProfileId) { ui.content = {}; ui.contentFor = state.activeProfileId; }
     $('contentList').innerHTML = skeletonRows(4, 34);
