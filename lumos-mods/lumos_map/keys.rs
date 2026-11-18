@@ -16,6 +16,8 @@ pub(super) const ZOOM_IN: &str = "zoom_in";
 pub(super) const ZOOM_OUT: &str = "zoom_out";
 /// The minimap's cave view on or off.
 pub(super) const CAVE: &str = "cave";
+/// The cave view in Manual, starting where you are now.
+pub(super) const CAVE_HERE: &str = "cave_here";
 /// Shows or hides the minimap.
 pub(super) const MINIMAP: &str = "minimap";
 /// Shows or hides every waypoint.
@@ -26,12 +28,13 @@ pub(super) const WAYPOINT_LIST: &str = "waypoint_list";
 pub(super) const SETTINGS: &str = "settings";
 
 /// Each key: its name, its label on the page, and its default (`key.keyboard.g`).
-const KEYS: [[&str; 3]; 9] = [
+const KEYS: [[&str; 3]; 10] = [
     [MAP, "World Map", "key.keyboard.m"],
     [WAYPOINT, "Add Waypoint", "key.keyboard.b"],
     [ZOOM_IN, "Minimap Zoom In", "key.keyboard.equal"],
     [ZOOM_OUT, "Minimap Zoom Out", "key.keyboard.minus"],
-    [CAVE, "Cave View On/Off", "key.keyboard.k"],
+    [CAVE, "Cave View Auto/Manual/Off", "key.keyboard.k"],
+    [CAVE_HERE, "Cave Start Y Here", "key.keyboard.unknown"],
     [MINIMAP, "Show/Hide Minimap", "key.keyboard.h"],
     [WAYPOINTS, "Show/Hide Waypoints", "key.keyboard.unknown"],
     [WAYPOINT_LIST, "Waypoint List", "key.keyboard.u"],

@@ -49,6 +49,11 @@ const BOTTOM: f32 = 14.0;
 // Column flags of the scan's palette.
 const FLUID: u8 = 3;
 const AIR: u8 = 4;
+/// Makes a roof for the cave view: not air or a fluid, has a map colour, and the map doesn't
+/// see through it (leaves, glass, panes and bars let the sky down).
+const ROOF: u8 = 8;
+/// How often the roof over the player is tested.
+const ROOF_EVERY: Duration = Duration::from_millis(200);
 
 /// Per block state: its map colour, flags and colour from above.
 struct Palette {
@@ -71,6 +76,8 @@ impl Palette {
             };
             if facts.is_air(BlockStateId(i as u32)) {
                 b |= AIR;
+            } else if b == 0 && f.map_color != 0 && !f.skylight_down && !f.has_class("LeavesBlock") {
+                b |= ROOF;
             }
             flags.push(b);
         }
@@ -160,23 +167,70 @@ struct Hit {
     depth: u8,
     /// Under water: the first block with a colour below it.
     ground: Option<(u32, u8)>,
-    wall: bool,
+    /// `m::FLOOR`, `m::WALL` or `m::DEEP`.
+    kind: u8,
     found: bool,
 }
 
-/// One chunk's columns: the first block with a map colour going down from `start` (the top of
-/// the chunk, or a layer: a block at the layer itself is a wall), and the water over the ground;
-/// with a ceiling and no layer, from the first open space under the roof. Colours take the
-/// biome tints blended across the quarts around each block (no seams between biomes), and water
-/// shows the ground under it.
-#[allow(clippy::too_many_arguments)]
+/// Where a scan looks down from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scan {
+    /// From the top of the chunk: the surface.
+    Top,
+    /// From the first open space under a roofed dimension's roof (its top block is `.0`).
+    UnderRoof(i32),
+    /// From the first open space under the ground (the full cave map of an open dimension).
+    UnderGround,
+    /// A cave slice: a block at `start` is a wall, else the first floor down to `depth` blocks
+    /// under it (nothing there: a drop); floors up to `above` blocks over it, with open space on
+    /// them, show too.
+    Cave { start: i32, depth: i32, above: i32 },
+}
+
+impl Scan {
+    /// The same slice for the maps: a cave slice moved by less than two blocks is still it.
+    fn same(self, other: Scan) -> bool {
+        match (self, other) {
+            (Scan::Cave { start: a, depth: d, above: u }, Scan::Cave { start: b, depth: e, above: v }) => {
+                d == e && u == v && (a - b).abs() < 2
+            }
+            _ => self == other,
+        }
+    }
+}
+
+/// The Y of the first roof block over column `x, z` above `head`, or None under open sky (sky
+/// light at the head is the quick answer; air sections are passed over whole).
+fn roof_over(world: &horizon_client::world::World, palette: &Palette, x: i32, head: i32, z: i32) -> Option<i32> {
+    if world.light(x, head, z) >> 4 == 15 {
+        return None;
+    }
+    let chunk = world.chunks.get(&(x >> 4, z >> 4))?;
+    let air = world.air.0;
+    let mut y = head + 1;
+    while y < chunk.max_y() {
+        let section = chunk.section_index(y)?;
+        if chunk.sections[section].is_uniform(air) {
+            y = (y & !15) + 16;
+            continue;
+        }
+        if palette.get(chunk.get(x & 15, y, z & 15)).1 & ROOF != 0 {
+            return Some(y);
+        }
+        y += 1;
+    }
+    None
+}
+
+/// One chunk's columns as `mode` sees them: the first block with a map colour going down, and
+/// the water over the ground. Colours take the biome tints blended across the quarts around
+/// each block (no seams between biomes), and water shows the ground under it.
 fn scan(
     world: &horizon_client::world::World,
     chunk: &Chunk,
     palette: &Palette,
     air: u32,
-    ceiling: bool,
-    layer: Option<i32>,
+    mode: Scan,
     tints: &mut dyn FnMut(u16, i32, i32) -> m::BiomeTints,
 ) -> m::Tile {
     let min = chunk.min_y();
@@ -190,28 +244,65 @@ fn scan(
         for x in 0..16 {
             let mut y = top;
             let mut wall = false;
-            if let Some(layer) = layer {
-                let (color, flags) = palette.get(chunk.get(x, layer, z));
-                if flags & AIR == 0 && color != 0 && flags & FLUID == 0 {
-                    wall = true;
-                    y = layer;
-                } else {
-                    y = y.min(layer);
+            // The lowest Y looked at, and whether finding nothing there is a drop.
+            let mut lowest = min + 1;
+            let mut deep = false;
+            match mode {
+                Scan::Top => {}
+                Scan::UnderRoof(roof) => {
+                    y = y.min(roof);
+                    while y > min && palette.get(chunk.get(x, y, z)).1 & AIR == 0 {
+                        y -= 1;
+                    }
                 }
-            } else if ceiling {
-                y = y.min(min + 118);
-                while y > min && palette.get(chunk.get(x, y, z)).1 & AIR == 0 {
-                    y -= 1;
+                Scan::UnderGround => {
+                    while y > min && palette.get(chunk.get(x, y, z)).1 & AIR != 0 {
+                        y -= 1;
+                    }
+                    while y > min && palette.get(chunk.get(x, y, z)).1 & AIR == 0 {
+                        y -= 1;
+                    }
+                }
+                Scan::Cave { start, depth, above } => {
+                    lowest = (start - depth).max(min + 1);
+                    deep = true;
+                    // A floor over the start with open space on it (a lava lake or a cave over
+                    // you); the rock you stand under is passed through.
+                    let mut over = None;
+                    let mut k = start + above;
+                    while k > start {
+                        let (c, f) = palette.get(chunk.get(x, k, z));
+                        if c != 0 && f & AIR == 0 && palette.get(chunk.get(x, k + 1, z)).1 & AIR != 0 {
+                            over = Some(k);
+                            break;
+                        }
+                        k -= 1;
+                    }
+                    let (color, flags) = palette.get(chunk.get(x, start, z));
+                    if let Some(k) = over {
+                        y = k;
+                    } else if flags & AIR == 0 && color != 0 && flags & FLUID == 0 {
+                        wall = true;
+                        y = start;
+                    } else {
+                        y = y.min(start);
+                    }
                 }
             }
-            while y > min {
+            if y < lowest && deep {
+                // An empty chunk part over the slice: open down past the depth.
+                hits[(z * 16 + x) as usize] = Hit { color: m::BLACK, y: lowest, kind: m::DEEP, found: true, ..Hit::default() };
+                continue;
+            }
+            while y >= lowest {
                 let id = chunk.get(x, y, z);
                 let (color, flags) = palette.get(id);
                 if color == 0 {
                     y -= 1;
                     continue;
                 }
-                let mut hit = Hit { id, color, y, wall, found: true, ..Hit::default() };
+                let kind = if wall { m::WALL } else { m::FLOOR };
+                let mut hit = Hit { id, color, y, kind, found: true, ..Hit::default() };
                 if flags & FLUID == 1 {
                     let mut below = y - 1;
                     while below > min {
@@ -228,6 +319,9 @@ fn scan(
                 }
                 hits[(z * 16 + x) as usize] = hit;
                 break;
+            }
+            if deep && !hits[(z * 16 + x) as usize].found {
+                hits[(z * 16 + x) as usize] = Hit { color: m::BLACK, y: lowest, kind: m::DEEP, found: true, ..Hit::default() };
             }
         }
     }
@@ -261,6 +355,12 @@ fn scan(
             if !h.found {
                 continue;
             }
+            if h.kind == m::DEEP {
+                tile.color[i] = h.color;
+                tile.height[i] = h.y.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
+                tile.kind[i] = m::DEEP;
+                continue;
+            }
             let t = m::blend_tints(&grid, x, z);
             let mut rgb = colour(h.id, &t).unwrap_or(0);
             if let Some((gid, gc)) = h.ground
@@ -269,7 +369,7 @@ fn scan(
                 let ground = colour(gid, &t).unwrap_or_else(|| map_rgb(gc));
                 rgb = m::water_over(ground, rgb, h.depth).max(1);
             }
-            if h.wall {
+            if h.kind == m::WALL {
                 // Walls cut at the layer: darker, so the floor stands out.
                 let base = if rgb != 0 { rgb } else { map_rgb(h.color) };
                 rgb = m::tinted(base, 0x707070).max(1);
@@ -278,6 +378,7 @@ fn scan(
             tile.rgb[i] = rgb;
             tile.height[i] = h.y.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
             tile.depth[i] = h.depth;
+            tile.kind[i] = h.kind;
         }
     }
     tile
@@ -297,33 +398,14 @@ struct Explored {
     near: (Option<Instant>, u64),
     saved: Instant,
     loading: Option<Receiver<Vec<((i32, i32), m::Tile)>>>,
+    /// Saved cave layers by band (None: the full cave map), under `<dim>/caves/`.
+    caves: HashMap<Option<i32>, Saved>,
 }
 
 impl Explored {
     fn open(world: &Path, dim: &'static str) -> Self {
         let dir = world.join(m::folder_name(dim));
-        let (tx, rx) = mpsc::channel();
-        let read = dir.clone();
-        // The saved regions load off the frame; the session's own tiles stay over them.
-        let _ = std::thread::Builder::new()
-            .name("lumos-map-load".into())
-            .spawn(move || {
-                let mut all = Vec::new();
-                if let Ok(entries) = std::fs::read_dir(&read) {
-                    for e in entries.flatten() {
-                        let name = e.file_name();
-                        let Some(region) = name.to_str().and_then(m::region_from_file) else {
-                            continue;
-                        };
-                        if let Ok(bytes) = std::fs::read(e.path())
-                            && let Some(tiles) = m::decode_region(region, &bytes)
-                        {
-                            all.extend(tiles);
-                        }
-                    }
-                }
-                let _ = tx.send(all);
-            });
+        let loading = Some(load_regions(dir.clone(), None));
         Self {
             dim,
             dir,
@@ -333,43 +415,115 @@ impl Explored {
             refilled: None,
             near: (None, 0),
             saved: Instant::now(),
-            loading: Some(rx),
+            loading,
+            caves: HashMap::new(),
         }
     }
 
-    /// Writes the regions changed since the last save, off the frame.
+    /// Writes the regions changed since the last save (its cave layers' too), off the frame.
     fn save(&mut self) {
         self.saved = Instant::now();
-        if self.store.dirty.is_empty() {
-            return;
+        write_regions(&mut self.store, &self.dir);
+        for c in self.caves.values_mut() {
+            write_regions(&mut c.store, &c.dir);
         }
-        let regions: Vec<(i32, i32)> = self.store.dirty.drain().collect();
-        let files: Vec<(PathBuf, Vec<u8>)> = regions
-            .into_iter()
-            .map(|r| (self.dir.join(m::region_file(r)), self.store.encode_region(r)))
-            .collect();
-        let dir = self.dir.clone();
-        let _ = std::thread::Builder::new()
-            .name("lumos-map-save".into())
-            .spawn(move || {
-                if std::fs::create_dir_all(&dir).is_err() {
-                    return;
-                }
-                for (path, bytes) in files {
-                    let tmp = path.with_extension("tmp");
-                    if std::fs::write(&tmp, &bytes).is_ok() {
-                        let _ = std::fs::rename(&tmp, &path);
-                    }
-                }
-            });
+    }
+
+    /// The saved cave layer of `band` (None: the full cave map), its regions loading off the
+    /// frame the first time it is asked for.
+    fn cave(&mut self, band: Option<i32>) -> &mut Saved {
+        let dir = self.dir.join(m::cave_folder(band));
+        self.caves.entry(band).or_insert_with(|| Saved {
+            store: m::Store { band, ..m::Store::default() },
+            loading: Some(load_regions(dir.clone(), band)),
+            dir,
+        })
+    }
+
+    /// Takes in regions that finished loading.
+    fn follow_loading(&mut self) {
+        if let Some(rx) = &self.loading
+            && let Ok(tiles) = rx.try_recv()
+        {
+            self.store.merge_loaded(tiles);
+            self.loading = None;
+        }
+        for c in self.caves.values_mut() {
+            if let Some(rx) = &c.loading
+                && let Ok(tiles) = rx.try_recv()
+            {
+                c.store.merge_loaded(tiles);
+                c.loading = None;
+            }
+        }
     }
 }
 
+/// A saved cave layer: a band's tiles (or the full cave map's), kept as the surface's are.
+struct Saved {
+    store: m::Store,
+    dir: PathBuf,
+    loading: Option<Receiver<Vec<((i32, i32), m::Tile)>>>,
+}
+
+/// The region files of `dir` (of cave layer `band`, None for the surface), read off the frame.
+fn load_regions(dir: PathBuf, band: Option<i32>) -> Receiver<Vec<((i32, i32), m::Tile)>> {
+    let (tx, rx) = mpsc::channel();
+    let _ = std::thread::Builder::new()
+        .name("lumos-map-load".into())
+        .spawn(move || {
+            let mut all = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for e in entries.flatten() {
+                    let name = e.file_name();
+                    let Some(region) = name.to_str().and_then(m::region_from_file) else {
+                        continue;
+                    };
+                    if let Ok(bytes) = std::fs::read(e.path())
+                        && m::region_band(&bytes) == band
+                        && let Some(tiles) = m::decode_region(region, &bytes)
+                    {
+                        all.extend(tiles);
+                    }
+                }
+            }
+            let _ = tx.send(all);
+        });
+    rx
+}
+
+/// Writes `store`'s regions changed since the last save into `dir`, off the frame.
+fn write_regions(store: &mut m::Store, dir: &Path) {
+    if store.dirty.is_empty() {
+        return;
+    }
+    let regions: Vec<(i32, i32)> = store.dirty.drain().collect();
+    let files: Vec<(PathBuf, Vec<u8>)> = regions
+        .into_iter()
+        .map(|r| (dir.join(m::region_file(r)), store.encode_region(r)))
+        .collect();
+    let dir = dir.to_owned();
+    let _ = std::thread::Builder::new()
+        .name("lumos-map-save".into())
+        .spawn(move || {
+            if std::fs::create_dir_all(&dir).is_err() {
+                return;
+            }
+            for (path, bytes) in files {
+                let tmp = path.with_extension("tmp");
+                if std::fs::write(&tmp, &bytes).is_ok() {
+                    let _ = std::fs::rename(&tmp, &path);
+                }
+            }
+        });
+}
+
 /// Tiles of one layer (under the player's head, or the world map's slice), scanned live from the
-/// loaded chunks and not kept.
+/// loaded chunks; a cave slice's are also kept in its band's saved layer.
 #[derive(Default)]
 struct Layer {
-    y: i32,
+    /// What it was scanned as (None: nothing yet).
+    mode: Option<Scan>,
     tiles: HashMap<(i32, i32), (m::Tile, u64)>,
     queue: VecDeque<(i32, i32)>,
     revision: u64,
@@ -379,8 +533,24 @@ struct Layer {
 }
 
 impl Layer {
+    /// A cave slice's depth shading (none for a roof's top).
+    fn shade(&self) -> Option<m::CaveShade> {
+        match self.mode? {
+            Scan::Cave { start, depth, .. } => Some(m::CaveShade { start, depth }),
+            _ => None,
+        }
+    }
+
     fn column(&self, x: i32, z: i32) -> Option<m::Col> {
         self.tiles.get(&(x >> 4, z >> 4))?.0.col(x, z)
+    }
+
+    /// A cave slice's band (its saved layer).
+    fn band(&self) -> Option<i32> {
+        match self.mode? {
+            Scan::Cave { start, .. } => Some(m::band_of(start)),
+            _ => None,
+        }
     }
 }
 
@@ -409,6 +579,19 @@ struct State {
     cells_gen: u64,
     /// The cave layer under the player's head.
     cave: Option<Layer>,
+    /// The roof test's switch, when it last looked, and the clock its ticks count on.
+    cave_switch: m::CaveSwitch,
+    roof_checked: Option<Instant>,
+    clock: Option<Instant>,
+    /// What the minimap's cave view shows this frame (None: the surface).
+    cave_view: Option<m::CaveView>,
+    /// The world map's cave map type per dimension (`<world>/cave-maps.txt`).
+    cave_types: m::CaveTypes,
+    /// The world map's layered view keeps its top Y at the player's head.
+    slice_follow: bool,
+    /// The dimension the world map shows and whether it is roofed (for its tool labels).
+    map_dim: String,
+    map_roofed: bool,
     /// Entity faces in the slot's icon row.
     icons: Icons,
     /// The page shown on the mod's page in Options > Mods.
@@ -625,6 +808,7 @@ fn open_world(s: &mut State, dir: PathBuf, dim: &'static str) {
             s.book.merge_global(m::Book::from_text(&t));
         }
         s.screen.selected.clear();
+        s.cave_types = m::CaveTypes::from_text(&std::fs::read_to_string(dir.join("cave-maps.txt")).unwrap_or_default());
         s.world_dir = Some(dir.clone());
     }
     s.explored = Some(Explored::open(&dir, dim));
@@ -681,16 +865,12 @@ fn explore(game: &Game<'_>, s: &mut State, budget: Duration) {
     let Some(p) = player_pos(game) else {
         return;
     };
+    let full = roof_top(game).is_none() && cave_type(game, s) == m::CaveType::Full;
     let State { explored, palette, tints, .. } = s;
     let (Some(e), Some(palette)) = (explored.as_mut(), palette.as_ref()) else {
         return;
     };
-    if let Some(rx) = &e.loading
-        && let Ok(tiles) = rx.try_recv()
-    {
-        e.store.merge_loaded(tiles);
-        e.loading = None;
-    }
+    e.follow_loading();
     let world = &game.world;
     let centre = ((p[0].floor() as i32) >> 4, (p[2].floor() as i32) >> 4);
     if e.queue.is_empty() && e.refilled.is_none_or(|t| t.elapsed() >= REFILL) {
@@ -717,7 +897,7 @@ fn explore(game: &Game<'_>, s: &mut State, budget: Duration) {
         e.queue.extend(fresh);
     }
     let air = world.air.0;
-    let ceiling = world.shape.has_ceiling;
+    let mode = roof_top(game).map_or(Scan::Top, Scan::UnderRoof);
     let mut tint = |b: u16, x: i32, z: i32| tints_of(game, tints, b, x, z);
     while started.elapsed() < budget {
         let Some(k) = e.queue.pop_front() else {
@@ -726,7 +906,12 @@ fn explore(game: &Game<'_>, s: &mut State, budget: Duration) {
         let Some(chunk) = world.chunks.get(&k) else {
             continue;
         };
-        e.store.put(k, scan(world, chunk, palette, air, ceiling, None, &mut tint));
+        e.store.put(k, scan(world, chunk, palette, air, mode, &mut tint));
+        if full {
+            // The full cave map, chosen for this dimension: kept as the surface is.
+            let tile = scan(world, chunk, palette, air, Scan::UnderGround, &mut tint);
+            e.cave(None).store.put(k, tile);
+        }
         e.seen.insert(k);
     }
     if e.saved.elapsed() >= SAVE_EVERY {
@@ -734,47 +919,140 @@ fn explore(game: &Game<'_>, s: &mut State, budget: Duration) {
     }
 }
 
-/// Whether the minimap shows the floor under the player's head: in a level with a ceiling, or
-/// where no sky light reaches the head.
-fn cave_height(game: &Game<'_>, settings: &m::Settings) -> Option<i32> {
-    if settings.cave == 2 {
-        return None;
-    }
-    let p = game.player.as_ref()?;
-    let head = (p.position.y + f64::from(p.dimensions.eye_height)).floor() as i32;
-    if settings.cave == 1 {
-        return Some(head);
-    }
-    let (bx, bz) = (p.position.x.floor() as i32, p.position.z.floor() as i32);
-    let covered = game.world.light(bx, head, bz) >> 4 == 0;
-    (game.world.shape.has_ceiling || covered).then_some(head)
+/// A roofed dimension's roof: the top block of its logical height (the Nether's bedrock roof),
+/// None in a dimension with open sky.
+fn roof_top(game: &Game<'_>) -> Option<i32> {
+    let shape = game.world.shape;
+    shape.has_ceiling.then(|| shape.min_y + shape.logical_height - 1)
 }
 
-/// Keeps a layer at `y` scanned within `radius` chunks of `centre`, within `budget`: the cave
-/// layer, or the world map's slice.
+/// The world map's cave map type for the dimension played.
+fn cave_type(game: &Game<'_>, s: &State) -> m::CaveType {
+    s.cave_types.get(game.dim.id(), roof_top(game).is_some())
+}
+
+/// Chooses the world map's cave map type for the dimension played, saved with the world; the
+/// view follows (a layered one starts at the head, a full one maps the loaded chunks again).
+fn set_cave_type(game: &Game<'_>, s: &mut State, t: m::CaveType) {
+    s.cave_types.set(game.dim.id(), t);
+    if let Some(dir) = &s.world_dir {
+        let _ = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(dir.join("cave-maps.txt"), s.cave_types.to_text()));
+    }
+    match t {
+        m::CaveType::Layered => {
+            if s.screen.slice.is_none() {
+                s.screen.slice = head_block(game);
+            }
+        }
+        _ => s.screen.slice = None,
+    }
+    if t == m::CaveType::Full
+        && roof_top(game).is_none()
+        && let Some(e) = s.explored.as_mut()
+    {
+        e.cave(None);
+        e.seen.clear();
+        e.queue.clear();
+        e.refilled = None;
+    }
+}
+
+/// What the world map draws from: the surface (0), its live slice over the band's saved layer
+/// (2: a layered view, or a roof's top) or the full cave map (3; a roofed dimension's surface
+/// map is its full one).
+fn map_source(game: &Game<'_>, s: &State) -> u8 {
+    let roofed = roof_top(game).is_some();
+    match cave_type(game, s) {
+        m::CaveType::Layered if s.screen.slice.is_some() => 2,
+        m::CaveType::Off if roofed => 2,
+        m::CaveType::Full if !roofed => 3,
+        _ => 0,
+    }
+}
+
+/// The column the world map shows at `x, z`.
+fn map_column(s: &State, source: u8, x: i32, z: i32) -> Option<m::Col> {
+    match source {
+        2 => s.slice.as_ref().and_then(|l| {
+            l.column(x, z).or_else(|| saved(s, Some(l.band()?))?.store.column(x, z))
+        }),
+        3 => saved(s, None)?.store.column(x, z),
+        _ => s.explored.as_ref()?.store.column(x, z),
+    }
+}
+
+/// The world map's title for what it shows.
+fn map_layer_name(game: &Game<'_>, s: &State, settings: &m::Settings) -> String {
+    match (map_source(game, s), s.screen.slice) {
+        (2, Some(y)) => format!("Caves Y {y}..{}", y - settings.depth_blocks()),
+        (2, None) => "Roof top".into(),
+        (3, _) => "Caves (full)".into(),
+        _ if roof_top(game).is_some() => "Under the roof".into(),
+        _ => "Surface".into(),
+    }
+}
+
+/// The block the player's head is in.
+fn head_block(game: &Game<'_>) -> Option<i32> {
+    let p = game.player.as_ref()?;
+    Some((p.position.y + f64::from(p.dimensions.eye_height)).floor() as i32)
+}
+
+/// The roof test, a few times a second: a roof over every column of the square round the
+/// player (Auto only; a roofed dimension is always under its roof), fed to the switch.
+fn follow_roof(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
+    if settings.cave != 0 || s.roof_checked.is_some_and(|t| t.elapsed() < ROOF_EVERY) {
+        return;
+    }
+    s.roof_checked = Some(Instant::now());
+    let (Some(p), Some(head), Some(palette)) = (player_pos(game), head_block(game), s.palette.as_ref()) else {
+        return;
+    };
+    let roofed = roof_top(game).is_some() || {
+        let r = settings.roof_side() / 2;
+        let (bx, bz) = (p[0].floor() as i32, p[2].floor() as i32);
+        let mut columns = Vec::with_capacity(25);
+        'all: for dz in -r..=r {
+            for dx in -r..=r {
+                let roof = roof_over(&game.world, palette, bx + dx, head, bz + dz);
+                columns.push(roof);
+                if roof.is_none() {
+                    break 'all;
+                }
+            }
+        }
+        m::roofed(&columns)
+    };
+    let tick = (s.clock.get_or_insert_with(Instant::now).elapsed().as_millis() / 50) as u64;
+    s.cave_switch.step(roofed, tick);
+}
+
+/// Keeps a layer scanned as `mode` within `radius` chunks of `centre`, within `budget`: the
+/// cave layer, or the world map's slice.
 #[allow(clippy::too_many_arguments)]
 fn follow_layer(
     game: &Game<'_>,
     s: &mut State,
     slice: bool,
-    y: i32,
+    mode: Scan,
     centre: (i32, i32),
     radius: i32,
     budget: Duration,
 ) {
     let started = Instant::now();
-    let State { cave, slice: sliced, palette, tints, .. } = s;
+    let State { cave, slice: sliced, palette, tints, explored, .. } = s;
     let Some(palette) = palette.as_ref() else {
         return;
     };
     let layer = if slice { sliced } else { cave }.get_or_insert_with(Layer::default);
     let world = &game.world;
-    // A new height (by more than a step) or changed blocks: scanned again, nearest first.
-    if (layer.y - y).abs() >= 2 || layer.tiles.is_empty() {
-        if !layer.tiles.is_empty() || layer.y != y {
+    // Another slice (a new height by more than a step) or changed blocks: scanned again,
+    // nearest first.
+    if layer.mode.is_none_or(|m| !m.same(mode)) || layer.tiles.is_empty() {
+        if !layer.tiles.is_empty() || layer.mode != Some(mode) {
             layer.epoch += 1;
         }
-        layer.y = y;
+        layer.mode = Some(mode);
         layer.queue.clear();
         layer.tiles.retain(|_, _| false);
         layer.changed.clear();
@@ -794,7 +1072,12 @@ fn follow_layer(
         layer.queue.extend(keys);
         layer.tiles.retain(|k, _| (k.0 - centre.0).abs() <= radius + 2 && (k.1 - centre.1).abs() <= radius + 2);
     }
+    // The band's saved layer, loading now if it wasn't.
+    if let (Some(band), Some(e)) = (layer.band(), explored.as_mut()) {
+        e.cave(Some(band));
+    }
     let air = world.air.0;
+    let mode = layer.mode.unwrap_or(mode);
     let mut tint = |b: u16, x: i32, z: i32| tints_of(game, tints, b, x, z);
     while started.elapsed() < budget {
         let Some(k) = layer.queue.pop_front() else {
@@ -803,7 +1086,10 @@ fn follow_layer(
         let Some(chunk) = world.chunks.get(&k) else {
             continue;
         };
-        let tile = scan(world, chunk, palette, air, false, Some(layer.y), &mut tint);
+        let tile = scan(world, chunk, palette, air, mode, &mut tint);
+        if let (Some(band), Some(e)) = (layer.band(), explored.as_mut()) {
+            e.cave(Some(band)).store.put(k, tile.clone());
+        }
         layer.tiles.insert(k, (tile, world.revision));
         layer.revision += 1;
         layer.changed.push(k);
@@ -823,25 +1109,40 @@ fn look(settings: &m::Settings) -> m::Look {
     m::Look {
         textured: settings.textured,
         shading: settings.shading,
+        legible: settings.cave_legible,
     }
 }
 
 /// The world map follows the player (when set) and keeps its layer scanned.
-fn follow_map(game: &Game<'_>, s: &mut State) {
+fn follow_map(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
+    if s.map_dim != game.dim.id() {
+        s.map_dim = game.dim.id().to_owned();
+    }
+    s.map_roofed = roof_top(game).is_some();
     if s.screen.follow
         && let Some(p) = player_pos(game)
     {
         s.screen.view.x = p[0];
         s.screen.view.z = p[2];
     }
-    if let Some(y) = s.screen.slice {
-        let view = s.screen.view;
-        let centre = ((view.x.floor() as i32) >> 4, (view.z.floor() as i32) >> 4);
-        let radius = game.settings.render_distance.max(2) + 1;
-        follow_layer(game, s, true, y, centre, radius, CAVE_BUDGET * 2);
-    } else {
-        s.slice = None;
+    if s.slice_follow
+        && s.screen.slice.is_some()
+        && let Some(head) = head_block(game)
+    {
+        s.screen.slice = Some(head);
     }
+    let mode = match (map_source(game, s), s.screen.slice) {
+        (2, Some(y)) => Scan::Cave { start: y, depth: settings.depth_blocks(), above: 0 },
+        (2, None) => Scan::Top,
+        _ => {
+            s.slice = None;
+            return;
+        }
+    };
+    let view = s.screen.view;
+    let centre = ((view.x.floor() as i32) >> 4, (view.z.floor() as i32) >> 4);
+    let radius = game.settings.render_distance.max(2) + 1;
+    follow_layer(game, s, true, mode, centre, radius, CAVE_BUDGET * 2);
 }
 
 /// The explored map around the world map's centre, a block a pixel (at most 2048 across), saved
@@ -892,32 +1193,46 @@ fn export_png(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
 }
 
 /// The minimap's blocks per GUI pixel.
-fn mini_bpp(settings: &m::Settings) -> f32 {
-    m::ZOOMS[settings.zoom.min(m::ZOOMS.len() - 1)]
+fn mini_bpp(settings: &m::Settings, cave: bool) -> f32 {
+    m::ZOOMS[settings.zoom_now(cave)]
 }
 
 /// Underground: the cave layer under the head, kept scanned around the player.
 fn follow_cave(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
-    let Some(p) = player_pos(game) else {
+    let (Some(p), Some(head)) = (player_pos(game), head_block(game)) else {
         return;
     };
-    if let Some(y) = cave_height(game, settings) {
-        let size = m::SIZES[settings.size];
-        let reach = size / 2.0 * mini_bpp(settings) * std::f32::consts::SQRT_2;
-        let radius = ((reach / 16.0).ceil() as i32 + 1).min(game.settings.render_distance.max(2));
-        let centre = ((p[0].floor() as i32) >> 4, (p[2].floor() as i32) >> 4);
-        follow_layer(game, s, false, y, centre, radius, CAVE_BUDGET);
-    } else {
-        s.cave = None;
-    }
+    follow_roof(game, s, settings);
+    s.cave_view = m::cave_view(settings, head, s.cave_switch.on, roof_top(game));
+    let mode = match s.cave_view {
+        Some(m::CaveView::Slice { start, depth, above }) => Scan::Cave { start, depth, above },
+        Some(m::CaveView::RoofTop) => Scan::Top,
+        None => {
+            s.cave = None;
+            return;
+        }
+    };
+    let size = m::SIZES[settings.size];
+    let reach = size / 2.0 * mini_bpp(settings, true) * std::f32::consts::SQRT_2;
+    let radius = ((reach / 16.0).ceil() as i32 + 1).min(game.settings.render_distance.max(2));
+    let centre = ((p[0].floor() as i32) >> 4, (p[2].floor() as i32) >> 4);
+    follow_layer(game, s, false, mode, centre, radius, CAVE_BUDGET);
 }
 
-/// A source's epoch for its cells: they are drawn again when it changes.
+/// A saved cave layer of the dimension shown (`band` None: the full cave map).
+fn saved(s: &State, band: Option<i32>) -> Option<&Saved> {
+    s.explored.as_ref()?.caves.get(&band)
+}
+
+/// A source's epoch for its cells: they are drawn again when it changes (a live layer's, with
+/// its band's saved layer under it).
 fn epoch_of(s: &State, source: u8) -> u64 {
+    let layer = |l: &Layer| l.epoch + l.band().and_then(|b| saved(s, Some(b))).map_or(0, |c| c.store.epoch);
     let own = match source {
         0 => s.explored.as_ref().map_or(0, |e| e.store.epoch),
-        1 => s.cave.as_ref().map_or(0, |l| l.epoch),
-        _ => s.slice.as_ref().map_or(0, |l| l.epoch),
+        1 => s.cave.as_ref().map_or(0, layer),
+        2 => s.slice.as_ref().map_or(0, layer),
+        _ => saved(s, None).map_or(0, |c| c.store.epoch),
     };
     s.cells_gen << 32 | own
 }
@@ -941,6 +1256,16 @@ fn draw_wanted_cells(game: &mut Game<'_>, s: &mut State, settings: &m::Settings,
         for k in std::mem::take(&mut e.store.changed) {
             s.cells.chunk_changed(0, k);
         }
+        for (band, c) in e.caves.iter_mut() {
+            for k in std::mem::take(&mut c.store.changed) {
+                if band.is_some() {
+                    s.cells.chunk_changed(1, k);
+                    s.cells.chunk_changed(2, k);
+                } else {
+                    s.cells.chunk_changed(3, k);
+                }
+            }
+        }
     }
     if let Some(l) = s.cave.as_mut() {
         for k in std::mem::take(&mut l.changed) {
@@ -961,15 +1286,20 @@ fn draw_wanted_cells(game: &mut Game<'_>, s: &mut State, settings: &m::Settings,
         }
         let empty = match key.source {
             0 => match s.explored.as_ref() {
-                Some(e) => m::compose_cell(|x, z| e.store.column(x, z), &MAP_COLORS, look, key, &mut px),
+                Some(e) => m::compose_cell(|x, z| e.store.column(x, z), &MAP_COLORS, look, None, key, &mut px),
                 None => continue,
             },
-            1 => match s.cave.as_ref() {
-                Some(l) => m::compose_cell(|x, z| l.column(x, z), &MAP_COLORS, look, key, &mut px),
+            1 | 2 => match if key.source == 1 { s.cave.as_ref() } else { s.slice.as_ref() } {
+                Some(l) => {
+                    // Live tiles over the band's saved ones (caves explored before, unloaded).
+                    let kept = l.band().and_then(|b| saved(s, Some(b)));
+                    let column = |x, z| l.column(x, z).or_else(|| kept.and_then(|c| c.store.column(x, z)));
+                    m::compose_cell(column, &MAP_COLORS, look, l.shade(), key, &mut px)
+                }
                 None => continue,
             },
-            _ => match s.slice.as_ref() {
-                Some(l) => m::compose_cell(|x, z| l.column(x, z), &MAP_COLORS, look, key, &mut px),
+            _ => match saved(s, None) {
+                Some(c) => m::compose_cell(|x, z| c.store.column(x, z), &MAP_COLORS, look, None, key, &mut px),
                 None => continue,
             },
         };
@@ -1032,7 +1362,7 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
         s.was_dead = dead;
         if open {
             if s.screen.page == m::Page::Map {
-                follow_map(game, s);
+                follow_map(game, s, &settings);
             }
         } else if settings.minimap && !game.ui.hide_gui {
             follow_cave(game, s, &settings);
@@ -1053,6 +1383,8 @@ pub(super) fn on_level_unload(game: &mut Game<'_>) {
             e.save();
         }
         s.cave = None;
+        s.cave_view = None;
+        s.cave_switch = m::CaveSwitch::default();
         s.cells.clear();
         s.cells_gen += 1;
         s.world_asked = None;
@@ -1163,6 +1495,8 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
                 s.screen.press = None;
                 s.screen.follow = set.map_follow;
                 s.screen.grid = set.map_grid;
+                // A layered cave map opens at your head.
+                s.screen.slice = (cave_type(game, s) == m::CaveType::Layered).then(|| head_block(game)).flatten();
                 let (lo, hi) = set.map_zooms();
                 s.screen.view.zoom = s.screen.view.zoom.clamp(lo, hi);
             });
@@ -1221,7 +1555,18 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
             s.zoom_step(false).then(|| format!("Minimap zoom: {} block(s) a pixel", m::ZOOMS[s.zoom]))
         } else if keys::pressed(game, keys::CAVE, key, true) {
             s.cave = (s.cave + 1) % m::CAVE_MODES.len();
-            Some(format!("Cave view: {}", m::CAVE_MODES[s.cave]))
+            // Manual starts where you are.
+            if s.cave == 1 {
+                s.cave_start = head_block(game);
+            }
+            Some(match (s.cave, s.cave_start) {
+                (1, Some(y)) => format!("Cave view: Manual from Y {y}"),
+                _ => format!("Cave view: {}", m::CAVE_MODES[s.cave]),
+            })
+        } else if keys::pressed(game, keys::CAVE_HERE, key, true) {
+            s.cave = 1;
+            s.cave_start = head_block(game);
+            s.cave_start.map(|y| format!("Cave view: Manual from Y {y}"))
         } else if keys::pressed(game, keys::WAYPOINTS, key, true) {
             s.waypoints = !s.waypoints;
             Some(format!("Waypoints: {}", if s.waypoints { "Shown" } else { "Hidden" }))
@@ -1287,7 +1632,7 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
         return;
     }
     let size = m::SIZES[s.size];
-    let bpp = mini_bpp(&s);
+    let bpp = mini_bpp(&s, with(|st| st.cave_view.is_some()));
     let block = block_of(p);
     let mut lines: Vec<String> = Vec::new();
     for letter in s.info_letters() {
@@ -1674,7 +2019,7 @@ fn draw_minimap_terrain(
     let outline = m::outline(c, half, round);
     let bg = m::BACKGROUNDS[settings.background.min(m::BACKGROUNDS.len() - 1)].1;
     fill_polygon(game, batch, &outline, shade(bg >> 24) | (bg & 0xFF_FFFF));
-    let bpp = f64::from(mini_bpp(settings));
+    let bpp = f64::from(mini_bpp(settings, with(|st| st.cave_view.is_some())));
     let reach = f64::from(half) * bpp * if settings.rotate { std::f64::consts::SQRT_2 } else { 1.0 } + 1.0;
     let area = [p[0] - reach, p[2] - reach, p[0] + reach, p[2] + reach];
     // A texel no smaller than about a GUI pixel, and few enough cells.
@@ -1689,7 +2034,7 @@ fn draw_minimap_terrain(
         [c[0] + u, c[1] + v]
     };
     with(|st| {
-        let source = if st.cave.is_some() && cave_height(game, settings).is_some() { 1 } else { 0 };
+        let source = if st.cave.is_some() && st.cave_view.is_some() { 1 } else { 0 };
         let shape = if round { m::Shape::Circle(c, half) } else { m::Shape::Rect([c[0] - half, c[1] - half, size, size]) };
         draw_cells(game, st, batch, source, lod, area, &to_screen, &shape, alpha);
     });
@@ -1878,6 +2223,8 @@ enum Tool {
     Slime,
     LayerDown,
     LayerUp,
+    Caves,
+    FollowY,
     Filter,
     Png,
     World,
@@ -1904,6 +2251,10 @@ fn tools(w: f32, mp: bool, slime: bool) -> Vec<(Tool, [f32; 4])> {
     out.push((Tool::LayerDown, [x, y, half, 16.0]));
     out.push((Tool::LayerUp, [x + half + 2.0, y, half, 16.0]));
     y += 18.0;
+    out.push((Tool::Caves, [x, y, full, 16.0]));
+    y += 18.0;
+    out.push((Tool::FollowY, [x, y, full, 16.0]));
+    y += 18.0;
     out.push((Tool::Filter, [x, y, full, 16.0]));
     y += 18.0;
     out.push((Tool::Png, [x, y, full, 16.0]));
@@ -1927,6 +2278,8 @@ fn tool_label(t: Tool, s: &State) -> String {
         Tool::Slime => format!("Slime {}", on(s.screen.slime)),
         Tool::LayerDown => "Down".into(),
         Tool::LayerUp => "Up".into(),
+        Tool::Caves => format!("Caves: {}", m::CAVE_TYPES[s.cave_types.get(&s.map_dim, s.map_roofed).index()]),
+        Tool::FollowY => format!("Y follows me {}", on(s.slice_follow)),
         Tool::Filter => format!("Show: {}", m::MAP_FILTERS[s.screen.filter]),
         Tool::Png => "Save as PNG".into(),
         Tool::World => s
@@ -1934,6 +2287,25 @@ fn tool_label(t: Tool, s: &State) -> String {
             .as_ref()
             .map_or_else(String::new, |(_, w)| format!("Map: {}", w.current_name())),
         Tool::NewWorld => "New map world".into(),
+    }
+}
+
+/// The world map's layer a step down or up: stepping down from the surface or the full map
+/// starts the layered view at the feet (kept as this dimension's cave map), stepping up past
+/// the top leaves it.
+fn step_layer(game: &Game<'_>, s: &mut State, feet: i32, top: i32, down: bool) {
+    let was = s.screen.slice;
+    match layer_step(was, feet, down, top) {
+        Some(y) => {
+            s.screen.slice = Some(y);
+            if cave_type(game, s) != m::CaveType::Layered {
+                set_cave_type(game, s, m::CaveType::Layered);
+            }
+            // Moved by hand: no longer following the head.
+            s.slice_follow &= was.is_none();
+        }
+        None if was.is_some() => set_cave_type(game, s, m::CaveType::Off),
+        None => {}
     }
 }
 
@@ -2225,12 +2597,12 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
             let span = f64::from(16i32 << lod);
             ((bw / span).ceil() as usize + 1) * ((bh / span).ceil() as usize + 1)
         });
-        let source = if s.slice.is_some() { 2 } else { 0 };
+        let source = map_source(game, s);
         let to_screen = |x: f64, z: f64| view.screen_of(rect, x, z);
         draw_cells(game, s, batch, source, lod, [x0, z0, x1, z1], &to_screen, &m::Shape::Rect(rect), 255);
     }
     // Explored ground outside the chunks loaded now, dimmed (the surface view only).
-    if settings.map_shade && s.slice.is_none()
+    if settings.map_shade && map_source(game, s) == 0
         && let Some(p) = player_pos(game)
     {
         let rd = f64::from(game.settings.render_distance.max(2));
@@ -2316,28 +2688,25 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
     game.native_fill(batch, [0.0, 0.0, w, TOP], 0xE000_0000);
     game.native_fill(batch, [0.0, h - BOTTOM, w, BOTTOM], 0xE000_0000);
     game.native_fill(batch, [w - TOOL_W, TOP, TOOL_W, h - TOP - BOTTOM], 0xE018_181C);
-    let layer = s.screen.slice.map_or_else(|| "Surface".to_owned(), |y| format!("Y {y}"));
+    let layer = map_layer_name(game, s, settings);
     let title = format!("World Map - {} - {layer}", m::pretty_id(dim));
     game.native_text(batch, &title, [6.0, 7.0], 0xFFFFFF, true);
     let slime = game.native_world_seed().is_some();
     for (tool, r) in tools(w, s.subworlds.is_some(), slime) {
         if tool == Tool::LayerDown {
-            game.native_text(batch, &format!("Layer: {layer}"), [r[0], r[1] - 10.0], 0xC0C0C0, false);
+            game.native_text(batch, &layer, [r[0], r[1] - 10.0], 0xC0C0C0, false);
         }
         button(game, batch, r, &tool_label(tool, s), mouse);
     }
-    let hint = "Drag or WASD to move, wheel to zoom, [ ] layers, click to add a waypoint";
+    let hint = "Drag or WASD to move, wheel to zoom, [ ] cave layers, click to add a waypoint";
     let bottom = match &s.notice {
         Some((text, until)) if Instant::now() < *until => text.clone(),
         _ if inside(rect, mouse) && settings.map_cursor => {
             let (x, z) = view.world_at(rect, mouse);
             let (bx, bz) = (x.floor() as i32, z.floor() as i32);
-            let y = match (&s.slice, &s.explored) {
-                (Some(l), _) => l.column(bx, bz),
-                (None, Some(e)) => e.store.column(bx, bz),
-                _ => None,
-            }
-            .map_or_else(String::new, |c| format!(" Y {}", c.height));
+            let y = map_column(s, map_source(game, s), bx, bz)
+                .filter(|c| c.kind == m::FLOOR)
+                .map_or_else(String::new, |c| format!(" Y {}", c.height));
             let other = match dim {
                 m::OVERWORLD => format!("   Nether {} {}", bx.div_euclid(8), bz.div_euclid(8)),
                 m::NETHER => format!("   Overworld {} {}", bx * 8, bz * 8),
@@ -2552,8 +2921,9 @@ fn draw_dialog(game: &Game<'_>, batch: &mut HudBatch, question: &str, field: Opt
 fn settings_layout(w: f32, h: f32, n: usize) -> (Vec<[f32; 4]>, Vec<[f32; 4]>, [f32; 4]) {
     let pw = 420.0f32.min(w - 12.0);
     let x = (w - pw) / 2.0;
-    let tw = (pw - 5.0 * 2.0) / 6.0;
-    let tabs = (0..6).map(|i| [x + i as f32 * (tw + 2.0), 30.0, tw, 18.0]).collect();
+    let pages = m::PAGES.len();
+    let tw = (pw - (pages - 1) as f32 * 2.0) / pages as f32;
+    let tabs = (0..pages).map(|i| [x + i as f32 * (tw + 2.0), 30.0, tw, 18.0]).collect();
     let col = (pw - 4.0) / 2.0;
     let rows = (0..n)
         .map(|i| [x + (i % 2) as f32 * (col + 4.0), 56.0 + (i / 2) as f32 * 22.0, col, 20.0])
@@ -2580,7 +2950,7 @@ fn draw_settings(game: &Game<'_>, batch: &mut HudBatch, settings: &m::Settings, 
     for (r, (_, label)) in rows.iter().zip(&entries) {
         button(game, batch, *r, label, mouse);
     }
-    if tab == 5 {
+    if tab == m::KEYS_PAGE {
         let x = tabs[0][0];
         let mut y = 58.0;
         game.native_text(batch, "Rebind these in Options > Controls > Key Binds, or on this mod's", [x, y], 0xC0C0C0, false);
@@ -2683,8 +3053,19 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
                     Tool::Follow => s.screen.follow = !s.screen.follow,
                     Tool::Grid => s.screen.grid = !s.screen.grid,
                     Tool::Slime => s.screen.slime = !s.screen.slime,
-                    Tool::LayerDown => s.screen.slice = layer_step(s.screen.slice, feet, true, top),
-                    Tool::LayerUp => s.screen.slice = layer_step(s.screen.slice, feet, false, top),
+                    Tool::LayerDown => step_layer(game, s, feet, top, true),
+                    Tool::LayerUp => step_layer(game, s, feet, top, false),
+                    Tool::Caves => {
+                        let next = m::CaveType::from_index(cave_type(game, s).index() + 1);
+                        set_cave_type(game, s, next);
+                        notice(s, format!("Cave map here: {}", m::CAVE_TYPES[next.index()]));
+                    }
+                    Tool::FollowY => {
+                        s.slice_follow = !s.slice_follow;
+                        if s.slice_follow && cave_type(game, s) != m::CaveType::Layered {
+                            set_cave_type(game, s, m::CaveType::Layered);
+                        }
+                    }
                     Tool::Filter => s.screen.filter = (s.screen.filter + 1) % m::MAP_FILTERS.len(),
                     Tool::Png => s.pending_export = true,
                     Tool::World => switch_subworld(game, s, false),
@@ -3006,11 +3387,7 @@ pub(super) fn on_release(game: &Game<'_>, screen: &NativeScreenView<'_>, button:
         let index = hit.unwrap_or_else(|| {
             let (x, z) = view.world_at(rect, mouse);
             let (x, z) = (x.floor() as i32, z.floor() as i32);
-            let column = match (&s.slice, &s.explored) {
-                (Some(l), _) => l.column(x, z),
-                (None, Some(e)) => e.store.column(x, z),
-                _ => None,
-            };
+            let column = map_column(s, map_source(game, s), x, z).filter(|c| c.kind == m::FLOOR);
             let y = column.map_or(fallback_y, |c| i32::from(c.height) + 1);
             let i = s.book.add([x, y, z], dim, now_secs());
             s.book.style_new(i, set.wp_colour, set.wp_symbol);
@@ -3145,10 +3522,10 @@ pub(super) fn on_key_pressed(game: &Game<'_>, screen: &NativeScreenView<'_>, key
                     s.screen.key_pan(rect, dir);
                     *canceled = true;
                 } else if key == "key.keyboard.left.bracket" {
-                    s.screen.slice = layer_step(s.screen.slice, feet, true, top);
+                    step_layer(game, s, feet, top, true);
                     *canceled = true;
                 } else if key == "key.keyboard.right.bracket" {
-                    s.screen.slice = layer_step(s.screen.slice, feet, false, top);
+                    step_layer(game, s, feet, top, false);
                     *canceled = true;
                 }
             }
@@ -3212,7 +3589,7 @@ pub(super) fn on_settings(game: &mut Game<'_>, mod_id: &str, buttons: &mut Vec<S
     let page = with(|st| st.options_page);
     buttons.push(format!("Page: {} (click for the next)", m::PAGES[page]));
     let s = settings(game);
-    if page == 5 {
+    if page == m::KEYS_PAGE {
         for (name, label) in keys::labels() {
             let bound = keys::bound(game, name);
             buttons.push(format!("{label}: {}", horizon_client::keybinds::display_name(&bound).plain()));

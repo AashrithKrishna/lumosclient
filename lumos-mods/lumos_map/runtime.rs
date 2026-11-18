@@ -24,7 +24,9 @@ pub const SCREEN: &str = "mod";
 // ---------------------------------------------------------------- settings
 
 /// The settings' pages, on the mod's page in Options > Mods and on the map's settings screen.
-pub const PAGES: [&str; 6] = ["General", "Minimap", "World map", "Entities", "Waypoints", "Keys"];
+pub const PAGES: [&str; 7] = ["General", "Minimap", "Caves", "World map", "Entities", "Waypoints", "Keys"];
+/// The page listing the keys (it has no settings of its own).
+pub const KEYS_PAGE: usize = PAGES.len() - 1;
 pub const CORNERS: [&str; 4] = ["Top left", "Top right", "Bottom left", "Bottom right"];
 pub const OFFSETS: [f32; 7] = [0.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0];
 pub const SIZES: [f32; 8] = [64.0, 80.0, 96.0, 112.0, 128.0, 160.0, 192.0, 224.0];
@@ -41,7 +43,21 @@ pub const BACKGROUNDS: [(&str, u32); 4] = [
     ("See-through", 0x5010_1014),
 ];
 pub const COMPASS: [&str; 3] = ["Off", "N only", "N E S W"];
-pub const CAVE_MODES: [&str; 3] = ["Auto (underground)", "Always", "Off"];
+/// The cave view: Auto (a roof over you turns it on), Manual (on, from the start Y setting or
+/// where you are; the cave key switches it), Off. 3.0 stored "Always" at index 1: it is Manual now.
+pub const CAVE_MODES: [&str; 3] = ["Auto", "Manual", "Off"];
+/// How many columns round you need a roof for Auto to turn the cave view on: 1x1, 3x3, 5x5.
+pub const CAVE_ROOFS: [&str; 3] = ["1x1", "3x3", "5x5"];
+/// How far below the start Y the cave view looks for a floor, in blocks.
+pub const CAVE_DEPTHS: [usize; 5] = [8, 16, 30, 48, 64];
+/// How far above the start Y the cave view also shows open floors (lava lakes, caves over you).
+pub const CAVE_ABOVES: [usize; 4] = [0, 2, 4, 8];
+/// The start Y the settings button steps through (the cave key sets any Y).
+pub const CAVE_STARTS: [i32; 9] = [96, 64, 48, 32, 16, 0, -16, -32, -48];
+/// How long (ticks) a new roof state must hold before the cave view switches: about a second.
+pub const CAVE_HOLD: u64 = 20;
+/// Entering the cave view zooms the minimap in by this many steps (each a square root of two).
+pub const CAVE_ZOOMS: [&str; 3] = ["Off", "x1.41", "x2"];
 /// The info lines' orders: C coordinates, B biome, F facing, L light, T time, D dimension.
 pub const INFO_ORDERS: [&str; 4] = ["C B F L T D", "B C F L T D", "D C B F L T", "T C B F L D"];
 pub const MAP_MINS: [&str; 4] = ["1/8", "1/4", "1/2", "1"];
@@ -76,6 +92,18 @@ pub struct Settings {
     pub shading: bool,
     /// Index in `CAVE_MODES`: underground, the floor around you.
     pub cave: usize,
+    /// Index in `CAVE_ROOFS`.
+    pub cave_roof: usize,
+    /// Index in `CAVE_DEPTHS`.
+    pub cave_depth: usize,
+    /// Index in `CAVE_ABOVES`.
+    pub cave_above: usize,
+    /// Manual cave view's start Y (None: where you are).
+    pub cave_start: Option<i32>,
+    /// Caves darken less with depth, so deep floors stay readable.
+    pub cave_legible: bool,
+    /// Index in `CAVE_ZOOMS`.
+    pub cave_zoom: usize,
     /// Overworld waypoints shown in the Nether at their Nether place, and the other way.
     pub convert: bool,
     /// Index in `CORNERS`.
@@ -205,6 +233,12 @@ impl Default for Settings {
             textured: true,
             shading: true,
             cave: 0,
+            cave_roof: 1,
+            cave_depth: 2,
+            cave_above: 0,
+            cave_start: None,
+            cave_legible: true,
+            cave_zoom: 0,
             convert: true,
             corner: 1,
             offset_x: 0,
@@ -319,8 +353,14 @@ macro_rules! settings_table {
                         .filter(|i| *i < len)
                         .unwrap_or(default)
                 };
-                let _ = (&flag, &index);
-                let mut s = Self { $( $field: settings_table!(@read $kind, flag, index, stringify!($field), d.$field $(, $table)?), )* };
+                // A Y kept as text: "auto" or a whole number.
+                let y = |key: &str, default: Option<i32>| match get(key).as_deref().map(str::trim) {
+                    Some("auto") => None,
+                    Some(v) => v.parse::<i32>().ok().or(default),
+                    None => default,
+                };
+                let _ = (&flag, &index, &y);
+                let mut s = Self { $( $field: settings_table!(@read $kind, flag, index, y, stringify!($field), d.$field $(, $table)?), )* };
                 // Before 3.0 `markers` was the beams ("Waypoints in the world"): turning those off
                 // must not hide 3.0's markers. Settings saved before the version key are reset once.
                 let version = get(SETTINGS_VERSION_KEY).and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0);
@@ -330,7 +370,7 @@ macro_rules! settings_table {
                 s
             }
             pub fn stored(&self) -> Vec<(&'static str, String)> {
-                vec![ $( (stringify!($field), self.$field.to_string()), )* (SETTINGS_VERSION_KEY, SETTINGS_VERSION.to_string()) ]
+                vec![ $( (stringify!($field), settings_table!(@store $kind, self.$field)), )* (SETTINGS_VERSION_KEY, SETTINGS_VERSION.to_string()) ]
             }
             /// Every setting's page.
             pub const PAGE_OF: [usize; Self::COUNT] = [$($page),*];
@@ -356,11 +396,17 @@ macro_rules! settings_table {
             pub const COUNT: usize = [$(stringify!($field)),*].len();
         }
     };
-    (@read flag, $flag:ident, $index:ident, $key:expr, $d:expr) => { $flag($key, $d) };
-    (@read index, $flag:ident, $index:ident, $key:expr, $d:expr, $table:ident) => { $index($key, $d, $table.len()) };
+    (@read flag, $flag:ident, $index:ident, $y:ident, $key:expr, $d:expr) => { $flag($key, $d) };
+    (@read index, $flag:ident, $index:ident, $y:ident, $key:expr, $d:expr, $table:ident) => { $index($key, $d, $table.len()) };
+    (@read y, $flag:ident, $index:ident, $y:ident, $key:expr, $d:expr) => { $y($key, $d) };
+    (@store flag, $v:expr) => { $v.to_string() };
+    (@store index, $v:expr) => { $v.to_string() };
+    (@store y, $v:expr) => { $v.map_or_else(|| "auto".to_owned(), |y: i32| y.to_string()) };
     (@show flag, $on:ident, $v:expr) => { $on($v) };
     (@show index, $on:ident, $v:expr, $table:ident) => { ShowEntry::show(&$table[$v]) };
+    (@show y, $on:ident, $v:expr) => { $v.map_or_else(|| "Where you are".to_owned(), |y: i32| y.to_string()) };
     (@click flag, $v:expr, $back:expr) => { $v = !$v };
+    (@click y, $v:expr, $back:expr) => { $v = next_start($v, $back) };
     (@click index, $v:expr, $back:expr, $table:ident) => {
         $v = if $back { ($v + $table.len() - 1) % $table.len() } else { ($v + 1) % $table.len() }
     };
@@ -370,7 +416,13 @@ settings_table! {
     minimap: flag, 0, "Minimap";
     textured: flag, 0, "Game colours (off: map palette)";
     shading: flag, 0, "Terrain shading";
-    cave: index(CAVE_MODES), 0, "Cave view";
+    cave: index(CAVE_MODES), 2, "Cave view";
+    cave_roof: index(CAVE_ROOFS), 2, "Roof needed over";
+    cave_depth: index(CAVE_DEPTHS), 2, "Depth (blocks below)";
+    cave_above: index(CAVE_ABOVES), 2, "Show floors above (blocks)";
+    cave_start: y, 2, "Manual start Y";
+    cave_legible: flag, 2, "Legible caves";
+    cave_zoom: index(CAVE_ZOOMS), 2, "Zoom in when entering";
     convert: flag, 0, "Overworld/Nether waypoints converted";
     corner: index(CORNERS), 1, "Corner";
     offset_x: index(OFFSETS), 1, "Offset from the side";
@@ -390,47 +442,47 @@ settings_table! {
     time: flag, 1, "Time of day";
     dimension: flag, 1, "Dimension";
     info_order: index(INFO_ORDERS), 1, "Info line order";
-    map_min: index(MAP_MINS), 2, "Closest zoom (blocks per pixel)";
-    map_max: index(MAP_MAXES), 2, "Farthest zoom (blocks per pixel)";
-    map_grid: flag, 2, "Chunk grid when opened";
-    map_cursor: flag, 2, "Cursor coordinates";
-    map_follow: flag, 2, "Follow you when opened";
-    map_shade: flag, 2, "Dim ground not loaded now";
-    players: flag, 3, "Players";
-    names: flag, 3, "Show player names";
-    mob_names: flag, 3, "Show mob names";
-    hostile: flag, 3, "Hostile mobs";
-    passive: flag, 3, "Passive mobs";
-    items: flag, 3, "Dropped items";
-    others: flag, 3, "Other entities";
-    tab_details: flag, 3, "Faces and names while the player list key is held";
-    always_details: flag, 3, "Faces and names always";
-    icon_size: index(ICON_SIZES), 3, "Entity icon size";
-    label_size: index(LABEL_SIZES), 3, "Name label size";
-    range: index(RANGES), 3, "Entities within (blocks)";
-    player_colour: index(COLOURS), 3, "Player dots";
-    hostile_colour: index(COLOURS), 3, "Hostile mob dots";
-    passive_colour: index(COLOURS), 3, "Passive mob dots";
-    other_colour: index(COLOURS), 3, "Other entity dots";
-    waypoints: flag, 4, "Waypoints shown";
-    markers: flag, 4, "On screen";
-    wp_minimap: flag, 4, "On the minimap";
-    wp_worldmap: flag, 4, "On the world map";
-    wp_names: index(WP_NAMES), 4, "Names on screen";
-    wp_label: index(WP_LABELS), 4, "Name size";
-    wp_shape: index(WP_SHAPES), 4, "Marker";
-    wp_edge: flag, 4, "Off-screen ones at the edge";
-    wp_scale: flag, 4, "Shrink with distance";
-    fade: flag, 4, "Fade near and far";
-    wp_range: index(WP_RANGES), 4, "Shown within (blocks)";
-    units: index(UNITS), 4, "Distances in";
-    wp_colour: index(NEW_COLOURS), 4, "New waypoints' colour";
-    wp_symbol: index(SYMBOLS), 4, "New waypoints' symbol";
-    death: flag, 4, "Death points";
-    deaths: index(DEATHS), 4, "Death points kept";
-    sort: index(SORTS), 4, "List order";
-    beams: flag, 4, "Beams (old style)";
-    instant_add: flag, 4, "B adds instantly";
+    map_min: index(MAP_MINS), 3, "Closest zoom (blocks per pixel)";
+    map_max: index(MAP_MAXES), 3, "Farthest zoom (blocks per pixel)";
+    map_grid: flag, 3, "Chunk grid when opened";
+    map_cursor: flag, 3, "Cursor coordinates";
+    map_follow: flag, 3, "Follow you when opened";
+    map_shade: flag, 3, "Dim ground not loaded now";
+    players: flag, 4, "Players";
+    names: flag, 4, "Show player names";
+    mob_names: flag, 4, "Show mob names";
+    hostile: flag, 4, "Hostile mobs";
+    passive: flag, 4, "Passive mobs";
+    items: flag, 4, "Dropped items";
+    others: flag, 4, "Other entities";
+    tab_details: flag, 4, "Faces and names while the player list key is held";
+    always_details: flag, 4, "Faces and names always";
+    icon_size: index(ICON_SIZES), 4, "Entity icon size";
+    label_size: index(LABEL_SIZES), 4, "Name label size";
+    range: index(RANGES), 4, "Entities within (blocks)";
+    player_colour: index(COLOURS), 4, "Player dots";
+    hostile_colour: index(COLOURS), 4, "Hostile mob dots";
+    passive_colour: index(COLOURS), 4, "Passive mob dots";
+    other_colour: index(COLOURS), 4, "Other entity dots";
+    waypoints: flag, 5, "Waypoints shown";
+    markers: flag, 5, "On screen";
+    wp_minimap: flag, 5, "On the minimap";
+    wp_worldmap: flag, 5, "On the world map";
+    wp_names: index(WP_NAMES), 5, "Names on screen";
+    wp_label: index(WP_LABELS), 5, "Name size";
+    wp_shape: index(WP_SHAPES), 5, "Marker";
+    wp_edge: flag, 5, "Off-screen ones at the edge";
+    wp_scale: flag, 5, "Shrink with distance";
+    fade: flag, 5, "Fade near and far";
+    wp_range: index(WP_RANGES), 5, "Shown within (blocks)";
+    units: index(UNITS), 5, "Distances in";
+    wp_colour: index(NEW_COLOURS), 5, "New waypoints' colour";
+    wp_symbol: index(SYMBOLS), 5, "New waypoints' symbol";
+    death: flag, 5, "Death points";
+    deaths: index(DEATHS), 5, "Death points kept";
+    sort: index(SORTS), 5, "List order";
+    beams: flag, 5, "Beams (old style)";
+    instant_add: flag, 5, "B adds instantly";
 }
 
 impl Settings {
@@ -477,6 +529,27 @@ impl Settings {
         RANGES.get(self.range).and_then(|r| r.parse().ok())
     }
 
+    /// How many columns a side the roof test looks at (1, 3 or 5).
+    pub fn roof_side(&self) -> i32 {
+        [1, 3, 5][self.cave_roof.min(2)]
+    }
+
+    /// How far below the start Y the cave view looks for a floor.
+    pub fn depth_blocks(&self) -> i32 {
+        CAVE_DEPTHS[self.cave_depth.min(CAVE_DEPTHS.len() - 1)] as i32
+    }
+
+    /// How far above the start Y the cave view also shows open floors.
+    pub fn above_blocks(&self) -> i32 {
+        CAVE_ABOVES[self.cave_above.min(CAVE_ABOVES.len() - 1)] as i32
+    }
+
+    /// The minimap's zoom step now: the setting's, stepped in by the cave zoom in the cave view.
+    pub fn zoom_now(&self, cave: bool) -> usize {
+        let z = self.zoom.min(ZOOMS.len() - 1);
+        if cave { z.saturating_sub(self.cave_zoom.min(2)) } else { z }
+    }
+
     /// One zoom step in (`in_`) or out; whether it changed.
     pub fn zoom_step(&mut self, in_: bool) -> bool {
         let z = if in_ {
@@ -488,6 +561,93 @@ impl Settings {
         self.zoom = z;
         changed
     }
+}
+
+/// The manual start Y after `now` on the settings button: where you are (None), then the
+/// presets from the top down (`back`: the other way). A Y set with the key goes to the nearest
+/// preset under it.
+pub fn next_start(now: Option<i32>, back: bool) -> Option<i32> {
+    let n = CAVE_STARTS.len();
+    // Positions: 0 is "where you are", k + 1 is preset k.
+    let at = match now {
+        None => 0,
+        Some(y) => CAVE_STARTS.iter().position(|p| *p <= y).map_or(n + 1, |k| k + 1),
+    };
+    let exact = now.is_none_or(|y| CAVE_STARTS.contains(&y));
+    let next = match (exact, back) {
+        (true, false) => (at + 1) % (n + 1),
+        (true, true) => (at + n) % (n + 1),
+        // Between presets: the one under it, or (back) the one over it.
+        (false, false) => at % (n + 1),
+        (false, true) => at - 1,
+    };
+    (next > 0).then(|| CAVE_STARTS[next - 1])
+}
+
+// ---------------------------------------------------------------- cave view: when and where
+
+/// Whether the columns round the player are all under a roof: each is the Y of the first roof
+/// block over the head (blocks at different heights still make one roof), or None for open sky.
+pub fn roofed(columns: &[Option<i32>]) -> bool {
+    !columns.is_empty() && columns.iter().all(Option::is_some)
+}
+
+/// The cave view's automatic switch: a new roof state has to hold `CAVE_HOLD` ticks before the
+/// view follows it, so walking through a doorway or under a tree doesn't flicker the map.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaveSwitch {
+    /// Whether the cave view is on now.
+    pub on: bool,
+    /// The other state and the tick it was first seen.
+    pending: Option<(bool, u64)>,
+}
+
+impl CaveSwitch {
+    /// Takes the roof test's answer at `tick`; whether the cave view is on.
+    pub fn step(&mut self, roofed: bool, tick: u64) -> bool {
+        if roofed == self.on {
+            self.pending = None;
+        } else {
+            match self.pending {
+                Some((v, since)) if v == roofed => {
+                    if tick.saturating_sub(since) >= CAVE_HOLD {
+                        self.on = roofed;
+                        self.pending = None;
+                    }
+                }
+                _ => self.pending = Some((roofed, tick)),
+            }
+        }
+        self.on
+    }
+}
+
+/// What the minimap's cave view shows: the slice from `start` (the head's block) down `depth`
+/// blocks, with open floors up to `above` blocks over it; or, on a roofed dimension's roof, the
+/// roof's top from above.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaveView {
+    Slice { start: i32, depth: i32, above: i32 },
+    RoofTop,
+}
+
+/// The cave view for the player's head block `head` in a dimension with or without a ceiling
+/// (`ceiling`: the logical top of a roofed dimension), with `roofed` the switch's state now.
+/// None: the surface map.
+pub fn cave_view(s: &Settings, head: i32, roofed: bool, ceiling: Option<i32>) -> Option<CaveView> {
+    if let Some(roof) = ceiling
+        && head > roof
+        && !(s.cave == 1 && s.cave_start.is_some())
+    {
+        // Standing on the bedrock roof: its top, as the surface would be.
+        return (s.cave != 2).then_some(CaveView::RoofTop);
+    }
+    let start = match s.cave {
+        0 if roofed || ceiling.is_some() => head,
+        1 => s.cave_start.unwrap_or(head),
+        _ => return None,
+    };
+    Some(CaveView::Slice { start, depth: s.depth_blocks(), above: s.above_blocks() })
 }
 
 // ---------------------------------------------------------------- entity dots
@@ -712,6 +872,36 @@ pub fn block_rgb(c: &BlockColour, biome: &BiomeTints) -> u32 {
 
 /// Map colour ids with a meaning of their own (`MapColor`).
 pub const WATER: u8 = 12;
+/// `MapColor.COLOR_BLACK`: the map colour a cave view's drop keeps (it has no block of its own).
+pub const BLACK: u8 = 29;
+
+/// What a cave view's column is: a floor (or the surface), rock at the start Y (a wall), or
+/// open down past the depth (a drop).
+pub const FLOOR: u8 = 0;
+pub const WALL: u8 = 1;
+pub const DEEP: u8 = 2;
+/// A drop's colour: darker than walls.
+pub const DEEP_RGB: u32 = 0x10_1014;
+/// Rock in a cave view (columns solid at the start Y), and its lighter edge along open space.
+pub const WALL_RGB: u32 = 0x2A_2A2E;
+pub const WALL_EDGE_RGB: u32 = 0x4A_4A50;
+/// `MapColor.FIRE`: lava's, which stays bright in caves.
+pub const FIRE: u8 = 4;
+
+/// A cave slice's place, for its depth shading: its start Y and depth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaveShade {
+    pub start: i32,
+    pub depth: i32,
+}
+
+/// How much of its colour a cave floor `below` blocks under the start keeps: full right under
+/// you, about half at the depth limit; with legible caves, never under 70%.
+pub fn depth_factor(below: i32, depth: i32, legible: bool) -> f32 {
+    let f = (below.max(0) as f32 / depth.max(1) as f32).min(1.0);
+    let dark = 0.55 * f;
+    1.0 - if legible { dark.min(0.3) } else { dark }
+}
 
 /// One chunk of the map: per column (`z * 16 + x`) its map colour id (0: nothing known), its
 /// colour in the game's look (0xRRGGBB, 0: not known, use the map colour), the height of that
@@ -722,6 +912,8 @@ pub struct Tile {
     pub rgb: [u32; 256],
     pub height: [i16; 256],
     pub depth: [u8; 256],
+    /// `FLOOR`, `WALL` or `DEEP` (a cave view's; the surface's are all floors).
+    pub kind: [u8; 256],
 }
 
 impl Default for Tile {
@@ -731,6 +923,7 @@ impl Default for Tile {
             rgb: [0; 256],
             height: [0; 256],
             depth: [0; 256],
+            kind: [FLOOR; 256],
         }
     }
 }
@@ -742,6 +935,7 @@ pub struct Col {
     pub rgb: u32,
     pub height: i16,
     pub depth: u8,
+    pub kind: u8,
 }
 
 impl Tile {
@@ -753,6 +947,7 @@ impl Tile {
             rgb: self.rgb[i],
             height: self.height[i],
             depth: self.depth[i],
+            kind: self.kind[i],
         })
     }
 }
@@ -761,6 +956,20 @@ impl Tile {
 pub const REGION: i32 = 32;
 const MAGIC_V1: &[u8; 4] = b"LMR1";
 const MAGIC: &[u8; 4] = b"LMR2";
+/// A saved cave layer's region: `LMR2`'s tiles with their column kinds, and the layer's band.
+const MAGIC_CAVE: &[u8; 4] = b"LMR3";
+
+/// Cave layers are kept per 16-block band of their top Y, so walking a few blocks up or down
+/// stays in one layer.
+pub fn band_of(top: i32) -> i32 {
+    top.div_euclid(16)
+}
+
+/// A saved cave layer's folder under its dimension's: `caves/<band>`, or `caves/full` for the
+/// full cave map.
+pub fn cave_folder(band: Option<i32>) -> String {
+    band.map_or_else(|| "caves/full".to_owned(), |b| format!("caves/{b}"))
+}
 
 pub fn region_of(chunk: (i32, i32)) -> (i32, i32) {
     (chunk.0.div_euclid(REGION), chunk.1.div_euclid(REGION))
@@ -789,6 +998,9 @@ pub struct Store {
     pub changed: Vec<(i32, i32)>,
     /// Goes up when many tiles changed at once (loaded from disk): every cell is drawn again.
     pub epoch: u64,
+    /// A cave layer's band: its regions are written as `LMR3` with the band and the column
+    /// kinds; None (the surface, the full cave map): `LMR2`.
+    pub band: Option<i32>,
 }
 
 impl Store {
@@ -833,8 +1045,14 @@ impl Store {
             .filter(|k| region_of(**k) == region)
             .collect();
         keys.sort();
-        let mut out = Vec::with_capacity(8 + keys.len() * ONE_V2);
-        out.extend_from_slice(MAGIC);
+        let mut out = Vec::with_capacity(12 + keys.len() * ONE_V3);
+        match self.band {
+            Some(band) => {
+                out.extend_from_slice(MAGIC_CAVE);
+                out.extend_from_slice(&band.to_le_bytes());
+            }
+            None => out.extend_from_slice(MAGIC),
+        }
         out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
         for k in keys {
             let t = &self.tiles[k];
@@ -848,6 +1066,9 @@ impl Store {
             for c in t.rgb {
                 out.extend_from_slice(&c.to_le_bytes()[..3]);
             }
+            if self.band.is_some() {
+                out.extend_from_slice(&t.kind);
+            }
         }
         out
     }
@@ -855,24 +1076,34 @@ impl Store {
 
 const ONE_V1: usize = 2 + 256 + 512 + 256;
 const ONE_V2: usize = ONE_V1 + 768;
+const ONE_V3: usize = ONE_V2 + 256;
 
-/// The tiles of a region file (this version's, or the first's without colours); None when it
-/// isn't one.
+/// The band a cave layer's region file was saved for (None: not a cave layer's).
+pub fn region_band(bytes: &[u8]) -> Option<i32> {
+    (bytes.len() >= 8 && &bytes[..4] == MAGIC_CAVE).then(|| i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]))
+}
+
+/// The tiles of a region file (a cave layer's, this version's, or the first's without
+/// colours); None when it isn't one.
 pub fn decode_region(region: (i32, i32), bytes: &[u8]) -> Option<Vec<((i32, i32), Tile)>> {
     if bytes.len() < 8 {
         return None;
     }
-    let one = match &bytes[..4] {
-        m if m == MAGIC => ONE_V2,
-        m if m == MAGIC_V1 => ONE_V1,
+    let (one, head) = match &bytes[..4] {
+        m if m == MAGIC_CAVE => (ONE_V3, 12),
+        m if m == MAGIC => (ONE_V2, 8),
+        m if m == MAGIC_V1 => (ONE_V1, 8),
         _ => return None,
     };
-    let count = u32::from_le_bytes(bytes[4..8].try_into().ok()?) as usize;
-    if count > (REGION * REGION) as usize || bytes.len() != 8 + count * one {
+    if bytes.len() < head {
+        return None;
+    }
+    let count = u32::from_le_bytes(bytes[head - 4..head].try_into().ok()?) as usize;
+    if count > (REGION * REGION) as usize || bytes.len() != head + count * one {
         return None;
     }
     let mut out = Vec::with_capacity(count);
-    for c in bytes[8..].chunks_exact(one) {
+    for c in bytes[head..].chunks_exact(one) {
         let (lx, lz) = (i32::from(c[0]), i32::from(c[1]));
         if lx >= REGION || lz >= REGION {
             return None;
@@ -883,14 +1114,79 @@ pub fn decode_region(region: (i32, i32), bytes: &[u8]) -> Option<Vec<((i32, i32)
             t.height[i] = i16::from_le_bytes([h[0], h[1]]);
         }
         t.depth.copy_from_slice(&c[770..1026]);
-        if one == ONE_V2 {
+        if one >= ONE_V2 {
             for (i, p) in c[1026..1794].chunks_exact(3).enumerate() {
                 t.rgb[i] = u32::from(p[0]) | u32::from(p[1]) << 8 | u32::from(p[2]) << 16;
             }
         }
+        if one == ONE_V3 {
+            t.kind.copy_from_slice(&c[1794..2050]);
+        }
         out.push(((region.0 * REGION + lx, region.1 * REGION + lz), t));
     }
     Some(out)
+}
+
+// ---------------------------------------------------------------- the world map's cave maps
+
+/// What the world map shows underground, kept per dimension: Off (the surface; on a roofed
+/// dimension, the roof's top), Layered (the slice under a top Y, saved per band) or Full (the
+/// floors under the roof: the Nether's under-roof map, the first caves under the ground
+/// elsewhere).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaveType {
+    Off,
+    Layered,
+    Full,
+}
+
+pub const CAVE_TYPES: [&str; 3] = ["Off", "Layered", "Full"];
+
+impl CaveType {
+    pub fn index(self) -> usize {
+        self as usize
+    }
+    pub fn from_index(i: usize) -> Self {
+        [CaveType::Off, CaveType::Layered, CaveType::Full][i % 3]
+    }
+    /// A new dimension's: Full under a roof (as the Nether's map always was), else Off.
+    pub fn default_for(roofed: bool) -> Self {
+        if roofed { CaveType::Full } else { CaveType::Off }
+    }
+}
+
+/// The cave map types chosen per dimension (`<world>/cave-maps.txt`: `dimension<TAB>type`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CaveTypes(pub Vec<(String, CaveType)>);
+
+impl CaveTypes {
+    pub fn from_text(text: &str) -> Self {
+        let mut out = CaveTypes::default();
+        for l in text.lines().filter(|l| !l.starts_with('#')) {
+            if let Some((dim, t)) = l.split_once('\t')
+                && let Some(i) = CAVE_TYPES.iter().position(|n| *n == t.trim())
+            {
+                out.set(dim.trim(), CaveType::from_index(i));
+            }
+        }
+        out
+    }
+    pub fn to_text(&self) -> String {
+        let mut out = String::from("# Lumos Map cave maps: dimension, type (Off, Layered, Full)\n");
+        for (dim, t) in &self.0 {
+            out.push_str(&format!("{dim}\t{}\n", CAVE_TYPES[t.index()]));
+        }
+        out
+    }
+    pub fn get(&self, dim: &str, roofed: bool) -> CaveType {
+        self.0.iter().find(|(d, _)| d == dim).map_or_else(|| CaveType::default_for(roofed), |(_, t)| *t)
+    }
+    pub fn set(&mut self, dim: &str, t: CaveType) {
+        match self.0.iter_mut().find(|(d, _)| d == dim) {
+            Some(e) => e.1 = t,
+            None => self.0.push((dim.to_owned(), t)),
+        }
+    }
 }
 
 // ---------------------------------------------------------------- biome blending, water
@@ -950,6 +1246,8 @@ pub fn water_over(ground: u32, water: u32, depth: u8) -> u32 {
 pub struct Look {
     pub textured: bool,
     pub shading: bool,
+    /// Cave floors darken less with depth.
+    pub legible: bool,
 }
 
 /// A column's colour as the maps show it: its own colour (or its map colour), lit where the
@@ -963,6 +1261,9 @@ pub fn shade(
     north: Option<i16>,
     west: Option<i16>,
 ) -> [u8; 4] {
+    if c.kind == DEEP {
+        return [(DEEP_RGB >> 16) as u8, (DEEP_RGB >> 8) as u8, DEEP_RGB as u8, 255];
+    }
     let own = look.textured && c.rgb != 0;
     let base = if own {
         c.rgb
@@ -983,15 +1284,46 @@ pub fn shade(
     [ch(16), ch(8), ch(0), 255]
 }
 
-/// A column with its north and west neighbours' heights for its shading.
+/// A column with its north and west neighbours' heights for its shading. In a cave slice
+/// (`cave`), rock is flat with a lighter edge along open space, floors darken with depth (lava
+/// doesn't) and slopes are always shaded.
 fn shaded(
     column: &mut impl FnMut(i32, i32) -> Option<Col>,
     palette: &[u32],
     look: Look,
+    cave: Option<CaveShade>,
     x: i32,
     z: i32,
 ) -> Option<[u8; 4]> {
     let c = column(x, z)?;
+    if let Some(cave) = cave {
+        let px = |rgb: u32| [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, 255];
+        match c.kind {
+            DEEP => return Some(px(DEEP_RGB)),
+            WALL => {
+                let open = [(0, -1), (0, 1), (-1, 0), (1, 0)]
+                    .iter()
+                    .any(|(dx, dz)| column(x + dx, z + dz).is_some_and(|n| n.kind != WALL));
+                return Some(px(if open { WALL_EDGE_RGB } else { WALL_RGB }));
+            }
+            _ => {}
+        }
+        let lit = Look { shading: true, ..look };
+        let mut rgba = if c.color == WATER || c.depth > 0 {
+            shade(palette, lit, c, None, None)
+        } else {
+            let n = column(x, z - 1).filter(|n| n.kind == FLOOR).map(|c| c.height);
+            let w = column(x - 1, z).filter(|n| n.kind == FLOOR).map(|c| c.height);
+            shade(palette, lit, c, n, w)
+        };
+        if c.color != FIRE {
+            let k = depth_factor(cave.start - i32::from(c.height), cave.depth, look.legible);
+            for ch in &mut rgba[..3] {
+                *ch = (f32::from(*ch) * k).round() as u8;
+            }
+        }
+        return Some(rgba);
+    }
     if !look.shading || c.color == WATER || c.depth > 0 {
         return Some(shade(palette, look, c, None, None));
     }
@@ -1177,6 +1509,7 @@ pub fn compose_cell(
     mut column: impl FnMut(i32, i32) -> Option<Col>,
     palette: &[u32],
     look: Look,
+    cave: Option<CaveShade>,
     key: CellKey,
     out: &mut [u8; 1024],
 ) -> bool {
@@ -1188,7 +1521,7 @@ pub fn compose_cell(
         for i in 0..16 {
             let (x, z) = (x0 + i * step + half, z0 + j * step + half);
             let o = ((j * 16 + i) * 4) as usize;
-            match shaded(&mut column, palette, look, x, z) {
+            match shaded(&mut column, palette, look, cave, x, z) {
                 Some(rgba) => {
                     out[o..o + 4].copy_from_slice(&rgba);
                     empty = false;
@@ -1521,7 +1854,7 @@ pub fn compose(
         for i in 0..iw {
             let wx = (view.x + (f64::from(i) + 0.5 - hw) * bpp).floor() as i32;
             let o = ((j * iw + i) * 4) as usize;
-            let rgba = shaded(&mut column, palette, look, wx, wz).unwrap_or(UNKNOWN);
+            let rgba = shaded(&mut column, palette, look, None, wx, wz).unwrap_or(UNKNOWN);
             out[o..o + 4].copy_from_slice(&rgba);
         }
     }
@@ -2670,7 +3003,7 @@ mod tests {
         let d = Settings::default();
         let total: usize = (0..PAGES.len()).map(|p| d.page(p).len()).sum();
         assert_eq!(total, Settings::COUNT);
-        assert!(d.page(5).is_empty() && !d.page(4).is_empty());
+        assert!(d.page(KEYS_PAGE).is_empty() && !d.page(KEYS_PAGE - 1).is_empty());
         let mut b = Settings::default();
         let opacity = b.labels().iter().position(|l| l.starts_with("Opacity")).unwrap();
         b.click_dir(opacity, true);
@@ -2785,7 +3118,7 @@ mod tests {
     }
 
     fn tile(c: u8, h: i16, rgb: u32) -> Tile {
-        Tile { color: [c; 256], rgb: [rgb; 256], height: [h; 256], depth: [0; 256] }
+        Tile { color: [c; 256], rgb: [rgb; 256], height: [h; 256], depth: [0; 256], kind: [FLOOR; 256] }
     }
 
     #[test]
@@ -2820,15 +3153,15 @@ mod tests {
     #[test]
     fn shading_lights_rises_and_darkens_water() {
         let palette = [0, 0x808080, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x4040FF];
-        let look = Look { textured: true, shading: true };
-        let col = |h: i16, rgb: u32| Col { color: 1, rgb, height: h, depth: 0 };
+        let look = Look { textured: true, shading: true, legible: true };
+        let col = |h: i16, rgb: u32| Col { color: 1, rgb, height: h, depth: 0, kind: FLOOR };
         assert_eq!(shade(&palette, look, col(64, 0), Some(64), Some(64)), [128, 128, 128, 255]);
         assert!(shade(&palette, look, col(66, 0), Some(64), Some(64))[0] > 128);
         assert!(shade(&palette, look, col(62, 0), Some(64), Some(64))[0] < 128);
         assert_eq!(shade(&palette, look, col(64, 0x00FF00), None, None), [0, 255, 0, 255]);
-        let flat = Look { textured: false, shading: false };
+        let flat = Look { textured: false, shading: false, legible: true };
         assert_eq!(shade(&palette, flat, col(70, 0x00FF00), Some(10), None), [128, 128, 128, 255]);
-        let water = |d: u8| Col { color: WATER, rgb: 0, height: 60, depth: d };
+        let water = |d: u8| Col { color: WATER, rgb: 0, height: 60, depth: d, kind: FLOOR };
         assert!(shade(&palette, look, water(10), None, None)[2] < shade(&palette, look, water(1), None, None)[2]);
     }
 
@@ -2871,7 +3204,7 @@ mod tests {
         let palette = [0u32, 0xFF0000];
         let mut s = Store::default();
         s.put((0, 0), tile(1, 64, 0));
-        let look = Look { textured: true, shading: true };
+        let look = Look { textured: true, shading: true, legible: true };
         let view = MapView { x: 0.0, z: 0.0, zoom: MAP_ZOOM_ONE };
         let mut out = Vec::new();
         compose(|x, z| s.column(x, z), &palette, look, &view, 64, 64, 1.0, &mut out);
@@ -2887,13 +3220,13 @@ mod tests {
         let mut s = Store::default();
         s.put((0, 0), tile(1, 64, 0));
         assert_eq!(s.changed, vec![(0, 0)]);
-        let look = Look { textured: true, shading: true };
+        let look = Look { textured: true, shading: true, legible: true };
         let mut px = [0u8; 1024];
         let key = CellKey { source: 0, lod: 0, x: 0, z: 0 };
-        assert!(!compose_cell(|x, z| s.column(x, z), &palette, look, key, &mut px));
+        assert!(!compose_cell(|x, z| s.column(x, z), &palette, look, None, key, &mut px));
         assert_eq!(&px[..4], &[255, 0, 0, 255]);
         let far = CellKey { x: 5, ..key };
-        assert!(compose_cell(|x, z| s.column(x, z), &palette, look, far, &mut px));
+        assert!(compose_cell(|x, z| s.column(x, z), &palette, look, None, far, &mut px));
         let mut c = CellCache::default();
         assert_eq!(c.get(key, 1), None);
         assert_eq!(c.wanted, vec![(key, true)]);
@@ -3240,5 +3573,137 @@ mod tests {
         assert_eq!(folder_name(".."), "_");
         assert_eq!(pretty_id("minecraft:dark_forest"), "Dark Forest");
         assert_eq!(list_rows(240.0), 5);
+    }
+
+    #[test]
+    fn cave_layers_save_with_their_band_and_old_files_still_read() {
+        assert_eq!((band_of(24), band_of(16), band_of(15), band_of(-1), band_of(-16), band_of(-17)), (1, 1, 0, -1, -1, -2));
+        assert_eq!((cave_folder(Some(-2)).as_str(), cave_folder(None).as_str()), ("caves/-2", "caves/full"));
+        let mut cave = Store { band: Some(-2), ..Store::default() };
+        let mut t = tile(5, -30, 0xABCDEF);
+        t.kind[7] = WALL;
+        t.kind[8] = DEEP;
+        assert!(cave.put((-40, 3), t.clone()));
+        let bytes = cave.encode_region((-2, 0));
+        assert_eq!(&bytes[..4], b"LMR3");
+        assert_eq!(region_band(&bytes), Some(-2));
+        assert_eq!(decode_region((-2, 0), &bytes).unwrap(), vec![((-40, 3), t)]);
+        assert_eq!(decode_region((-2, 0), &bytes[..bytes.len() - 1]), None);
+        // The surface keeps writing LMR2, which 3.0 reads; its columns are floors.
+        let mut surface = Store::default();
+        surface.put((0, 0), tile(1, 64, 1));
+        let old = surface.encode_region((0, 0));
+        assert_eq!((&old[..4], region_band(&old)), (&b"LMR2"[..], None));
+        assert!(decode_region((0, 0), &old).unwrap()[0].1.kind.iter().all(|k| *k == FLOOR));
+        // Cave map types per dimension, the Nether's Full by default.
+        let mut types = CaveTypes::default();
+        assert_eq!(types.get(NETHER, true), CaveType::Full);
+        assert_eq!(types.get(OVERWORLD, false), CaveType::Off);
+        types.set(OVERWORLD, CaveType::Layered);
+        let back = CaveTypes::from_text(&types.to_text());
+        assert_eq!(back.get(OVERWORLD, false), CaveType::Layered);
+        assert_eq!(back.get(NETHER, true), CaveType::Full, "changing one leaves the other");
+        assert_eq!(CaveTypes::from_text("x\tNope\n"), CaveTypes::default());
+    }
+
+    #[test]
+    fn caves_show_rock_drops_and_darker_deep_floors() {
+        let palette = [0u32, 0x808080, 0, 0, 0xFF0000];
+        let look = Look { textured: true, shading: false, legible: false };
+        let cave = Some(CaveShade { start: 40, depth: 30 });
+        // Columns: x < 0 rock, x == 0 a floor at 40, x == 1 floor 70 below (past the depth),
+        // x == 2 lava deep down, x >= 3 a drop.
+        let col = |x: i32, _z: i32| -> Option<Col> {
+            let c = |color, height, kind| Some(Col { color, rgb: 0, height, depth: 0, kind });
+            match x {
+                ..0 => c(1, 40, WALL),
+                0 => c(1, 40, FLOOR),
+                1 => c(1, -30, FLOOR),
+                2 => c(FIRE, 10, FLOOR),
+                _ => c(BLACK, 10, DEEP),
+            }
+        };
+        let mut out = [0u8; 1024];
+        compose_cell(col, &palette, look, cave, CellKey { source: 1, lod: 0, x: -1, z: 0 }, &mut out);
+        let at = |out: &[u8; 1024], i: usize| [out[i * 4], out[i * 4 + 1], out[i * 4 + 2]];
+        // Cell -1 covers x -16..-1: rock, with the lighter edge next to the floor at x 0.
+        assert_eq!(at(&out, 0), [0x2A, 0x2A, 0x2E]);
+        assert_eq!(at(&out, 15), [0x4A, 0x4A, 0x50]);
+        compose_cell(col, &palette, look, cave, CellKey { source: 1, lod: 0, x: 0, z: 0 }, &mut out);
+        assert_eq!(at(&out, 0), [128, 128, 128], "the floor at your feet keeps its colour");
+        assert_eq!(at(&out, 1), [42, 42, 42], "past the depth: about half (and shaded: it drops away west)");
+        assert_eq!(at(&out, 2), [255, 0, 0], "lava stays bright");
+        assert_eq!(at(&out, 3), [0x10, 0x10, 0x14], "a drop is darker than rock");
+        // Legible caves darken by 30% at most.
+        compose_cell(col, &palette, Look { legible: true, ..look }, cave, CellKey { source: 1, lod: 0, x: 0, z: 0 }, &mut out);
+        assert_eq!(at(&out, 1), [65, 65, 65]);
+        assert!((depth_factor(15, 30, false) - 0.725).abs() < 1e-6);
+        assert_eq!(depth_factor(-3, 30, false), 1.0, "floors over the start are not darkened");
+        // The cave zoom steps the minimap in only while the cave view is on.
+        let s = Settings { zoom: 4, cave_zoom: 2, ..Settings::default() };
+        assert_eq!((s.zoom_now(false), s.zoom_now(true)), (4, 2));
+        assert_eq!(Settings { zoom: 1, ..s }.zoom_now(true), 0);
+    }
+
+    #[test]
+    fn cave_settings_read_3_0_files_and_keep_a_start_y() {
+        // 3.0's "Always" (index 1) is Manual now; the new settings start at their defaults.
+        let old = Settings::read(|k| (k == "cave").then(|| "1".into()));
+        assert_eq!(CAVE_MODES[old.cave], "Manual");
+        assert_eq!((old.roof_side(), old.depth_blocks(), old.above_blocks(), old.cave_start), (3, 30, 0, None));
+        let mut s = Settings { cave_start: Some(-23), ..Settings::default() };
+        let stored = s.stored();
+        assert!(stored.iter().any(|(k, v)| *k == "cave_start" && v == "-23"));
+        let back = Settings::read(|k| stored.iter().find(|p| p.0 == k).map(|p| p.1.clone()));
+        assert_eq!(back.cave_start, Some(-23));
+        s.cave_start = None;
+        let stored = s.stored();
+        assert!(stored.iter().any(|(k, v)| *k == "cave_start" && v == "auto"));
+        assert_eq!(Settings::read(|k| (k == "cave_start").then(|| "junk".into())).cave_start, None);
+        // The button steps through the presets and back to "where you are".
+        assert_eq!(next_start(None, false), Some(96));
+        assert_eq!(next_start(Some(96), true), None);
+        assert_eq!(next_start(None, true), Some(-48));
+        assert_eq!(next_start(Some(-48), false), None);
+        assert_eq!(next_start(Some(50), false), Some(48), "a Y set with the key: the preset under it");
+        assert_eq!(next_start(Some(50), true), Some(64));
+        assert_eq!(next_start(Some(-60), true), Some(-48));
+        assert_eq!(next_start(Some(-60), false), None);
+    }
+
+    #[test]
+    fn the_cave_view_needs_a_whole_roof_held_a_second() {
+        // 3x3: every column needs a roof (at any height); one open column is not a cave.
+        let mut nine = vec![Some(70); 9];
+        nine[4] = Some(66);
+        assert!(roofed(&nine));
+        nine[8] = None;
+        assert!(!roofed(&nine), "an overhang over part of the square doesn't count");
+        assert!(!roofed(&[]));
+        assert!(roofed(&[Some(80)]));
+        // The switch follows only after 20 ticks of the new state.
+        let mut sw = CaveSwitch::default();
+        assert!(!sw.step(true, 100));
+        assert!(!sw.step(true, 119));
+        assert!(sw.step(true, 120));
+        // Flicker at a cave mouth (in and out every few ticks) never switches it back.
+        for t in 0..40 {
+            assert!(sw.step(t % 6 < 3, 121 + t));
+        }
+        // Out for a full second: off.
+        assert!(sw.step(true, 170));
+        assert!(sw.step(false, 200));
+        assert!(!sw.step(false, 220));
+        // Which slice: the head's block, the depth and above settings; Manual's own Y; the
+        // Nether roof's top from above it.
+        let d = Settings::default();
+        assert_eq!(cave_view(&d, 20, false, None), None);
+        assert_eq!(cave_view(&d, 20, true, None), Some(CaveView::Slice { start: 20, depth: 30, above: 0 }));
+        assert_eq!(cave_view(&d, 40, false, Some(127)), Some(CaveView::Slice { start: 40, depth: 30, above: 0 }));
+        assert_eq!(cave_view(&d, 130, true, Some(127)), Some(CaveView::RoofTop));
+        let manual = Settings { cave: 1, cave_start: Some(-10), cave_depth: 0, cave_above: 2, ..d };
+        assert_eq!(cave_view(&manual, 70, false, None), Some(CaveView::Slice { start: -10, depth: 8, above: 4 }));
+        assert_eq!(cave_view(&Settings { cave_start: None, ..manual }, 70, false, None), Some(CaveView::Slice { start: 70, depth: 8, above: 4 }));
+        assert_eq!(cave_view(&Settings { cave: 2, ..d }, 20, true, Some(127)), None);
     }
 }
