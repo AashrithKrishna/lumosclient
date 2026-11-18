@@ -1192,13 +1192,22 @@ fn build_auth(shared: &Arc<Mutex<AppState>>, cfg: &LauncherConfig, paths: &insta
         }
         rep.report("Getting skin support (authlib-injector)", -1.0);
         let jar = elyby::ensure_authlib_injector(&paths.runtime, bundled_authlib().as_deref())?;
-        Ok(installer::Auth {
-            name: fresh.name.clone(),
-            uuid: fresh.uuid.clone(),
-            access_token: fresh.access_token.clone(),
-            user_type: "mojang".into(),
-            javaagent: Some(elyby::javaagent_arg(&jar)),
-        })
+        // Fetch Ely.by's sign-in details here (with a DNS fallback) and hand them to the game, so a
+        // broken DNS lookup can't stop the game at startup. If Ely.by can't be reached at all, play
+        // without it rather than not at all.
+        match elyby::javaagent_args_prefetched(&jar) {
+            Some(agent) => Ok(installer::Auth {
+                name: fresh.name.clone(),
+                uuid: fresh.uuid.clone(),
+                access_token: fresh.access_token.clone(),
+                user_type: "mojang".into(),
+                javaagent: Some(agent),
+            }),
+            None => {
+                rep.report("Ely.by can't be reached right now: launching without it (default skins and capes this session)", -1.0);
+                Ok(installer::Auth { uuid: offline_uuid_hex(&fresh.name), name: fresh.name.clone(), access_token: "0".into(), user_type: "legacy".into(), javaagent: None })
+            }
+        }
     } else {
         let name = cfg.player_name.trim().to_owned();
         if !valid_player_name(&name) {

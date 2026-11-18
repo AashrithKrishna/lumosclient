@@ -410,6 +410,60 @@ pub fn javaagent_arg(jar: &Path) -> String {
     format!("-javaagent:{}=ely.by", jar.display())
 }
 
+/// Ely.by's authlib-injector API (what "ely.by" redirects to).
+pub const ELY_API: &str = "https://account.ely.by/api/authlib-injector";
+
+/// The sign-in agent with Ely.by's metadata fetched by Lumos beforehand, so the game doesn't
+/// look anything up at startup (where a broken DNS lookup would make it quit with exit code 1).
+/// Lumos fetches it with the system's DNS, then through Cloudflare's DNS-over-HTTPS if that fails.
+/// `None` when Ely.by can't be reached at all.
+pub fn javaagent_args_prefetched(jar: &Path) -> Option<String> {
+    let body = fetch_text_any_dns(ELY_API)?;
+    serde_json::from_str::<serde_json::Value>(&body).ok().filter(|v| v.get("meta").is_some() || v.get("skinDomains").is_some())?;
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, body.as_bytes());
+    Some(format!("-javaagent:{}={ELY_API}\n-Dauthlibinjector.yggdrasil.prefetched={b64}", jar.display()))
+}
+
+/// GET `url`, falling back to an address looked up over DNS-over-HTTPS when the system's own
+/// DNS can't find the host (a router that stops answering for one name, as seen in the wild).
+pub fn fetch_text_any_dns(url: &str) -> Option<String> {
+    if let Ok(r) = crate::net::agent().get(url).call() {
+        return r.into_string().ok();
+    }
+    let host = url.split("://").nth(1)?.split('/').next()?.to_owned();
+    let ip = doh_lookup(&host)?;
+    let agent = ureq::AgentBuilder::new()
+        .user_agent(crate::net::USER_AGENT)
+        .timeout_connect(std::time::Duration::from_secs(15))
+        .timeout_read(std::time::Duration::from_secs(30))
+        .resolver(move |addr: &str| -> std::io::Result<Vec<std::net::SocketAddr>> {
+            let port = addr.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(443);
+            Ok(vec![std::net::SocketAddr::new(ip, port)])
+        })
+        .build();
+    agent.get(url).call().ok()?.into_string().ok()
+}
+
+/// An IPv4 address for `host` from Cloudflare's DNS-over-HTTPS (reached by IP, so it works when
+/// the local DNS is what's broken), then Google's.
+fn doh_lookup(host: &str) -> Option<std::net::IpAddr> {
+    if !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return None;
+    }
+    for base in ["https://1.1.1.1/dns-query", "https://8.8.8.8/resolve"] {
+        let r = crate::net::agent().get(base).query("name", host).query("type", "A").set("accept", "application/dns-json").call();
+        let Ok(r) = r else { continue };
+        let Ok(v) = r.into_json::<serde_json::Value>() else { continue };
+        let ip = v.get("Answer").and_then(|a| a.as_array()).and_then(|a| {
+            a.iter().filter(|x| x.get("type").and_then(|t| t.as_u64()) == Some(1)).find_map(|x| x.get("data")?.as_str()?.parse().ok())
+        });
+        if ip.is_some() {
+            return ip;
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,6 +649,15 @@ mod tests {
         let uri = fetch_texture_data_uri(&url).unwrap();
         assert!(uri.starts_with("data:image/png;base64,"));
         assert_eq!(fetch_textures("Notch").unwrap().skin_url, None);
+    }
+
+    #[test]
+    #[ignore]
+    fn live_doh_lookup_and_prefetch() {
+        assert!(doh_lookup("account.ely.by").is_some());
+        let dir = std::env::temp_dir();
+        let args = javaagent_args_prefetched(&dir.join("a.jar")).expect("metadata");
+        assert!(args.contains("-Dauthlibinjector.yggdrasil.prefetched="));
     }
 
     #[test]

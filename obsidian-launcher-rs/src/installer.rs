@@ -1186,7 +1186,8 @@ pub fn build_args(r: &Resolved, prep: &Prepared, game_dir: &Path, auth: &Auth, o
 
     let mut args: Vec<String> = Vec::new();
     if let Some(agent) = &auth.javaagent {
-        args.push(agent.clone());
+        // The agent can bring its own JVM properties after it, one per line.
+        args.extend(agent.lines().filter(|l| !l.trim().is_empty()).map(str::to_owned));
     }
     args.push(format!("-Xmx{}M", o.memory_mb.clamp(512, 65536)));
     args.push(format!("-Xms{}M", (o.memory_mb / 4).clamp(256, 2048)));
