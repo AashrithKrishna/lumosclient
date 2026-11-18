@@ -28,6 +28,30 @@ def rmtree(path):
         sys.exit(f"couldn't remove {path} (is something still using it?)")
 
 
+def fingerprint(src, staged):
+    """The lines a mod adds: in the files it changed (their size differs from the source's), the
+    lines the source doesn't have. Lets a compile error be traced to the mod whose code it is."""
+    added = {}
+    for top in ("crates", "native-crates"):
+        for root, _, files in os.walk(os.path.join(staged, top)):
+            for f in files:
+                if not f.endswith(".rs"):
+                    continue
+                new = os.path.join(root, f)
+                rel = os.path.relpath(new, staged).replace(os.sep, "/")
+                old = os.path.join(src, rel)
+                if os.path.exists(old) and os.path.getsize(old) == os.path.getsize(new):
+                    continue
+                theirs = set()
+                if os.path.exists(old):
+                    theirs = {l.strip() for l in open(old, encoding="utf-8", errors="ignore")}
+                mine = {l.strip() for l in open(new, encoding="utf-8", errors="ignore")} - theirs
+                mine = sorted(l for l in mine if len(l) >= 12)
+                if mine:
+                    added[rel] = mine
+    return added
+
+
 def apply(tool, src, mod_ids, mods_root, out):
     with tempfile.TemporaryDirectory() as tmp:
         sel = os.path.join(tmp, "mods")
@@ -71,9 +95,15 @@ def main():
                 ids.remove(i)
                 failed[i] = "its own Rust crate didn't compile with this Horizon version"
                 print(f"skip {i}: brings its own crate", file=sys.stderr)
+    fp_path = os.path.join(a.work, "fingerprints.json")
+    prints = json.load(open(fp_path)) if os.path.exists(fp_path) else {}
     for i in ids:
         ok, why = apply(a.tool, src, [i], mods, scratch)
         (good.append(i) if ok else failed.__setitem__(i, why))
+        if ok and i not in prints:
+            prints[i] = fingerprint(src, scratch)
+    with open(fp_path, "w") as fh:
+        json.dump(prints, fh)
         print(f"{'ok  ' if ok else 'FAIL'} {i}" + ("" if ok else f": {why}"), file=sys.stderr)
     rmtree(scratch)
     applied = []

@@ -16,7 +16,7 @@ import re
 import subprocess
 import sys
 
-ROUNDS = 8
+ROUNDS = 14
 ANSI = re.compile(r"(?:\x1b|\^\[)\[[0-9;]*m")
 
 
@@ -42,8 +42,44 @@ def mod_names(mods_root, mod_id):
     return found
 
 
+def by_fingerprint(log, stage, applied, prints):
+    """Errors traced exactly: a mod whose added lines include the code at any place the error points to."""
+    blame = {}
+    blocks, cur = [], None
+    for line in log.splitlines():
+        if line.startswith(("error", "warning")):
+            cur = [line] if line.startswith("error") else None
+            if cur is not None:
+                blocks.append(cur)
+        elif cur is not None:
+            cur.append(line)
+    cache = {}
+    for b in blocks:
+        hit = set()
+        for m in re.finditer(r"--> (\S+?):(\d+):\d+", "\n".join(b)):
+            path = posixpath.normpath(m.group(1).replace("\\", "/").split("/stage/", 1)[-1])
+            if path not in cache:
+                try:
+                    cache[path] = open(os.path.join(stage, path), encoding="utf-8", errors="ignore").read().splitlines()
+                except OSError:
+                    cache[path] = []
+            n = int(m.group(2)) - 1
+            text = cache[path][n].strip() if 0 <= n < len(cache[path]) else ""
+            if len(text) >= 12:
+                hit.update(i for i in applied if text in set(prints.get(i, {}).get(path, ())))
+        if 0 < len(hit) <= 6:
+            for i in hit:
+                blame.setdefault(i, f"didn't compile with this Horizon version: {b[0][:300]}")
+    return blame
+
+
 def culprits(log, stage, mods_root, applied):
     """Which applied mods the compile errors point at, each with the first error naming them."""
+    fp = os.path.join(os.path.dirname(stage), "fingerprints.json")
+    if os.path.exists(fp):
+        exact = by_fingerprint(log, stage, applied, json.load(open(fp)))
+        if exact:
+            return exact
     errors = []  # (message, file)
     lines = log.splitlines()
     for n, line in enumerate(lines):
@@ -124,13 +160,21 @@ def main():
         json.dump(excluded, open(os.path.join(work, "excluded.json"), "w"), indent=1)
         subprocess.run([sys.executable, os.path.join(here, "apply.py"), "--tool", a.tool, "--work", work,
                         "--exclude", ",".join(sorted(excluded))], check=True)
+    checked = False
     for rnd in range(1, ROUNDS + 1):
-        cmd = ["cargo", "build", "--locked", "--profile", a.profile, "--manifest-path", os.path.join(stage, "Cargo.toml"),
+        verb = "check" if rnd < ROUNDS and not checked else "build"
+        cmd = ["cargo", verb, "--locked", "--profile", a.profile, "--manifest-path", os.path.join(stage, "Cargo.toml"),
                "-p", a.package, "--bin", "horizon-client", "-p", "horizon-prepare", "--bin", "horizon-prepare"]
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                            env=dict(os.environ, CARGO_TERM_COLOR="never"))
         log = ANSI.sub("", r.stdout + r.stderr)
         print(log[-20000:], file=sys.stderr)
+        if r.returncode == 0 and verb == "check":
+            checked = True  # it type-checks: now the real build
+            r = subprocess.run([c if c != "check" else "build" for c in cmd], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", env=dict(os.environ, CARGO_TERM_COLOR="never"))
+            log = ANSI.sub("", r.stdout + r.stderr)
+            print(log[-20000:], file=sys.stderr)
         if r.returncode == 0:
             print(f"built in round {rnd}; left out for compile errors: {sorted(excluded) or 'none'}")
             return

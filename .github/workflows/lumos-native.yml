@@ -103,7 +103,7 @@ jobs:
   build:
     needs: [plan, exporters]
     if: ${{ !cancelled() }}
-    timeout-minutes: 240
+    timeout-minutes: 350
     strategy:
       fail-fast: false
       max-parallel: 12
