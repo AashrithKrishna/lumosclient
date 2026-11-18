@@ -88,13 +88,16 @@ def main():
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with open(dest, "wb") as out:
                 out.write(z.read(n))
-    if g.get("combined"):
-        # Lumos's own native mods (lumos-mods/<id>/ is already a mixins/<id>/ folder) ride in the combined game.
-        own = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lumos-mods")
-        if os.path.isdir(own):
-            for i in sorted(os.listdir(own)):
-                if i.startswith("lumos_") and os.path.isfile(os.path.join(own, i, "horizon-mixin.toml")):
+    # Lumos's own native mods (lumos-mods/<id>/ is already a mixins/<id>/ folder) ride in the
+    # combined game, and in the group game of the commit they were written for.
+    own = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lumos-mods")
+    if os.path.isdir(own):
+        for i in sorted(os.listdir(own)):
+            manifest = os.path.join(own, i, "horizon-mixin.toml")
+            if i.startswith("lumos_") and os.path.isfile(manifest):
+                if g.get("combined") or g["commit"] in open(manifest, encoding="utf-8").read():
                     shutil.copytree(os.path.join(own, i), os.path.join(mods, i), dirs_exist_ok=True)
+    if g.get("combined"):
         # Retarget: each mod declares the commit it was made for; the combined game is one commit.
         import re
         for root, _, files in os.walk(mods):
