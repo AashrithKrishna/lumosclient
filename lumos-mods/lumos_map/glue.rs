@@ -36,10 +36,9 @@ const REFILL: Duration = Duration::from_secs(1);
 const NEAR_RESCAN: Duration = Duration::from_secs(2);
 /// How often changed regions are written.
 const SAVE_EVERY: Duration = Duration::from_secs(30);
-/// While only the tiles change (exploring with the map open), recompose at most this often.
-const RECOMPOSE: Duration = Duration::from_millis(250);
-/// The minimap recomposes for new tiles at most this often (moving and turning are at once).
-const MINI_RECOMPOSE: Duration = Duration::from_millis(200);
+/// Time a frame may spend drawing terrain cells, with the map closed and open.
+const CELL_BUDGET: Duration = Duration::from_micros(800);
+const CELL_BUDGET_OPEN: Duration = Duration::from_micros(3000);
 /// The most entity markers drawn.
 const MAX_DOTS: usize = 400;
 
@@ -151,10 +150,28 @@ fn plant_tint(name: &str) -> Option<TintSource> {
     }
 }
 
+/// What one column's scan found: the block seen from above, its height, the water over the
+/// ground and the ground under that water.
+#[derive(Clone, Copy, Default)]
+struct Hit {
+    id: u32,
+    color: u8,
+    y: i32,
+    depth: u8,
+    /// Under water: the first block with a colour below it.
+    ground: Option<(u32, u8)>,
+    wall: bool,
+    found: bool,
+}
+
 /// One chunk's columns: the first block with a map colour going down from `start` (the top of
 /// the chunk, or a layer: a block at the layer itself is a wall), and the water over the ground;
-/// with a ceiling and no layer, from the first open space under the roof.
+/// with a ceiling and no layer, from the first open space under the roof. Colours take the
+/// biome tints blended across the quarts around each block (no seams between biomes), and water
+/// shows the ground under it.
+#[allow(clippy::too_many_arguments)]
 fn scan(
+    world: &horizon_client::world::World,
     chunk: &Chunk,
     palette: &Palette,
     air: u32,
@@ -168,10 +185,9 @@ fn scan(
         .find(|&s| !chunk.sections[s].is_uniform(air))
         .map_or(min, |s| min + s as i32 * 16 + 15);
     let (cx, cz) = (chunk.x * 16, chunk.z * 16);
-    let mut tile = m::Tile::default();
+    let mut hits = [Hit::default(); 256];
     for z in 0..16 {
         for x in 0..16 {
-            let i = (z * 16 + x) as usize;
             let mut y = top;
             let mut wall = false;
             if let Some(layer) = layer {
@@ -195,32 +211,73 @@ fn scan(
                     y -= 1;
                     continue;
                 }
-                let mut depth = 0u8;
+                let mut hit = Hit { id, color, y, wall, found: true, ..Hit::default() };
                 if flags & FLUID == 1 {
                     let mut below = y - 1;
-                    while below > min && palette.get(chunk.get(x, below, z)).1 & FLUID == 1 {
-                        depth = depth.saturating_add(1);
+                    while below > min {
+                        let gid = chunk.get(x, below, z);
+                        let (gc, gf) = palette.get(gid);
+                        if gf & FLUID == 1 {
+                            hit.depth = hit.depth.saturating_add(1);
+                        } else if gc != 0 {
+                            hit.ground = Some((gid, gc));
+                            break;
+                        }
                         below -= 1;
                     }
                 }
-                let look = palette.look.get(id as usize).copied().unwrap_or_default();
-                let mut rgb = if look.known {
-                    let biome = chunk.biome(x, y, z);
-                    m::block_rgb(&look, &tints(biome, cx + x, cz + z))
-                } else {
-                    0
-                };
-                if wall {
-                    // Walls cut at the layer: darker, so the floor stands out.
-                    let base = if rgb != 0 { rgb } else { MAP_COLORS.get(usize::from(color)).copied().unwrap_or(0) };
-                    rgb = m::tinted(base, 0x707070).max(1);
-                }
-                tile.color[i] = color;
-                tile.rgb[i] = rgb;
-                tile.height[i] = y.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
-                tile.depth[i] = depth;
+                hits[(z * 16 + x) as usize] = hit;
                 break;
             }
+        }
+    }
+    // The biome tints of this chunk's quarts and the ring of quarts around it (from the chunks
+    // beside it where they are loaded), each at its column's height.
+    let mut grid: m::TintGrid = [m::BiomeTints::default(); 36];
+    for qz in 0..6i32 {
+        for qx in 0..6i32 {
+            let (lx, lz) = ((qx - 1) * 4 + 1, (qz - 1) * 4 + 1);
+            let own = hits[(lz.clamp(0, 15) * 16 + lx.clamp(0, 15)) as usize];
+            let y = if own.found { own.y } else { 64 };
+            let (dx, dz) = (lx.div_euclid(16), lz.div_euclid(16));
+            let other = if dx == 0 && dz == 0 { None } else { world.chunks.get(&(chunk.x + dx, chunk.z + dz)) };
+            let biome = match other {
+                Some(c) => c.biome(lx.rem_euclid(16), y, lz.rem_euclid(16)),
+                None => chunk.biome(lx.clamp(0, 15), y, lz.clamp(0, 15)),
+            };
+            grid[(qz * 6 + qx) as usize] = tints(biome, cx + lx, cz + lz);
+        }
+    }
+    let colour = |id: u32, t: &m::BiomeTints| {
+        let look = palette.look.get(id as usize).copied().unwrap_or_default();
+        look.known.then(|| m::block_rgb(&look, t))
+    };
+    let map_rgb = |c: u8| MAP_COLORS.get(usize::from(c)).copied().unwrap_or(0);
+    let mut tile = m::Tile::default();
+    for z in 0..16 {
+        for x in 0..16 {
+            let i = (z * 16 + x) as usize;
+            let h = hits[i];
+            if !h.found {
+                continue;
+            }
+            let t = m::blend_tints(&grid, x, z);
+            let mut rgb = colour(h.id, &t).unwrap_or(0);
+            if let Some((gid, gc)) = h.ground
+                && rgb != 0
+            {
+                let ground = colour(gid, &t).unwrap_or_else(|| map_rgb(gc));
+                rgb = m::water_over(ground, rgb, h.depth).max(1);
+            }
+            if h.wall {
+                // Walls cut at the layer: darker, so the floor stands out.
+                let base = if rgb != 0 { rgb } else { map_rgb(h.color) };
+                rgb = m::tinted(base, 0x707070).max(1);
+            }
+            tile.color[i] = h.color;
+            tile.rgb[i] = rgb;
+            tile.height[i] = h.y.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
+            tile.depth[i] = h.depth;
         }
     }
     tile
@@ -316,6 +373,9 @@ struct Layer {
     tiles: HashMap<(i32, i32), (m::Tile, u64)>,
     queue: VecDeque<(i32, i32)>,
     revision: u64,
+    /// Chunks scanned since the maps last looked, and a count that goes up when it starts over.
+    changed: Vec<(i32, i32)>,
+    epoch: u64,
 }
 
 impl Layer {
@@ -340,14 +400,15 @@ struct State {
     world_asked: Option<Instant>,
     was_dead: bool,
     screen: m::MapScreen,
-    image: Vec<u8>,
-    /// What the uploaded map image shows: the view, the tiles' revision, its size, and when.
-    composed: Option<(m::MapView, u64, (u32, u32), Instant)>,
+    /// The terrain cells in the mod image slot, shared by the minimap and the world map.
+    cells: m::CellCache,
+    /// The slot's place in the atlas when the cells were drawn (a rebuilt atlas loses them),
+    /// and the look they were drawn in.
+    cells_for: Option<([f32; 4], m::Look)>,
+    /// Goes up when every cell must be drawn again (new colours, another world).
+    cells_gen: u64,
     /// The cave layer under the player's head.
     cave: Option<Layer>,
-    /// The minimap image: what it shows, the tiles' revision, its side, and when.
-    mini: Option<(m::MiniView, u64, usize, Instant)>,
-    mini_image: Vec<u8>,
     /// The biome at the player's block, by block.
     biome: Option<([i32; 3], String)>,
     /// The world map's layer (`MapScreen::slice`), scanned live.
@@ -429,19 +490,6 @@ fn upload(game: &mut Game<'_>, at: [u32; 2], w: u32, h: u32, rgba: Vec<u8>) -> b
         rgba,
     });
     true
-}
-
-/// Part `src` of the mod image slot drawn into `dst`, `alpha` opaque.
-fn draw_image(game: &Game<'_>, batch: &mut HudBatch, src: [f32; 4], dst: [f32; 4], alpha: u8) {
-    let Some(mut r) = game.gui.atlas.sprites.get(MOD_IMAGE_SPRITE).copied() else {
-        return;
-    };
-    let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
-    r.u0 += src[0] * du;
-    r.v0 += src[1] * dv;
-    r.u1 = r.u0 + src[2] * du;
-    r.v1 = r.v0 + src[3] * dv;
-    batch.rect_uv(dst[0], dst[1], dst[2], dst[3], r, rgba(255, 255, 255, alpha));
 }
 
 /// Follows the world and dimension played: the explored map and the waypoints of each.
@@ -555,8 +603,8 @@ fn open_world(s: &mut State, dir: PathBuf, dim: &'static str) {
     s.explored = Some(Explored::open(&dir, dim));
     s.cave = None;
     s.slice = None;
-    s.composed = None;
-    s.mini = None;
+    s.cells.clear();
+    s.cells_gen += 1;
 }
 
 /// The colour table: asked for when the resources change, taken in when it is made.
@@ -569,6 +617,7 @@ fn follow_colours(game: &Game<'_>, s: &mut State) {
         s.palette = Some(Palette::new(game, table));
         s.colours_version = Some(v);
         s.tints.clear();
+        s.cells_gen += 1;
         // Every loaded chunk again, in these colours.
         if let Some(e) = s.explored.as_mut() {
             e.seen.clear();
@@ -650,7 +699,7 @@ fn explore(game: &Game<'_>, s: &mut State, budget: Duration) {
         let Some(chunk) = world.chunks.get(&k) else {
             continue;
         };
-        e.store.put(k, scan(chunk, palette, air, ceiling, None, &mut tint));
+        e.store.put(k, scan(world, chunk, palette, air, ceiling, None, &mut tint));
         e.seen.insert(k);
     }
     if e.saved.elapsed() >= SAVE_EVERY {
@@ -692,9 +741,13 @@ fn follow_layer(
     let world = &game.world;
     // A new height (by more than a step) or changed blocks: scanned again, nearest first.
     if (layer.y - y).abs() >= 2 || layer.tiles.is_empty() {
+        if !layer.tiles.is_empty() || layer.y != y {
+            layer.epoch += 1;
+        }
         layer.y = y;
         layer.queue.clear();
         layer.tiles.retain(|_, _| false);
+        layer.changed.clear();
     }
     if layer.queue.is_empty() {
         let mut keys = Vec::new();
@@ -720,9 +773,10 @@ fn follow_layer(
         let Some(chunk) = world.chunks.get(&k) else {
             continue;
         };
-        let tile = scan(chunk, palette, air, false, Some(layer.y), &mut tint);
+        let tile = scan(world, chunk, palette, air, false, Some(layer.y), &mut tint);
         layer.tiles.insert(k, (tile, world.revision));
         layer.revision += 1;
+        layer.changed.push(k);
     }
 }
 
@@ -742,11 +796,8 @@ fn look(settings: &m::Settings) -> m::Look {
     }
 }
 
-/// Composes and uploads the world map's image when the view or the tiles changed: the explored
-/// surface (unloaded ground dimmed), or a layer of the loaded chunks.
-fn refresh_image(game: &mut Game<'_>, s: &mut State, settings: &m::Settings) {
-    let (w, h) = game.gui_size();
-    let rect = map_rect(w, h);
+/// The world map follows the player (when set) and keeps its layer scanned.
+fn follow_map(game: &Game<'_>, s: &mut State) {
     if s.screen.follow
         && let Some(p) = player_pos(game)
     {
@@ -761,53 +812,6 @@ fn refresh_image(game: &mut Game<'_>, s: &mut State, settings: &m::Settings) {
     } else {
         s.slice = None;
     }
-    let (iw, ih, scale) = m::image_size(rect[2], rect[3]);
-    let view = s.screen.view;
-    let rev = match (&s.slice, &s.explored) {
-        (Some(l), _) => l.revision | 1 << 62,
-        (None, Some(e)) => e.store.revision,
-        _ => return,
-    };
-    let fresh = s.composed.is_some_and(|(v, r, size, at)| {
-        v == view && size == (iw, ih) && (r == rev || (r >> 62 == rev >> 62 && at.elapsed() < RECOMPOSE))
-    });
-    if fresh {
-        return;
-    }
-    let mut image = std::mem::take(&mut s.image);
-    {
-        let chunks = &game.world.chunks;
-        let loaded = |x: i32, z: i32| chunks.contains_key(&(x, z));
-        match (&s.slice, &s.explored) {
-            (Some(l), _) => m::compose(
-                |x, z| l.column(x, z),
-                &MAP_COLORS,
-                look(settings),
-                &view,
-                iw,
-                ih,
-                scale,
-                None,
-                &mut image,
-            ),
-            (None, Some(e)) => m::compose(
-                |x, z| e.store.column(x, z),
-                &MAP_COLORS,
-                look(settings),
-                &view,
-                iw,
-                ih,
-                scale,
-                Some(&loaded),
-                &mut image,
-            ),
-            _ => {}
-        }
-    }
-    if upload(game, [0, 0], iw, ih, image.clone()) {
-        s.composed = Some((view, rev, (iw, ih), Instant::now()));
-    }
-    s.image = image;
 }
 
 /// The explored map around the world map's centre, a block a pixel (at most 2048 across), saved
@@ -816,7 +820,7 @@ fn export_png(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
     let Some(e) = s.explored.as_ref() else {
         return;
     };
-    let view = m::MapView { zoom: 3, ..s.screen.view };
+    let view = s.screen.view;
     // The explored tiles' extent, cut to 2048 blocks around the view.
     let (mut x0, mut z0, mut x1, mut z1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
     let (cx, cz) = ((view.x.floor() as i32) >> 4, (view.z.floor() as i32) >> 4);
@@ -836,10 +840,10 @@ fn export_png(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
     let at = m::MapView {
         x: f64::from(x0 * 16) + f64::from(w) / 2.0,
         z: f64::from(z0 * 16) + f64::from(h) / 2.0,
-        zoom: 3,
+        zoom: m::MAP_ZOOM_ONE,
     };
     let mut image = Vec::new();
-    m::compose(|x, z| e.store.column(x, z), &MAP_COLORS, look(settings), &at, w, h, 1.0, None, &mut image);
+    m::compose(|x, z| e.store.column(x, z), &MAP_COLORS, look(settings), &at, w, h, 1.0, &mut image);
     let dir = base(game).join("exports");
     let world = s
         .world_dir
@@ -857,59 +861,100 @@ fn export_png(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
     notice(s, format!("Saved lumos-map/exports/{name} ({w} x {h})"));
 }
 
-/// Composes and uploads the minimap's image when what it shows changed.
-fn refresh_minimap(game: &mut Game<'_>, s: &mut State, settings: &m::Settings) {
+/// The minimap's blocks per GUI pixel.
+fn mini_bpp(settings: &m::Settings) -> f32 {
+    m::ZOOMS[settings.zoom.min(m::ZOOMS.len() - 1)]
+}
+
+/// Underground: the cave layer under the head, kept scanned around the player.
+fn follow_cave(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
     let Some(p) = player_pos(game) else {
         return;
     };
-    let size = m::SIZES[settings.size];
-    let side = m::mini_side(size);
-    let bpp = m::ZOOMS[settings.zoom];
-    let view = m::MiniView {
-        x: p[0],
-        z: p[2],
-        yaw: game.yaw,
-        rotate: settings.rotate,
-        bpp,
-        round: settings.round,
-        look: look(settings),
-    };
-    // Underground: the cave layer under the head, kept scanned around the player.
-    let cave = cave_height(game, settings);
-    if let Some(y) = cave {
-        let reach = side as f32 / 2.0 * bpp * std::f32::consts::SQRT_2;
+    if let Some(y) = cave_height(game, settings) {
+        let size = m::SIZES[settings.size];
+        let reach = size / 2.0 * mini_bpp(settings) * std::f32::consts::SQRT_2;
         let radius = ((reach / 16.0).ceil() as i32 + 1).min(game.settings.render_distance.max(2));
         let centre = ((p[0].floor() as i32) >> 4, (p[2].floor() as i32) >> 4);
         follow_layer(game, s, false, y, centre, radius, CAVE_BUDGET);
     } else {
         s.cave = None;
     }
-    let rev = match (&s.cave, &s.explored) {
-        (Some(l), _) if cave.is_some() => l.revision,
-        (_, Some(e)) => e.store.revision,
-        _ => 0,
-    };
-    let fresh = s.mini.is_some_and(|(v, r, sd, at)| {
-        !view.differs(&v) && sd == side && (r == rev || at.elapsed() < MINI_RECOMPOSE)
-    });
-    if fresh {
-        return;
-    }
-    let mut image = std::mem::take(&mut s.mini_image);
-    match (&s.cave, &s.explored) {
-        (Some(l), _) if cave.is_some() => {
-            m::compose_minimap(|x, z| l.column(x, z), &MAP_COLORS, &view, side, &mut image)
-        }
-        (_, Some(e)) => m::compose_minimap(|x, z| e.store.column(x, z), &MAP_COLORS, &view, side, &mut image),
-        _ => return,
-    }
-    if upload(game, m::MINI_AT, side as u32, side as u32, image.clone()) {
-        s.mini = Some((view, rev, side, Instant::now()));
-    }
-    s.mini_image = image;
 }
 
-/// `native_frame`: the world followed, chunks explored, a death marked, the images kept.
+/// A source's epoch for its cells: they are drawn again when it changes.
+fn epoch_of(s: &State, source: u8) -> u64 {
+    let own = match source {
+        0 => s.explored.as_ref().map_or(0, |e| e.store.epoch),
+        1 => s.cave.as_ref().map_or(0, |l| l.epoch),
+        _ => s.slice.as_ref().map_or(0, |l| l.epoch),
+    };
+    s.cells_gen << 32 | own
+}
+
+/// Cell upkeep once a frame: cells of changed chunks marked, the cells the maps asked for last
+/// frame drawn and uploaded within `budget`, and a new frame begun.
+fn draw_wanted_cells(game: &mut Game<'_>, s: &mut State, settings: &m::Settings, budget: Duration) {
+    let started = Instant::now();
+    // A rebuilt atlas (resources reloaded) or another look: every cell again.
+    let rect = game.gui.atlas.sprites.get(MOD_IMAGE_SPRITE).map(|r| [r.u0, r.v0, r.u1, r.v1]);
+    let Some(rect) = rect else {
+        return;
+    };
+    let now = (rect, look(settings));
+    if s.cells_for != Some(now) {
+        s.cells_for = Some(now);
+        s.cells.clear();
+        s.cells_gen += 1;
+    }
+    if let Some(e) = s.explored.as_mut() {
+        for k in std::mem::take(&mut e.store.changed) {
+            s.cells.chunk_changed(0, k);
+        }
+    }
+    if let Some(l) = s.cave.as_mut() {
+        for k in std::mem::take(&mut l.changed) {
+            s.cells.chunk_changed(1, k);
+        }
+    }
+    if let Some(l) = s.slice.as_mut() {
+        for k in std::mem::take(&mut l.changed) {
+            s.cells.chunk_changed(2, k);
+        }
+    }
+    let todo = s.cells.take_wanted(1024);
+    let look = look(settings);
+    let mut px = [0u8; 1024];
+    for key in todo {
+        if started.elapsed() >= budget {
+            break;
+        }
+        let empty = match key.source {
+            0 => match s.explored.as_ref() {
+                Some(e) => m::compose_cell(|x, z| e.store.column(x, z), &MAP_COLORS, look, key, &mut px),
+                None => continue,
+            },
+            1 => match s.cave.as_ref() {
+                Some(l) => m::compose_cell(|x, z| l.column(x, z), &MAP_COLORS, look, key, &mut px),
+                None => continue,
+            },
+            _ => match s.slice.as_ref() {
+                Some(l) => m::compose_cell(|x, z| l.column(x, z), &MAP_COLORS, look, key, &mut px),
+                None => continue,
+            },
+        };
+        let epoch = epoch_of(s, key.source);
+        let Some(slot) = s.cells.place(key, epoch, empty) else {
+            break;
+        };
+        if !empty {
+            upload(game, m::slot_origin(slot), m::CELL, m::CELL, px.to_vec());
+        }
+    }
+    s.cells.next_frame();
+}
+
+/// `native_frame`: the world followed, chunks explored, a death marked, the cells kept.
 pub(super) fn on_frame(game: &mut Game<'_>) {
     if !game.native_on(m::ID) || game.player.is_none() {
         return;
@@ -940,11 +985,12 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
         s.was_dead = dead;
         if open {
             if s.screen.page == m::Page::Map {
-                refresh_image(game, s, &settings);
+                follow_map(game, s);
             }
         } else if settings.minimap && !game.ui.hide_gui {
-            refresh_minimap(game, s, &settings);
+            follow_cave(game, s, &settings);
         }
+        draw_wanted_cells(game, s, &settings, if open { CELL_BUDGET_OPEN } else { CELL_BUDGET });
     });
 }
 
@@ -955,8 +1001,8 @@ pub(super) fn on_level_unload(game: &mut Game<'_>) {
             e.save();
         }
         s.cave = None;
-        s.composed = None;
-        s.mini = None;
+        s.cells.clear();
+        s.cells_gen += 1;
         s.world_asked = None;
         s.biome = None;
         s.was_dead = false;
@@ -964,6 +1010,66 @@ pub(super) fn on_level_unload(game: &mut Game<'_>) {
         s.spawn_checked = None;
     });
     let _ = game;
+}
+
+/// Where the cells of `source` at `lod` covering world `x0..x1, z0..z1` land on screen
+/// (`to_screen` maps a world point), cut to the convex `clip`, drawn `alpha` opaque. Cells not
+/// drawn yet are asked for.
+#[allow(clippy::too_many_arguments)]
+fn draw_cells(
+    game: &Game<'_>,
+    s: &mut State,
+    batch: &mut HudBatch,
+    source: u8,
+    lod: u8,
+    area: [f64; 4],
+    to_screen: &dyn Fn(f64, f64) -> [f32; 2],
+    clip: &[[f32; 2]],
+    alpha: u8,
+) {
+    let Some(r) = game.gui.atlas.sprites.get(MOD_IMAGE_SPRITE).copied() else {
+        return;
+    };
+    let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
+    let span = f64::from(16i32 << lod);
+    let cell = |v: f64| (v / span).floor() as i32;
+    let epoch = epoch_of(s, source);
+    let colour = rgba(255, 255, 255, alpha);
+    // A hair inside each cell, so nearest sampling never reads the next one.
+    let eps = 0.01;
+    for cz in cell(area[1])..=cell(area[3]) {
+        for cx in cell(area[0])..=cell(area[2]) {
+            let key = m::CellKey { source, lod, x: cx, z: cz };
+            let Some((slot, empty)) = s.cells.get(key, epoch) else {
+                continue;
+            };
+            if empty {
+                continue;
+            }
+            let [ox, oy] = m::slot_origin(slot);
+            let (u0, v0) = (r.u0 + (ox as f32 + eps) * du, r.v0 + (oy as f32 + eps) * dv);
+            let (u1, v1) = (r.u0 + (ox as f32 + 16.0 - eps) * du, r.v0 + (oy as f32 + 16.0 - eps) * dv);
+            let (x0, z0) = (f64::from(cx) * span, f64::from(cz) * span);
+            let p = [to_screen(x0, z0), to_screen(x0 + span, z0), to_screen(x0 + span, z0 + span), to_screen(x0, z0 + span)];
+            let poly = [
+                [p[0][0], p[0][1], u0, v0],
+                [p[1][0], p[1][1], u1, v0],
+                [p[2][0], p[2][1], u1, v1],
+                [p[3][0], p[3][1], u0, v1],
+            ];
+            for q in m::fan_quads(&m::clip_polygon(&poly, clip)) {
+                batch.quad(q.map(|v| [v[0], v[1]]), q.map(|v| [v[2], v[3]]), colour);
+            }
+        }
+    }
+}
+
+/// A convex polygon filled with `argb`.
+fn fill_polygon(game: &Game<'_>, batch: &mut HudBatch, poly: &[[f32; 2]], argb: u32) {
+    let verts: Vec<m::Vert> = poly.iter().map(|p| [p[0], p[1], 0.0, 0.0]).collect();
+    for q in m::fan_quads(&verts) {
+        game.native_quad(batch, q.map(|v| [v[0], v[1]]), argb);
+    }
 }
 
 /// `native_key`: M opens (or closes) the world map, B adds a waypoint where you stand.
@@ -991,7 +1097,6 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
                 s.screen.view.z = p[2];
                 s.screen.page = m::Page::Map;
                 s.screen.press = None;
-                s.composed = None;
             });
         }
     } else if keys::pressed(game, keys::WAYPOINT, key, true) {
@@ -1031,7 +1136,6 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
             for (k, v) in s.stored() {
                 game.native_set_setting(m::ID, k, &v);
             }
-            with(|st| st.mini = None);
             game.native_client_action_bar(Text::literal(text), false);
         }
     }
@@ -1082,8 +1186,7 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
         return;
     }
     let size = m::SIZES[s.size];
-    let side = m::mini_side(size);
-    let bpp = m::ZOOMS[s.zoom] * side as f32 / size;
+    let bpp = mini_bpp(&s);
     let block = block_of(p);
     let mut lines: Vec<String> = Vec::new();
     if s.coords {
@@ -1110,24 +1213,34 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
     if s.time {
         lines.push(m::clock(game.world.day_time));
     }
+    // Room for the frame round the map.
+    let pad = 3.0;
     let info_h = lines.len() as f32 * 10.0;
-    let (x, y0) = corners.place(at, size, size + info_h + if lines.is_empty() { 0.0 } else { 2.0 });
+    let (x, y0) = corners.place(at, size + pad * 2.0, size + pad * 2.0 + info_h + if lines.is_empty() { 0.0 } else { 1.0 });
+    let x = x + pad;
     let top = matches!(at, Corner::TopLeft | Corner::TopRight);
-    let (map_y, text_y) = if top { (y0, y0 + size + 2.0) } else { (y0 + info_h + 2.0, y0) };
+    let (map_y, text_y) = if top { (y0 + pad, y0 + size + pad * 2.0 + 1.0) } else { (y0 + info_h + 1.0 + pad, y0) };
     let alpha = m::OPACITY[s.opacity];
-    let shown = with(|st| st.mini.map(|(_, _, sd, _)| sd));
-    if let Some(sd) = shown {
-        let src = [m::MINI_AT[0] as f32, m::MINI_AT[1] as f32, sd as f32, sd as f32];
-        draw_image(game, batch, src, [x, map_y, size, size], alpha);
-    }
+    let (cx, cy) = (x + size / 2.0, map_y + size / 2.0);
+    // The map moves smoothly between ticks: the player where this frame draws them.
+    let p = {
+        let pl = game.player.as_ref().map(|pl| pl.position);
+        match pl {
+            Some(now) => {
+                let at = game.previous_position.lerp(now, game.clock.camera_fraction());
+                [at.x, at.y, at.z]
+            }
+            None => p,
+        }
+    };
+    let yaw = game.yaw;
+    let to_map = |wx: f64, wz: f64| m::minimap_point(wx - p[0], wz - p[2], yaw, s.rotate, bpp);
+    draw_minimap_terrain(game, batch, &s, p, [cx, cy], size, alpha);
     for (i, line) in lines.iter().enumerate() {
         let w = game.native_text_width(line);
         game.native_text(batch, line, [x + (size - w) / 2.0, text_y + i as f32 * 10.0], 0xFFFFFF, true);
     }
-    let (cx, cy) = (x + size / 2.0, map_y + size / 2.0);
     let radius = size / 2.0 - 2.0;
-    let gui_bpp = bpp;
-    let to_map = |wx: f64, wz: f64| m::minimap_point(wx - p[0], wz - p[2], game.yaw, s.rotate, gui_bpp);
     // Mobs and players: arrows the way they face.
     let mut drawn = 0;
     for mob in game.mobs.iter() {
@@ -1160,7 +1273,7 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
         drawn += 1;
     }
     // Your own arrow.
-    let turn = if s.rotate { 180.0 } else { game.yaw };
+    let turn = if s.rotate { 180.0 } else { yaw };
     game.native_quad(batch, m::arrow([cx, cy], turn, 5.0), 0xFF00_0000);
     game.native_quad(batch, m::arrow([cx, cy], turn, 3.8), 0xFFFF_FFFF);
     // Waypoints: on the rim when they are farther than the map reaches.
@@ -1185,6 +1298,73 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
             let colour = if letter == 'N' { 0xFF5555 } else { 0xE0E0E0 };
             game.native_text(batch, &t, [tx.round(), ty.round()], colour, true);
         }
+    }
+}
+
+/// The minimap's ground: its shadow, the unexplored background, the terrain cells turned and
+/// moved on the GPU (no image redrawn as you walk or turn), and its frame.
+#[allow(clippy::too_many_arguments)]
+fn draw_minimap_terrain(
+    game: &Game<'_>,
+    batch: &mut HudBatch,
+    settings: &m::Settings,
+    p: [f64; 3],
+    c: [f32; 2],
+    size: f32,
+    alpha: u8,
+) {
+    let half = size / 2.0;
+    let round = settings.round;
+    let shade = |a: u32| (a * u32::from(alpha) / 255) << 24;
+    // A soft shadow under it.
+    if round {
+        for (r0, r1, a) in [(half, half + 3.0, 0x30u32), (half, half + 1.5, 0x40)] {
+            for q in m::ring(c, r0, r1) {
+                game.native_quad(batch, q, shade(a));
+            }
+        }
+    } else {
+        game.native_fill(batch, [c[0] - half - 2.0, c[1] - half - 1.0, size + 4.0, size + 4.0], shade(0x30));
+        game.native_fill(batch, [c[0] - half - 1.0, c[1] - half, size + 2.0, size + 2.0], shade(0x40));
+    }
+    let outline = m::outline(c, half, round);
+    fill_polygon(game, batch, &outline, shade(0xFF) | 0x00_1A1C_20);
+    let bpp = f64::from(mini_bpp(settings));
+    let reach = f64::from(half) * bpp * if settings.rotate { std::f64::consts::SQRT_2 } else { 1.0 } + 1.0;
+    let area = [p[0] - reach, p[2] - reach, p[0] + reach, p[2] + reach];
+    // A texel no smaller than about a GUI pixel, and few enough cells.
+    let lod = m::lod_for(bpp, 1500, |lod| {
+        let n = (2.0 * reach / f64::from(16i32 << lod)).ceil() as usize + 1;
+        n * n
+    });
+    let yaw = game.yaw;
+    let rotate = settings.rotate;
+    let to_screen = |wx: f64, wz: f64| {
+        let (u, v) = m::minimap_point(wx - p[0], wz - p[2], yaw, rotate, bpp as f32);
+        [c[0] + u, c[1] + v]
+    };
+    with(|st| {
+        let source = if st.cave.is_some() && cave_height(game, settings).is_some() { 1 } else { 0 };
+        draw_cells(game, st, batch, source, lod, area, &to_screen, &outline, alpha);
+    });
+    // The frame: a dark rim with a faint light edge inside it.
+    if round {
+        for q in m::ring(c, half - 0.5, half + 1.0) {
+            game.native_quad(batch, q, shade(0xFF) | 0x00_0C0C_0E);
+        }
+        for q in m::ring(c, half - 1.5, half - 0.5) {
+            game.native_quad(batch, q, shade(0x28) | 0x00FF_FFFF);
+        }
+    } else {
+        let (x, y) = (c[0] - half, c[1] - half);
+        let dark = shade(0xFF) | 0x00_0C0C_0E;
+        game.native_fill(batch, [x - 1.0, y - 1.0, size + 2.0, 1.0], dark);
+        game.native_fill(batch, [x - 1.0, y + size, size + 2.0, 1.0], dark);
+        game.native_fill(batch, [x - 1.0, y, 1.0, size], dark);
+        game.native_fill(batch, [x + size, y, 1.0, size], dark);
+        let light = shade(0x28) | 0x00FF_FFFF;
+        game.native_fill(batch, [x, y, size, 1.0], light);
+        game.native_fill(batch, [x, y + 1.0, 1.0, size - 1.0], light);
     }
 }
 
@@ -1431,16 +1611,31 @@ pub(super) fn on_render(game: &Game<'_>, batch: &mut HudBatch, screen: &NativeSc
     });
 }
 
-fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &State, settings: &m::Settings, mouse: [f32; 2]) {
+fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::Settings, mouse: [f32; 2]) {
     let (w, h) = (batch.width, batch.height);
     let rect = map_rect(w, h);
     let view = s.screen.view;
-    if let Some((v, _, (iw, ih), _)) = s.composed
-        && v == view
-    {
-        draw_image(game, batch, [0.0, 0.0, iw as f32, ih as f32], rect, 255);
-    }
+    let [ur, ug, ub, _] = m::UNKNOWN;
+    game.native_fill(batch, rect, 0xFF00_0000 | u32::from(ur) << 16 | u32::from(ug) << 8 | u32::from(ub));
     let (x0, z0, x1, z1) = view.bounds(rect);
+    {
+        let bpp = view.bpp();
+        let (bw, bh) = (x1 - x0, z1 - z0);
+        // A texel about a GUI pixel; coarser when the cells would not fit the slot.
+        let lod = m::lod_for(bpp, m::CELLS * 9 / 10, |lod| {
+            let span = f64::from(16i32 << lod);
+            ((bw / span).ceil() as usize + 1) * ((bh / span).ceil() as usize + 1)
+        });
+        let source = if s.slice.is_some() { 2 } else { 0 };
+        let clip = [
+            [rect[0], rect[1]],
+            [rect[0] + rect[2], rect[1]],
+            [rect[0] + rect[2], rect[1] + rect[3]],
+            [rect[0], rect[1] + rect[3]],
+        ];
+        let to_screen = |x: f64, z: f64| view.screen_of(rect, x, z);
+        draw_cells(game, s, batch, source, lod, [x0, z0, x1, z1], &to_screen, &clip, 255);
+    }
     // The chunk grid, when chunks are at least 4 pixels across.
     if s.screen.grid && view.bpp() <= 4.0 {
         let mut cx = (x0 / 16.0).floor() as i64 * 16;
@@ -1861,7 +2056,7 @@ pub(super) fn on_scroll(game: &mut Game<'_>, screen: &str, mouse: [f32; 2], scro
     let (w, h) = game.gui_size();
     let step = if scroll[1] > 0.0 { 1 } else { -1 };
     with(|s| match &mut s.screen.page {
-        m::Page::Map => s.screen.view.zoom_at(map_rect(w, h), mouse, step),
+        m::Page::Map => s.screen.view.zoom_at(map_rect(w, h), mouse, step, 0, m::MAP_ZOOM_STEPS - 1),
         m::Page::List { scroll } => {
             let rows = m::list_rows(h);
             let max = s.book.list.len().saturating_sub(rows);
@@ -1976,5 +2171,4 @@ pub(super) fn on_click(game: &mut Game<'_>, mod_id: &str, button: usize) {
     for (key, value) in s.stored() {
         game.native_set_setting(m::ID, key, &value);
     }
-    with(|st| st.mini = None);
 }

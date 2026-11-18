@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 pub const ID: &str = "lumos_map";
 pub const NAME: &str = "Map";
-pub const VERSION: &str = "2.0.0";
+pub const VERSION: &str = "3.0.0";
 pub const DESCRIPTION: &str = "A minimap in the game's own colours with nearby players and \
 mobs, cave view and info lines; waypoints in sets, with death points, shown in the world and \
 on both maps; and a world map (M) of everywhere you have been, saved per world and server.";
@@ -25,8 +25,9 @@ pub const SCREEN: &str = "mod";
 
 pub const CORNERS: [&str; 4] = ["Top left", "Top right", "Bottom left", "Bottom right"];
 pub const SIZES: [f32; 6] = [64.0, 80.0, 96.0, 112.0, 128.0, 160.0];
-/// Blocks per texel of the minimap (two texels a GUI pixel).
-pub const ZOOMS: [f32; 7] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0];
+/// The minimap's zoom: blocks per GUI pixel, in steps of a square root of two. The map's own
+/// texture is a block a texel, drawn with crisp (nearest) pixels at any of these.
+pub const ZOOMS: [f32; 9] = [0.25, 0.35, 0.5, 0.71, 1.0, 1.41, 2.0, 2.83, 4.0];
 pub const OPACITY: [u8; 5] = [255, 217, 178, 140, 102];
 pub const DEATHS: [usize; 4] = [1, 3, 5, 10];
 pub const SORTS: [&str; 3] = ["Name", "Distance", "Newest"];
@@ -82,7 +83,7 @@ impl Default for Settings {
             minimap: true,
             corner: 1,
             size: 2,
-            zoom: 3,
+            zoom: 4,
             opacity: 0,
             round: false,
             rotate: true,
@@ -433,6 +434,10 @@ pub struct Store {
     pub dirty: HashSet<(i32, i32)>,
     /// Goes up with each change, so a composed image knows it is old.
     pub revision: u64,
+    /// Chunks changed since the maps last looked (their cells are drawn again).
+    pub changed: Vec<(i32, i32)>,
+    /// Goes up when many tiles changed at once (loaded from disk): every cell is drawn again.
+    pub epoch: u64,
 }
 
 impl Store {
@@ -444,6 +449,7 @@ impl Store {
         self.tiles.insert(chunk, tile);
         self.dirty.insert(region_of(chunk));
         self.revision += 1;
+        self.changed.push(chunk);
         true
     }
 
@@ -458,6 +464,7 @@ impl Store {
         }
         if any {
             self.revision += 1;
+            self.epoch += 1;
         }
     }
 
@@ -535,6 +542,56 @@ pub fn decode_region(region: (i32, i32), bytes: &[u8]) -> Option<Vec<((i32, i32)
     Some(out)
 }
 
+// ---------------------------------------------------------------- biome blending, water
+
+/// Biome tints of a chunk and the quarts around it: 6 x 6 cells of 4 x 4 blocks, row by row,
+/// cell (1, 1) being the chunk's own north-west quart.
+pub type TintGrid = [BiomeTints; 36];
+
+fn lerp_rgb(a: u32, b: u32, t: f32) -> u32 {
+    let ch = |s: u32| {
+        let (x, y) = (((a >> s) & 255) as f32, ((b >> s) & 255) as f32);
+        ((x + (y - x) * t).round().clamp(0.0, 255.0) as u32) << s
+    };
+    ch(16) | ch(8) | ch(0)
+}
+
+/// The tints at block `lx, lz` of the chunk (0..16), blended between the centres of the four
+/// nearest quarts: no seam where one biome meets another, as the game's own biome blend.
+pub fn blend_tints(grid: &TintGrid, lx: i32, lz: i32) -> BiomeTints {
+    // Quart centres sit at 2, 6, 10, 14 (and -2, 18 in the neighbours); grid index = quart + 1.
+    let at = |l: i32| {
+        let f = (l as f32 + 0.5 - 2.0) / 4.0 + 1.0;
+        let i = (f.floor() as i32).clamp(0, 4);
+        (i as usize, (f - i as f32).clamp(0.0, 1.0))
+    };
+    let (ix, tx) = at(lx);
+    let (iz, tz) = at(lz);
+    let g = |x: usize, z: usize| grid[z * 6 + x];
+    let mix = |f: fn(&BiomeTints) -> u32| {
+        let top = lerp_rgb(f(&g(ix, iz)), f(&g(ix + 1, iz)), tx);
+        let bottom = lerp_rgb(f(&g(ix, iz + 1)), f(&g(ix + 1, iz + 1)), tx);
+        lerp_rgb(top, bottom, tz)
+    };
+    BiomeTints {
+        grass: mix(|t| t.grass),
+        foliage: mix(|t| t.foliage),
+        dry_foliage: mix(|t| t.dry_foliage),
+        water: mix(|t| t.water),
+    }
+}
+
+/// Water seen from above: the ground under it showing through, less the deeper it is, and the
+/// whole darker with depth. `depth` is the water blocks under the top one.
+pub fn water_over(ground: u32, water: u32, depth: u8) -> u32 {
+    let d = f32::from(depth.min(30));
+    let cover = (0.42 + d * 0.07).min(0.9);
+    let mixed = lerp_rgb(ground, water, cover);
+    let dark = 1.0 - (d * 0.014).min(0.32);
+    let ch = |s: u32| ((((mixed >> s) & 255) as f32 * dark).round() as u32) << s;
+    ch(16) | ch(8) | ch(0)
+}
+
 // ---------------------------------------------------------------- shading
 
 /// How a column is coloured.
@@ -544,9 +601,10 @@ pub struct Look {
     pub shading: bool,
 }
 
-/// A column's colour as an image shows it: its own colour (or its map colour), lit where the
-/// ground rises towards the north-west and shaded where it falls away (the light comes from
-/// there), water darker with depth.
+/// A column's colour as the maps show it: its own colour (or its map colour), lit where the
+/// ground rises towards the north-west and shaded where it falls away, gently, as a relief map.
+/// Water carries its depth in its colour already (`water_over`); with the flat palette it is
+/// darkened here.
 pub fn shade(
     palette: &[u32],
     look: Look,
@@ -554,16 +612,19 @@ pub fn shade(
     north: Option<i16>,
     west: Option<i16>,
 ) -> [u8; 4] {
-    let base = if look.textured && c.rgb != 0 {
+    let own = look.textured && c.rgb != 0;
+    let base = if own {
         c.rgb
     } else {
         palette.get(usize::from(c.color)).copied().unwrap_or(0)
     };
-    let factor = if c.color == WATER || c.depth > 0 {
-        1.0 - f32::from(c.depth.min(14)) * 0.03
+    let water = c.color == WATER || c.depth > 0;
+    let factor = if water {
+        if own { 1.0 } else { 1.0 - f32::from(c.depth.min(14)) * 0.03 }
     } else if look.shading {
-        let d = |n: Option<i16>| f32::from(c.height - n.unwrap_or(c.height));
-        (1.0 + (d(north) + d(west)) * 0.06).clamp(0.62, 1.22)
+        let d = |n: Option<i16>| f32::from(c.height - n.unwrap_or(c.height)).clamp(-6.0, 6.0);
+        let slope = d(north) + d(west);
+        (1.0 + slope * 0.045).clamp(0.7, 1.16)
     } else {
         1.0
     };
@@ -586,6 +647,298 @@ fn shaded(
     let n = column(x, z - 1).map(|c| c.height);
     let w = column(x - 1, z).map(|c| c.height);
     Some(shade(palette, look, c, n, w))
+}
+
+// ---------------------------------------------------------------- the map texture: cells
+
+// The mod image slot (1024 square) holds 16 x 16 texel cells of terrain in its top 896 rows,
+// shared by the minimap and the world map (never shown at once), and entity icons below them.
+// A cell at level of detail `lod` covers 16 << lod blocks square, a texel every 1 << lod blocks.
+pub const CELL: u32 = 16;
+pub const CELL_COLS: u32 = 64;
+pub const CELL_ROWS: u32 = 56;
+pub const CELLS: usize = (CELL_COLS * CELL_ROWS) as usize;
+/// The deepest level of detail (a cell of 1024 blocks).
+pub const MAX_LOD: u8 = 6;
+/// Where the icon cells start, and their size.
+pub const ICONS_Y: u32 = CELL_ROWS * CELL;
+pub const ICON: u32 = 16;
+pub const ICON_COLS: u32 = 1024 / ICON;
+pub const ICON_SLOTS: usize = (ICON_COLS * ((1024 - ICONS_Y) / ICON)) as usize;
+
+/// What a cell shows: the explored surface (0), the cave layer (1) or the world map's slice (2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CellKey {
+    pub source: u8,
+    pub lod: u8,
+    pub x: i32,
+    pub z: i32,
+}
+
+impl CellKey {
+    /// Blocks a side.
+    pub fn span(&self) -> i32 {
+        16 << self.lod
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CellSlot {
+    key: CellKey,
+    /// The source's epoch it was drawn in.
+    epoch: u64,
+    /// Nothing explored in it.
+    empty: bool,
+    /// Its tiles changed since it was drawn.
+    stale: bool,
+    used: u64,
+}
+
+/// Which cells of the slot hold what, kept as the maps ask for them.
+pub struct CellCache {
+    slots: Vec<Option<CellSlot>>,
+    index: HashMap<CellKey, usize>,
+    /// Counts frames, for the least recently used.
+    pub frame: u64,
+    /// Asked for this frame and not drawn yet (or stale): (key, missing).
+    pub wanted: Vec<(CellKey, bool)>,
+    wanted_set: HashSet<CellKey>,
+}
+
+impl Default for CellCache {
+    fn default() -> Self {
+        Self {
+            slots: vec![None; CELLS],
+            index: HashMap::new(),
+            frame: 0,
+            wanted: Vec::new(),
+            wanted_set: HashSet::new(),
+        }
+    }
+}
+
+/// The texel at the top left of cell slot `slot`.
+pub fn slot_origin(slot: usize) -> [u32; 2] {
+    let s = slot as u32;
+    [(s % CELL_COLS) * CELL, (s / CELL_COLS) * CELL]
+}
+
+impl CellCache {
+    /// A new frame: the wanted list starts over.
+    pub fn next_frame(&mut self) {
+        self.frame += 1;
+        self.wanted.clear();
+        self.wanted_set.clear();
+    }
+
+    /// The slot drawing `key` (and whether it is empty), asking for it to be drawn (again) when
+    /// it isn't or is out of date. A stale cell still shows until it is redrawn.
+    pub fn get(&mut self, key: CellKey, epoch: u64) -> Option<(usize, bool)> {
+        let found = self.index.get(&key).copied();
+        let mut out = None;
+        let mut redo = true;
+        if let Some(i) = found
+            && let Some(slot) = self.slots[i].as_mut()
+        {
+            slot.used = self.frame;
+            redo = slot.stale || slot.epoch != epoch;
+            out = Some((i, slot.empty));
+        }
+        if redo && self.wanted_set.insert(key) {
+            self.wanted.push((key, found.is_none()));
+        }
+        out
+    }
+
+    /// A slot for `key`, drawn now: its own, a free one, or the one used longest ago (never one
+    /// used this frame); None when every slot is in use this frame.
+    pub fn place(&mut self, key: CellKey, epoch: u64, empty: bool) -> Option<usize> {
+        let i = match self.index.get(&key) {
+            Some(&i) => i,
+            None => {
+                let free = self.slots.iter().position(Option::is_none);
+                let i = match free {
+                    Some(i) => i,
+                    None => {
+                        let (i, used) = self
+                            .slots
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, s)| s.map(|s| (i, s.used)))
+                            .min_by_key(|&(_, used)| used)?;
+                        if used == self.frame {
+                            return None;
+                        }
+                        i
+                    }
+                };
+                if let Some(old) = self.slots[i].take() {
+                    self.index.remove(&old.key);
+                }
+                self.index.insert(key, i);
+                i
+            }
+        };
+        self.slots[i] = Some(CellSlot { key, epoch, empty, stale: false, used: self.frame });
+        Some(i)
+    }
+
+    /// Chunk `chunk` of `source` changed: every cell showing it is out of date, and the cells
+    /// east and south of it at its edge (their shading looks at it).
+    pub fn chunk_changed(&mut self, source: u8, chunk: (i32, i32)) {
+        for lod in 0..=MAX_LOD {
+            let (x, z) = (chunk.0 >> lod, chunk.1 >> lod);
+            let last = (1 << lod) - 1;
+            let mut mark = |x: i32, z: i32| {
+                if let Some(&i) = self.index.get(&CellKey { source, lod, x, z })
+                    && let Some(s) = self.slots[i].as_mut()
+                {
+                    s.stale = true;
+                }
+            };
+            mark(x, z);
+            if chunk.0 & last == last {
+                mark(x + 1, z);
+            }
+            if chunk.1 & last == last {
+                mark(x, z + 1);
+            }
+        }
+    }
+
+    /// Everything forgotten (the slot was rebuilt).
+    pub fn clear(&mut self) {
+        self.slots.iter_mut().for_each(|s| *s = None);
+        self.index.clear();
+    }
+
+    /// The cells to draw now, the missing ones first, at most `n`.
+    pub fn take_wanted(&mut self, n: usize) -> Vec<CellKey> {
+        self.wanted.sort_by_key(|w| !w.1);
+        self.wanted.iter().take(n).map(|w| w.0).collect()
+    }
+}
+
+/// Draws cell `key` (16 x 16 RGBA into `out`) from `column`: each texel the block at its middle,
+/// shaded against its neighbours a block north and west. Clear where nothing is known; whether
+/// all of it is.
+pub fn compose_cell(
+    mut column: impl FnMut(i32, i32) -> Option<Col>,
+    palette: &[u32],
+    look: Look,
+    key: CellKey,
+    out: &mut [u8; 1024],
+) -> bool {
+    let step = 1i32 << key.lod;
+    let (x0, z0) = (key.x * key.span(), key.z * key.span());
+    let half = step >> 1;
+    let mut empty = true;
+    for j in 0..16 {
+        for i in 0..16 {
+            let (x, z) = (x0 + i * step + half, z0 + j * step + half);
+            let o = ((j * 16 + i) * 4) as usize;
+            match shaded(&mut column, palette, look, x, z) {
+                Some(rgba) => {
+                    out[o..o + 4].copy_from_slice(&rgba);
+                    empty = false;
+                }
+                None => out[o..o + 4].copy_from_slice(&[0, 0, 0, 0]),
+            }
+        }
+    }
+    empty
+}
+
+/// The level of detail for a map at `bpp` blocks per GUI pixel: a texel no bigger than a GUI
+/// pixel, coarser when `cells(lod)` (how many cells it would need) passes `limit`.
+pub fn lod_for(bpp: f64, limit: usize, cells: impl Fn(u8) -> usize) -> u8 {
+    let mut lod = bpp.max(1.0).log2().floor().clamp(0.0, f64::from(MAX_LOD)) as u8;
+    while lod < MAX_LOD && cells(lod) > limit {
+        lod += 1;
+    }
+    lod
+}
+
+// ---------------------------------------------------------------- geometry
+
+/// A point on screen with its texture coordinates.
+pub type Vert = [f32; 4];
+
+/// `poly` cut to the inside of the convex polygon `clip` (any winding), texture coordinates
+/// carried along.
+pub fn clip_polygon(poly: &[Vert], clip: &[[f32; 2]]) -> Vec<Vert> {
+    let n = clip.len();
+    if n < 3 {
+        return poly.to_vec();
+    }
+    // The clip polygon's winding, so "inside" is the same side of every edge.
+    let area: f32 = (0..n)
+        .map(|i| {
+            let (a, b) = (clip[i], clip[(i + 1) % n]);
+            a[0] * b[1] - b[0] * a[1]
+        })
+        .sum();
+    let sign = if area >= 0.0 { 1.0 } else { -1.0 };
+    let mut out = poly.to_vec();
+    for i in 0..n {
+        if out.is_empty() {
+            break;
+        }
+        let (a, b) = (clip[i], clip[(i + 1) % n]);
+        let side = |p: &Vert| sign * ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]));
+        let input = std::mem::take(&mut out);
+        for k in 0..input.len() {
+            let (p, q) = (input[k], input[(k + 1) % input.len()]);
+            let (sp, sq) = (side(&p), side(&q));
+            if sp >= 0.0 {
+                out.push(p);
+            }
+            if (sp >= 0.0) != (sq >= 0.0) {
+                let t = sp / (sp - sq);
+                out.push(std::array::from_fn(|c| p[c] + (q[c] - p[c]) * t));
+            }
+        }
+    }
+    out
+}
+
+/// A convex polygon as quads (the last may repeat a corner): a fan from its first corner.
+pub fn fan_quads(poly: &[Vert]) -> Vec<[Vert; 4]> {
+    let mut out = Vec::new();
+    let mut i = 1;
+    while i + 1 < poly.len() {
+        let c = poly.get(i + 2).copied().unwrap_or(poly[i + 1]);
+        out.push([poly[0], poly[i], poly[i + 1], c]);
+        i += 2;
+    }
+    out
+}
+
+/// The minimap's outline: a circle (as 64 sides) or a square, centred on `c`, `r` across half.
+pub fn outline(c: [f32; 2], r: f32, round: bool) -> Vec<[f32; 2]> {
+    if round {
+        (0..64)
+            .map(|i| {
+                let a = i as f32 / 64.0 * std::f32::consts::TAU;
+                [c[0] + r * a.cos(), c[1] + r * a.sin()]
+            })
+            .collect()
+    } else {
+        vec![[c[0] - r, c[1] - r], [c[0] + r, c[1] - r], [c[0] + r, c[1] + r], [c[0] - r, c[1] + r]]
+    }
+}
+
+/// A ring between radii `r0` and `r1` round `c` as quads: a circle's frame.
+pub fn ring(c: [f32; 2], r0: f32, r1: f32) -> Vec<[[f32; 2]; 4]> {
+    (0..64)
+        .map(|i| {
+            let at = |k: i32, r: f32| {
+                let a = k as f32 / 64.0 * std::f32::consts::TAU;
+                [c[0] + r * a.cos(), c[1] + r * a.sin()]
+            };
+            [at(i, r0), at(i, r1), at(i + 1, r1), at(i + 1, r0)]
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------- the minimap
@@ -630,75 +983,6 @@ pub fn clamp_to_map(p: (f32, f32), radius: f32, round: bool) -> ((f32, f32), boo
     }
 }
 
-/// What the minimap shows: where, turned how, how far, and in which shape.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MiniView {
-    pub x: f64,
-    pub z: f64,
-    pub yaw: f32,
-    pub rotate: bool,
-    /// Blocks per texel.
-    pub bpp: f32,
-    pub round: bool,
-    pub look: Look,
-}
-
-impl MiniView {
-    /// Whether the image for `self` would look different from `other`'s.
-    pub fn differs(&self, other: &MiniView) -> bool {
-        let moved = ((self.x - other.x).abs().max((self.z - other.z).abs()) as f32) >= self.bpp / 4.0;
-        let turned = self.rotate && (self.yaw - other.yaw).abs() >= 0.5;
-        moved
-            || turned
-            || self.rotate != other.rotate
-            || self.round != other.round
-            || self.bpp != other.bpp
-            || self.look != other.look
-    }
-}
-
-const RIM: [u8; 4] = [16, 16, 16, 255];
-const UNSEEN: [u8; 4] = [24, 24, 28, 230];
-
-/// The minimap's `side` x `side` RGBA image of `column` for `view`.
-pub fn compose_minimap(
-    mut column: impl FnMut(i32, i32) -> Option<Col>,
-    palette: &[u32],
-    view: &MiniView,
-    side: usize,
-    out: &mut Vec<u8>,
-) {
-    out.clear();
-    out.resize(side * side * 4, 0);
-    let (r, f) = axes(view.yaw, view.rotate);
-    let bpp = f64::from(view.bpp);
-    let half = side as f64 / 2.0;
-    for j in 0..side {
-        for i in 0..side {
-            let (u, v) = (i as f64 + 0.5 - half, j as f64 + 0.5 - half);
-            let o = (j * side + i) * 4;
-            let edge = if view.round {
-                let d = (u * u + v * v).sqrt();
-                if d > half {
-                    continue;
-                }
-                d > half - 1.5
-            } else {
-                i == 0 || j == 0 || i == side - 1 || j == side - 1
-            };
-            if edge {
-                out[o..o + 4].copy_from_slice(&RIM);
-                continue;
-            }
-            let wx = view.x + bpp * (u * r[0] - v * f[0]);
-            let wz = view.z + bpp * (u * r[1] - v * f[1]);
-            let rgba = shaded(&mut column, palette, view.look, wx.floor() as i32, wz.floor() as i32)
-                .unwrap_or(UNSEEN);
-            out[o..o + 4].copy_from_slice(&rgba);
-        }
-    }
-}
-
 /// Where north, east, south and west are on the minimap's rim, as unit directions (x right, y
 /// down), for N, E, S, W.
 pub fn compass(yaw: f32, rotate: bool) -> [(char, f32, f32); 4] {
@@ -723,27 +1007,34 @@ pub fn clock(day_time: i64) -> String {
 /// Unexplored ground on the world map.
 pub const UNKNOWN: [u8; 4] = [18, 18, 22, 255];
 
-/// Blocks per GUI pixel the world map steps through.
-pub const MAP_ZOOMS: [f64; 9] = [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
+/// Zoom steps of the world map (a square root of two apart), from 1/8 block to 32 blocks a GUI
+/// pixel.
+pub const MAP_ZOOM_STEPS: usize = 17;
+/// The step showing a block a GUI pixel.
+pub const MAP_ZOOM_ONE: usize = 6;
+
+pub fn map_zoom(step: usize) -> f64 {
+    0.125 * 2f64.powf(step.min(MAP_ZOOM_STEPS - 1) as f64 / 2.0)
+}
 
 /// What the world map shows: its centre in blocks and its zoom.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MapView {
     pub x: f64,
     pub z: f64,
-    /// Index in `MAP_ZOOMS`.
+    /// A zoom step (`map_zoom`).
     pub zoom: usize,
 }
 
 impl Default for MapView {
     fn default() -> Self {
-        Self { x: 0.0, z: 0.0, zoom: 3 }
+        Self { x: 0.0, z: 0.0, zoom: MAP_ZOOM_ONE }
     }
 }
 
 impl MapView {
     pub fn bpp(&self) -> f64 {
-        MAP_ZOOMS[self.zoom.min(MAP_ZOOMS.len() - 1)]
+        map_zoom(self.zoom)
     }
 
     /// The world point under GUI point `p` of the map's `rect` (`[x, y, w, h]`).
@@ -770,10 +1061,11 @@ impl MapView {
         self.z -= f64::from(delta[1]) * self.bpp();
     }
 
-    /// One zoom step in (`steps` > 0) or out, keeping the point under `p` where it is.
-    pub fn zoom_at(&mut self, rect: [f32; 4], p: [f32; 2], steps: i32) {
+    /// Zoom steps in (`steps` > 0) or out within `min..=max`, keeping the point under `p` where
+    /// it is.
+    pub fn zoom_at(&mut self, rect: [f32; 4], p: [f32; 2], steps: i32, min: usize, max: usize) {
         let before = self.world_at(rect, p);
-        let zoom = (self.zoom as i32 - steps).clamp(0, MAP_ZOOMS.len() as i32 - 1) as usize;
+        let zoom = (self.zoom as i32 - steps).clamp(min as i32, max.min(MAP_ZOOM_STEPS - 1) as i32) as usize;
         if zoom == self.zoom {
             return;
         }
@@ -791,33 +1083,8 @@ impl MapView {
     }
 }
 
-/// The mod image slot (1024 square) is shared: the world map's image takes its top
-/// `MAP_IMAGE_H` rows, the minimap's its bottom left corner.
-pub const IMAGE_W: u32 = 1024;
-pub const MAP_IMAGE_H: u32 = 768;
-pub const MINI_AT: [u32; 2] = [0, 768];
-pub const MINI_MAX: u32 = 256;
-
-/// The image for a map `rect` of `w` x `h` GUI pixels: its size in texels and the GUI pixels per
-/// texel (1 unless the map is wider or taller than its part of the slot).
-pub fn image_size(w: f32, h: f32) -> (u32, u32, f32) {
-    let scale = (w / IMAGE_W as f32).max(h / MAP_IMAGE_H as f32).max(1.0);
-    (
-        ((w / scale).floor() as u32).clamp(1, IMAGE_W),
-        ((h / scale).floor() as u32).clamp(1, MAP_IMAGE_H),
-        scale,
-    )
-}
-
-/// The minimap image's side in texels for a minimap `size` GUI pixels across: two texels a GUI
-/// pixel, at most `MINI_MAX`.
-pub fn mini_side(size: f32) -> usize {
-    ((size * 2.0) as usize).clamp(32, MINI_MAX as usize)
-}
-
-/// Composes the world map's `iw` x `ih` RGBA image of `column` for `view`, each texel
-/// `gui_per_texel` GUI pixels. Ground the client holds no chunk of is dimmed when `loaded` is
-/// given.
+/// Composes an `iw` x `ih` RGBA image of `column` for `view`, each texel `gui_per_texel` GUI
+/// pixels (the PNG export).
 #[allow(clippy::too_many_arguments)]
 pub fn compose(
     mut column: impl FnMut(i32, i32) -> Option<Col>,
@@ -827,38 +1094,18 @@ pub fn compose(
     iw: u32,
     ih: u32,
     gui_per_texel: f32,
-    loaded: Option<&dyn Fn(i32, i32) -> bool>,
     out: &mut Vec<u8>,
 ) {
     out.clear();
     out.resize((iw * ih * 4) as usize, 0);
     let bpp = view.bpp() * f64::from(gui_per_texel);
     let (hw, hh) = (f64::from(iw) / 2.0, f64::from(ih) / 2.0);
-    let mut chunk_loaded: Option<((i32, i32), bool)> = None;
     for j in 0..ih {
         let wz = (view.z + (f64::from(j) + 0.5 - hh) * bpp).floor() as i32;
         for i in 0..iw {
             let wx = (view.x + (f64::from(i) + 0.5 - hw) * bpp).floor() as i32;
             let o = ((j * iw + i) * 4) as usize;
-            let mut rgba = shaded(&mut column, palette, look, wx, wz).unwrap_or(UNKNOWN);
-            if let Some(is_loaded) = loaded
-                && rgba != UNKNOWN
-            {
-                let key = (wx >> 4, wz >> 4);
-                let held = match chunk_loaded {
-                    Some((k, v)) if k == key => v,
-                    _ => {
-                        let v = is_loaded(key.0, key.1);
-                        chunk_loaded = Some((key, v));
-                        v
-                    }
-                };
-                if !held {
-                    for c in &mut rgba[..3] {
-                        *c = (u16::from(*c) * 3 / 5) as u8;
-                    }
-                }
-            }
+            let rgba = shaded(&mut column, palette, look, wx, wz).unwrap_or(UNKNOWN);
             out[o..o + 4].copy_from_slice(&rgba);
         }
     }
@@ -1592,12 +1839,12 @@ mod tests {
         let stored = s.stored();
         let read = Settings::read(|k| stored.iter().find(|p| p.0 == k).map(|p| p.1.clone()));
         assert_eq!(read, s);
-        assert!(!s.minimap && s.corner == 2 && s.size == 3 && s.zoom == 4 && s.round && !s.textured);
+        assert!(!s.minimap && s.corner == 2 && s.size == 3 && s.zoom == 5 && s.round && !s.textured);
         assert_eq!(Settings::read(|k| (k == "corner").then(|| "9".into())).corner, 1);
         assert_eq!(Settings::default().labels()[4], "Opacity: 100%");
         let mut z = Settings::default();
         assert!(z.zoom_step(true));
-        assert_eq!(z.zoom, 2);
+        assert_eq!(z.zoom, 3);
         z.zoom = 0;
         assert!(!z.zoom_step(true));
     }
@@ -1709,15 +1956,15 @@ mod tests {
     #[test]
     fn the_view_pans_zooms_and_maps_points_both_ways() {
         let rect = [0.0, 20.0, 400.0, 200.0];
-        let mut v = MapView { x: 100.0, z: -50.0, zoom: 3 };
+        let mut v = MapView { x: 100.0, z: -50.0, zoom: MAP_ZOOM_ONE };
         assert_eq!(v.world_at(rect, [200.0, 120.0]), (100.0, -50.0));
         let p = v.screen_of(rect, 110.0, -45.0);
         assert_eq!(v.world_at(rect, p), (110.0, -45.0));
         v.pan([10.0, -4.0]);
         assert_eq!((v.x, v.z), (90.0, -46.0));
         let under = v.world_at(rect, [50.0, 60.0]);
-        v.zoom_at(rect, [50.0, 60.0], 1);
-        assert_eq!(v.zoom, 2);
+        v.zoom_at(rect, [50.0, 60.0], 1, 0, MAP_ZOOM_STEPS - 1);
+        assert_eq!(v.zoom, MAP_ZOOM_ONE - 1);
         let after = v.world_at(rect, [50.0, 60.0]);
         assert!((under.0 - after.0).abs() < 1e-9 && (under.1 - after.1).abs() < 1e-9);
         let (x0, z0, x1, z1) = v.bounds(rect);
@@ -1741,39 +1988,100 @@ mod tests {
     }
 
     #[test]
-    fn images_fit_their_parts_of_the_slot() {
-        assert_eq!(image_size(400.0, 200.0), (400, 200, 1.0));
-        let (w, h, s) = image_size(2048.0, 1000.0);
-        assert!(w <= IMAGE_W && h <= MAP_IMAGE_H && s == 2.0);
-        let (_, h, _) = image_size(800.0, 1536.0);
-        assert_eq!(h, MAP_IMAGE_H);
-        assert_eq!(mini_side(96.0), 192);
-        assert_eq!(mini_side(400.0), 256);
-        assert!(MINI_AT[1] + MINI_MAX <= 1024 && MAP_IMAGE_H <= MINI_AT[1]);
-    }
-
-    #[test]
-    fn composing_draws_known_ground_and_dims_unloaded() {
+    fn composing_draws_known_ground() {
         let palette = [0u32, 0xFF0000];
         let mut s = Store::default();
         s.put((0, 0), tile(1, 64, 0));
-        s.put((1, 0), tile(1, 64, 0));
         let look = Look { textured: true, shading: true };
-        let view = MapView { x: 0.0, z: 0.0, zoom: 3 };
+        let view = MapView { x: 0.0, z: 0.0, zoom: MAP_ZOOM_ONE };
         let mut out = Vec::new();
-        let only_first = |x: i32, _z: i32| x == 0;
-        compose(|x, z| s.column(x, z), &palette, look, &view, 64, 64, 1.0, Some(&only_first), &mut out);
+        compose(|x, z| s.column(x, z), &palette, look, &view, 64, 64, 1.0, &mut out);
         let at = |o: &Vec<u8>, i: usize, j: usize| o[(j * 64 + i) * 4..(j * 64 + i) * 4 + 4].to_vec();
         assert_eq!(at(&out, 32, 32), vec![255, 0, 0, 255]);
-        assert_eq!(at(&out, 50, 32), vec![153, 0, 0, 255], "explored but not loaded: dimmed");
         assert_eq!(at(&out, 0, 0), UNKNOWN.to_vec());
-        let mv = MiniView { x: 8.0, z: 8.0, yaw: 0.0, rotate: false, bpp: 1.0, round: true, look };
-        compose_minimap(|x, z| s.column(x, z), &palette, &mv, 32, &mut out);
-        assert_eq!(out.len(), 32 * 32 * 4);
-        assert_eq!(out[3], 0, "round leaves the corners clear");
-        assert_eq!(&out[(16 * 32 + 16) * 4..(16 * 32 + 16) * 4 + 4], &[255, 0, 0, 255]);
-        assert!(mv.differs(&MiniView { x: 9.0, ..mv }));
-        assert!(!mv.differs(&MiniView { x: 8.1, ..mv }));
+        assert_eq!(map_zoom(MAP_ZOOM_ONE), 1.0);
+    }
+
+    #[test]
+    fn cells_are_drawn_cached_and_marked_stale() {
+        let palette = [0u32, 0xFF0000];
+        let mut s = Store::default();
+        s.put((0, 0), tile(1, 64, 0));
+        assert_eq!(s.changed, vec![(0, 0)]);
+        let look = Look { textured: true, shading: true };
+        let mut px = [0u8; 1024];
+        let key = CellKey { source: 0, lod: 0, x: 0, z: 0 };
+        assert!(!compose_cell(|x, z| s.column(x, z), &palette, look, key, &mut px));
+        assert_eq!(&px[..4], &[255, 0, 0, 255]);
+        let far = CellKey { x: 5, ..key };
+        assert!(compose_cell(|x, z| s.column(x, z), &palette, look, far, &mut px));
+        let mut c = CellCache::default();
+        assert_eq!(c.get(key, 1), None);
+        assert_eq!(c.wanted, vec![(key, true)]);
+        assert_eq!(c.take_wanted(9), vec![key]);
+        let slot = c.place(key, 1, false).unwrap();
+        c.next_frame();
+        assert_eq!(c.get(key, 1), Some((slot, false)));
+        assert!(c.wanted.is_empty());
+        c.chunk_changed(0, (0, 0));
+        assert_eq!(c.get(key, 1), Some((slot, false)), "stale still shows");
+        assert_eq!(c.wanted, vec![(key, false)]);
+        c.next_frame();
+        assert_eq!(c.get(key, 2), Some((slot, false)));
+        assert_eq!(c.wanted.len(), 1, "a new epoch draws it again");
+        // East of a changed chunk's edge: its shading looks west.
+        let east = CellKey { x: 1, ..key };
+        let e = c.place(east, 2, false).unwrap();
+        c.next_frame();
+        c.chunk_changed(0, (0, 0));
+        assert_eq!(c.get(east, 2), Some((e, false)));
+        assert_eq!(c.wanted.len(), 1);
+        assert_eq!(slot_origin(65), [16, 16]);
+        assert!(ICONS_Y + 8 * ICON <= 1024 && ICON_SLOTS == 512);
+        assert_eq!(lod_for(1.0, 10, |_| 4), 0);
+        assert_eq!(lod_for(5.0, 10, |_| 4), 2);
+        assert_eq!(lod_for(0.5, 10, |l| if l < 3 { 99 } else { 1 }), 3);
+    }
+
+    #[test]
+    fn clipping_keeps_texture_coordinates() {
+        let sq = [[0.0, 0.0, 0.0, 0.0], [10.0, 0.0, 1.0, 0.0], [10.0, 10.0, 1.0, 1.0], [0.0, 10.0, 0.0, 1.0]];
+        let clip = outline([0.0, 0.0], 5.0, false);
+        let out = clip_polygon(&sq, &clip);
+        assert_eq!(out.len(), 4);
+        for v in &out {
+            assert!(v[0] <= 5.0 + 1e-4 && v[1] <= 5.0 + 1e-4);
+            assert!((v[2] - v[0] / 10.0).abs() < 1e-5 && (v[3] - v[1] / 10.0).abs() < 1e-5);
+        }
+        let rev: Vec<[f32; 2]> = clip.iter().rev().copied().collect();
+        assert_eq!(clip_polygon(&sq, &rev).len(), 4, "either winding");
+        assert!(clip_polygon(&sq, &outline([50.0, 50.0], 5.0, true)).is_empty());
+        let round = clip_polygon(&sq, &outline([0.0, 0.0], 8.0, true));
+        assert!(round.len() > 4);
+        let quads = fan_quads(&round);
+        assert_eq!(quads.len(), (round.len() - 1) / 2);
+        assert_eq!(ring([0.0, 0.0], 1.0, 2.0).len(), 64);
+    }
+
+    #[test]
+    fn biome_tints_blend_and_water_shows_the_ground() {
+        let a = BiomeTints { grass: 0x000000, foliage: 0, dry_foliage: 0, water: 0 };
+        let b = BiomeTints { grass: 0xFFFFFF, ..a };
+        let mut grid = [a; 36];
+        for z in 0..6 {
+            for x in 3..6 {
+                grid[z * 6 + x] = b;
+            }
+        }
+        // West half dark, east half light: a smooth ramp between quart centres, no seam.
+        let g = |x: i32| blend_tints(&grid, x, 8).grass & 255;
+        assert_eq!(g(0), 0);
+        assert_eq!(g(15), 255);
+        assert!(g(7) > 0 && g(7) < 255 && g(6) < g(7) && g(7) < g(8));
+        let shallow = water_over(0xFF0000, 0x0000FF, 0);
+        let deep = water_over(0xFF0000, 0x0000FF, 20);
+        assert!(shallow >> 16 > deep >> 16, "the ground shows less when deeper");
+        assert!((deep & 255) < 255);
     }
 
     #[test]
