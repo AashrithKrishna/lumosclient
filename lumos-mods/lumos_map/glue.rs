@@ -34,6 +34,8 @@ const CAVE_BUDGET: Duration = Duration::from_micros(500);
 const REFILL: Duration = Duration::from_secs(1);
 /// How often the chunks around the player are scanned again after blocks changed.
 const NEAR_RESCAN: Duration = Duration::from_secs(2);
+/// The narrowest a chunk is drawn (GUI pixels) for the minimap's slime chunks and chunk grid.
+const MIN_CHUNK_PX: f32 = 4.0;
 /// How often changed regions are written.
 const SAVE_EVERY: Duration = Duration::from_secs(30);
 /// Time a frame may spend drawing terrain cells, with the map closed and open.
@@ -432,8 +434,22 @@ impl Explored {
     }
 
     /// Writes the regions changed since the last save (its cave layers' too), off the frame.
-    fn save(&mut self) {
+    /// A layer whose saved regions are still loading isn't written yet (its file would lose
+    /// what it held before this session); the `last` save (leaving the world or dimension)
+    /// waits for them first.
+    fn save(&mut self, last: bool) {
         self.saved = Instant::now();
+        if last {
+            // Leaving: wait for the regions still being read, so the files keep what they held.
+            for (_, rx) in std::mem::take(&mut self.loading) {
+                if let Ok(tiles) = rx.recv_timeout(Duration::from_secs(10)) {
+                    self.store.merge_loaded(tiles);
+                }
+            }
+            for c in self.caves.values_mut() {
+                finish_loading(&mut c.store, &mut c.loading);
+            }
+        }
         // A region still being read is written once its saved tiles are in (else the file
         // would lose them).
         let reading: HashSet<(i32, i32)> = self.loading.iter().flat_map(|(r, _)| r.iter().copied()).collect();
@@ -444,7 +460,9 @@ impl Explored {
         write_regions(&mut self.store, &self.dir);
         self.store.dirty.extend(later);
         for c in self.caves.values_mut() {
-            write_regions(&mut c.store, &c.dir);
+            if c.loading.is_none() {
+                write_regions(&mut c.store, &c.dir);
+            }
         }
         if std::mem::take(&mut self.steps_dirty) {
             let (dir, text) = (self.dir.clone(), self.steps.to_text());
@@ -565,15 +583,24 @@ fn load_regions(dir: PathBuf, band: Option<i32>, only: Option<HashSet<(i32, i32)
     rx
 }
 
+/// Waits for `store`'s saved regions still loading, and takes them in.
+fn finish_loading(store: &mut m::Store, loading: &mut Option<Receiver<Vec<((i32, i32), m::Tile)>>>) {
+    if let Some(rx) = loading.take()
+        && let Ok(tiles) = rx.recv_timeout(Duration::from_secs(10))
+    {
+        store.merge_loaded(tiles);
+    }
+}
+
 /// Writes `store`'s regions changed since the last save into `dir`, off the frame.
 fn write_regions(store: &mut m::Store, dir: &Path) {
     if store.dirty.is_empty() {
         return;
     }
-    let regions: Vec<(i32, i32)> = store.dirty.drain().collect();
-    let files: Vec<(PathBuf, Vec<u8>)> = regions
+    let files: Vec<(PathBuf, Vec<u8>)> = store
+        .encode_dirty()
         .into_iter()
-        .map(|r| (dir.join(m::region_file(r)), store.encode_region(r)))
+        .map(|(r, bytes)| (dir.join(m::region_file(r)), bytes))
         .collect();
     let dir = dir.to_owned();
     let _ = std::thread::Builder::new()
@@ -582,8 +609,12 @@ fn write_regions(store: &mut m::Store, dir: &Path) {
             if std::fs::create_dir_all(&dir).is_err() {
                 return;
             }
+            // Each save its own temporary name: two saves of a region at once never rename a
+            // half-written file into place.
+            static SAVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             for (path, bytes) in files {
-                let tmp = path.with_extension("tmp");
+                let tmp = path.with_extension(format!("{n}.tmp"));
                 if std::fs::write(&tmp, &bytes).is_ok() {
                     let _ = std::fs::rename(&tmp, &path);
                 }
@@ -603,6 +634,10 @@ struct Layer {
     /// Chunks scanned since the maps last looked, and a count that goes up when it starts over.
     changed: Vec<(i32, i32)>,
     epoch: u64,
+    /// When the chunks around the player were last queued again for changed blocks: at most
+    /// once every `NEAR_RESCAN`, as the surface map does (any block change anywhere bumps
+    /// `world.revision`, so near water, crops or redstone it would be every frame).
+    near_at: Option<Instant>,
 }
 
 impl Layer {
@@ -719,6 +754,20 @@ fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
 
 fn settings(game: &Game<'_>) -> m::Settings {
     m::settings(|key| game.native_setting(m::ID, key))
+}
+
+/// Keeps `after` and writes the settings that differ from `before` (one file each), not the
+/// whole table: a hotkey or a click writes a file, not ninety. Files of an older version (read
+/// with its changes applied) are all written again, with the version.
+fn store_settings(game: &Game<'_>, before: &m::Settings, after: m::Settings) {
+    m::set_settings(after);
+    let current = m::SETTINGS_VERSION.to_string();
+    let all = game.native_setting(m::ID, m::SETTINGS_VERSION_KEY).is_none_or(|v| v.trim() != current);
+    for ((key, value), (_, old)) in after.stored().into_iter().zip(before.stored()) {
+        if all || value != old {
+            game.native_set_setting(m::ID, key, &value);
+        }
+    }
 }
 
 fn now_secs() -> u64 {
@@ -884,7 +933,7 @@ fn notice(s: &mut State, text: String) {
 /// Opens the explored map of `dir` (a world, or a server's sub-world) in `dim`.
 fn open_world(s: &mut State, dir: PathBuf, dim: &'static str) {
     if let Some(mut old) = s.explored.take() {
-        old.save();
+        old.save(true);
     }
     if s.world_dir.as_ref() != Some(&dir) {
         s.book = std::fs::read_to_string(dir.join("waypoints.txt"))
@@ -1020,7 +1069,7 @@ fn explore(game: &Game<'_>, s: &mut State, budget: Duration) {
         e.seen.insert(k);
     }
     if e.saved.elapsed() >= SAVE_EVERY {
-        e.save();
+        e.save(false);
     }
 }
 
@@ -1190,11 +1239,18 @@ fn follow_layer(
         layer.changed.clear();
     }
     if layer.queue.is_empty() {
+        let near = layer.near_at.is_none_or(|t| t.elapsed() >= NEAR_RESCAN);
+        if near {
+            layer.near_at = Some(Instant::now());
+        }
         let mut keys = Vec::new();
         for dz in -radius..=radius {
             for dx in -radius..=radius {
                 let k = (centre.0 + dx, centre.1 + dz);
-                let stale = layer.tiles.get(&k).is_none_or(|t| t.1 != world.revision && dx.abs() <= 2 && dz.abs() <= 2);
+                let stale = layer
+                    .tiles
+                    .get(&k)
+                    .is_none_or(|t| near && t.1 != world.revision && dx.abs() <= 2 && dz.abs() <= 2);
                 if stale && world.chunks.contains_key(&k) {
                     keys.push(k);
                 }
@@ -1222,9 +1278,13 @@ fn follow_layer(
         if let (Some(band), Some(e)) = (layer.band(), explored.as_mut()) {
             e.cave(Some(band)).store.put(k, tile.clone());
         }
+        // A rescan that found the same blocks draws nothing again.
+        let same = layer.tiles.get(&k).is_some_and(|(old, _)| *old == tile);
         layer.tiles.insert(k, (tile, world.revision));
-        layer.revision += 1;
-        layer.changed.push(k);
+        if !same {
+            layer.revision += 1;
+            layer.changed.push(k);
+        }
     }
 }
 
@@ -1447,6 +1507,13 @@ fn draw_overlays(
     let (cx0, cz0) = ((area[0] / 16.0).floor() as i32, (area[1] / 16.0).floor() as i32);
     let (cx1, cz1) = ((area[2] / 16.0).floor() as i32, (area[3] / 16.0).floor() as i32);
     let rect = |x0: f64, z0: f64, x1: f64, z1: f64| [to_screen(x0, z0), to_screen(x1, z0), to_screen(x1, z1), to_screen(x0, z1)];
+    // Slime chunks and the grid only while a chunk is a few pixels wide, as on the world map:
+    // zoomed out (the enlarged minimap at "Out x4") they would be a million chunks a frame.
+    let chunk_px = {
+        let (a, b) = (to_screen(area[0], area[1]), to_screen(area[0] + 16.0, area[1]));
+        (b[0] - a[0]).hypot(b[1] - a[1])
+    };
+    let chunks_shown = chunk_px >= MIN_CHUNK_PX;
     if settings.light_overlay {
         for (&(cx, cz), rows) in &s.light_mask {
             for (lz, row) in rows.iter().enumerate() {
@@ -1458,6 +1525,7 @@ fn draw_overlays(
         }
     }
     if settings.mini_slime
+        && chunks_shown
         && let Some(seed) = game.native_world_seed()
     {
         for cz in cz0..=cz1 {
@@ -1469,7 +1537,7 @@ fn draw_overlays(
             }
         }
     }
-    if settings.mini_grid {
+    if settings.mini_grid && chunks_shown {
         let (z0, z1) = (f64::from(cz0 * 16), f64::from((cz1 + 1) * 16));
         let (x0, x1) = (f64::from(cx0 * 16), f64::from((cx1 + 1) * 16));
         for cx in cx0..=cx1 + 1 {
@@ -1667,7 +1735,7 @@ pub(super) fn on_level_unload(game: &mut Game<'_>) {
             save_book(s);
         }
         if let Some(mut e) = s.explored.take() {
-            e.save();
+            e.save(true);
         }
         s.cave = None;
         s.cave_view = None;
@@ -1781,6 +1849,8 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
                 s.screen.view.z = p[2];
                 s.screen.page = page;
                 s.screen.press = None;
+                // A right-click menu left open when the map closed is gone.
+                s.screen.menu = None;
                 s.screen.follow = set.map_follow;
                 s.screen.grid = set.map_grid;
                 s.viewed = None;
@@ -1816,6 +1886,7 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
                     s.screen.view.x = p[0];
                     s.screen.view.z = p[2];
                     s.screen.press = None;
+                    s.screen.menu = None;
                     s.screen.searching = false;
                     s.screen.page = m::Page::new_waypoint(wp, true);
                     s.swallow = typed.map(|c| (c, Instant::now()));
@@ -1837,7 +1908,8 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
         }
     } else {
         // The minimap's own keys: zoom, cave view, shown.
-        let mut s = settings(game);
+        let before = settings(game);
+        let mut s = before;
         let said = if keys::pressed(game, keys::ZOOM_IN, key, true) {
             s.zoom_step(true).then(|| format!("Minimap zoom: {} block(s) a pixel", m::ZOOMS[s.zoom]))
         } else if keys::pressed(game, keys::ZOOM_OUT, key, true) {
@@ -1901,10 +1973,7 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
             None
         };
         if let Some(text) = said {
-            m::set_settings(s);
-            for (k, v) in s.stored() {
-                game.native_set_setting(m::ID, k, &v);
-            }
+            store_settings(game, &before, s);
             game.native_client_action_bar(Text::literal(text), false);
         }
     }
@@ -2683,7 +2752,9 @@ fn step_layer(game: &Game<'_>, s: &mut State, feet: i32, top: i32, down: bool) {
             // Moved by hand: no longer following the head.
             s.slice_follow &= was.is_none();
         }
-        None if was.is_some() => set_cave_type(game, s, m::CaveType::Off),
+        // Back to the dimension's own default: Off in the overworld, Full under a roof (Off
+        // there would map the bedrock roof).
+        None if was.is_some() => set_cave_type(game, s, m::CaveType::default_for(roof_top(game).is_some())),
         None => {}
     }
 }
@@ -3488,7 +3559,8 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
     let mouse = screen.mouse;
     let here = player_pos(game).map(block_of);
     let dim = game.dim.id();
-    let mut settings = settings(game);
+    let before = settings(game);
+    let mut settings = before;
     let mut settings_changed = false;
     let fallback_y = here.map_or(64, |p| p[1]);
     with(|s| match s.screen.page.clone() {
@@ -3834,10 +3906,7 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
         _ => {}
     });
     if settings_changed {
-        m::set_settings(settings);
-        for (k, v) in settings.stored() {
-            game.native_set_setting(m::ID, k, &v);
-        }
+        store_settings(game, &before, settings);
     }
 }
 
@@ -4145,13 +4214,11 @@ pub(super) fn on_click(game: &mut Game<'_>, mod_id: &str, button: usize) {
         return;
     }
     let page = with(|st| st.options_page);
-    let mut s = settings(game);
+    let before = settings(game);
+    let mut s = before;
     let Some(&(field, _)) = s.page(page).get(button - 1) else {
         return;
     };
     s.click(field);
-    m::set_settings(s);
-    for (key, value) in s.stored() {
-        game.native_set_setting(m::ID, key, &value);
-    }
+    store_settings(game, &before, s);
 }

@@ -1216,11 +1216,28 @@ impl Store {
 
     /// Region `region` as its file's bytes.
     pub fn encode_region(&self, region: (i32, i32)) -> Vec<u8> {
-        let mut keys: Vec<&(i32, i32)> = self
+        let keys: Vec<&(i32, i32)> = self
             .tiles
             .keys()
             .filter(|k| region_of(**k) == region)
             .collect();
+        self.encode_keys(keys)
+    }
+
+    /// The regions changed since the last save (`dirty`, emptied) as their files' bytes, the
+    /// tiles sorted into their regions in one pass (not one pass over every tile per region).
+    pub fn encode_dirty(&mut self) -> Vec<((i32, i32), Vec<u8>)> {
+        let dirty = std::mem::take(&mut self.dirty);
+        let mut by_region: HashMap<(i32, i32), Vec<&(i32, i32)>> = dirty.iter().map(|r| (*r, Vec::new())).collect();
+        for k in self.tiles.keys() {
+            if let Some(keys) = by_region.get_mut(&region_of(*k)) {
+                keys.push(k);
+            }
+        }
+        by_region.into_iter().map(|(r, keys)| (r, self.encode_keys(keys))).collect()
+    }
+
+    fn encode_keys(&self, mut keys: Vec<&(i32, i32)>) -> Vec<u8> {
         keys.sort();
         let mut out = Vec::with_capacity(12 + keys.len() * ONE_V3);
         match self.band {
@@ -3535,6 +3552,22 @@ mod tests {
 
     fn tile(c: u8, h: i16, rgb: u32) -> Tile {
         Tile { color: [c; 256], rgb: [rgb; 256], height: [h; 256], depth: [0; 256], kind: [FLOOR; 256] }
+    }
+
+    #[test]
+    fn dirty_regions_encode_as_each_region_alone() {
+        let mut s = Store::default();
+        s.put((-1, 2), tile(3, 70, 0x123456));
+        s.put((-32, 33), tile(7, -10, 0));
+        s.put((0, 0), tile(1, 64, 0));
+        s.put((31, 31), tile(2, 65, 0));
+        let mut want: Vec<_> = s.dirty.iter().map(|r| (*r, s.encode_region(*r))).collect();
+        let mut got = s.encode_dirty();
+        want.sort();
+        got.sort();
+        assert_eq!(got, want);
+        assert!(s.dirty.is_empty());
+        assert!(s.encode_dirty().is_empty());
     }
 
     #[test]

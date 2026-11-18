@@ -1,0 +1,37 @@
+diff --git a/crates/horizon-client/src/game/remote.rs b/crates/horizon-client/src/game/remote.rs
+index 1f15b46..f5bfa18 100644
+--- a/crates/horizon-client/src/game/remote.rs
++++ b/crates/horizon-client/src/game/remote.rs
+@@ -11155,12 +11155,21 @@ impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
+         {
+             return;
+         }
++        // Lumos: `MultiPlayerGameMode.releaseUsingItem` calls `ensureHasSentCarriedItem` first.
++        self.0.remote_send_carried();
+         self.0.release_remote_use();
+     }
+     fn start_attack(&mut self) -> bool {
++        // Lumos: `MultiPlayerGameMode.attack`, `piercingAttack` and `startDestroyBlock` call
++        // `ensureHasSentCarriedItem` first: a number key read this tick (`pick_hit_result`, after
++        // the tick's own carried-item check) reaches the server before the click it goes with,
++        // so a swap and an attack in one tick hit with the new item there too.
++        self.0.remote_send_carried();
+         self.0.remote_start_attack()
+     }
+     fn start_use(&mut self) {
++        // Lumos: `useItemOn`/`useItem`/`interact` call `ensureHasSentCarriedItem` first.
++        self.0.remote_send_carried();
+         self.0.remote_use();
+     }
+     fn pick(&mut self) {
+@@ -11190,6 +11199,10 @@ impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
+         self.0.use_delay
+     }
+     fn continue_attack(&mut self, down: bool) {
++        // Lumos: `continueDestroyBlock` calls `ensureHasSentCarriedItem` first.
++        if down {
++            self.0.remote_send_carried();
++        }
+         self.0.remote_continue_attack(down);
+     }
+ }
