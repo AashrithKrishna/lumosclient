@@ -88,6 +88,17 @@ def main():
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with open(dest, "wb") as out:
                 out.write(z.read(n))
+    # Ports: registry mods patched by Lumos to build against the combined game's Horizon commit
+    # (native-ports/<id>/ is a full mixins/<id>/ folder, with the mod's licence kept). They replace
+    # the registry copy in the combined game only.
+    ports = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "native-ports")
+    if g.get("combined") and os.path.isdir(ports):
+        for i in sorted(os.listdir(ports)):
+            manifest = os.path.join(ports, i, "horizon-mixin.toml")
+            if os.path.isfile(manifest) and g["commit"] in open(manifest, encoding="utf-8").read():
+                shutil.rmtree(os.path.join(mods, i), ignore_errors=True)
+                shutil.copytree(os.path.join(ports, i), os.path.join(mods, i))
+                print(f"port: {i}", file=sys.stderr)
     # Lumos's own native mods (lumos-mods/<id>/ is already a mixins/<id>/ folder) ride in the
     # combined game, and in the group game of the commit they were written for.
     own = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lumos-mods")

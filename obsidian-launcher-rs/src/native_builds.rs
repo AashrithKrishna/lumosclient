@@ -85,6 +85,11 @@ fn parse_build(b: &Value) -> Option<Build> {
     Some(Build { short, combined, asset, sha256: s("sha256").to_ascii_lowercase(), size: b.get("size").and_then(Value::as_u64).unwrap_or(0), mods })
 }
 
+/// True when the combined (all-in-one) game has `mod_id`, so it mixes with everything in it.
+pub fn in_combined(mod_id: &str) -> bool {
+    builds().iter().any(|b| b.combined && b.mods.iter().any(|(id, _, _)| id == mod_id))
+}
+
 /// The build for this platform that has `mod_id`, if one was published.
 pub fn build_for_mod(mod_id: &str) -> Option<Build> {
     builds().into_iter().find(|b| b.mods.iter().any(|(id, _, _)| id == mod_id))
