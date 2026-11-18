@@ -1,0 +1,238 @@
+diff --git a/crates/horizon-client/src/game/lan_actions.rs b/crates/horizon-client/src/game/lan_actions.rs
+index a0746bd..dd2d95f 100644
+--- a/crates/horizon-client/src/game/lan_actions.rs
++++ b/crates/horizon-client/src/game/lan_actions.rs
+@@ -43,6 +43,8 @@ mod horizon_channels;
+ 
+ #[cfg(test)]
+ mod crack_feedback_tests;
++#[cfg(test)]
++mod attribute_swap_tests;
+ 
+ /// Per-guest state of the gameplay code that lives outside `Guest`.
+ #[derive(Default)]
+@@ -139,6 +141,12 @@ pub(super) struct GuestPlay {
+     /// (`LivingEntity.collectEquipmentChanges`).
+     modifiers: Vec<(String, String)>,
+     equipped: Option<Vec<Option<ItemStack>>>,
++    /// Lumos: the main-hand stack at the guest's last tick (`Player.tick`'s
++    /// `detectEquipmentUpdates`), which its modifiers follow until the next
++    /// tick, so a slot selected since then (a number key and a hit in one
++    /// tick: attribute swapping) hits with the old item's attack damage and
++    /// speed, as on vanilla. None before the body's first tick.
++    ticked_main: Option<Option<ItemStack>>,
+     craft_grid: Vec<Option<ItemStack>>,
+     /// The guest's cast fishing hook (`Player.fishing`).
+     pub(super) hook: Option<super::fishing::Hook>,
+@@ -511,6 +519,7 @@ impl Game<'_> {
+             // A new body (joined, respawned, changed level): nothing on it yet,
+             // its effects' modifiers and armor protection included.
+             play.equipped = None;
++            play.ticked_main = None;
+             play.potions = Default::default();
+             play.sculk = Default::default();
+             // A new ServerPlayer has everything to record again.
+@@ -688,16 +697,27 @@ impl Game<'_> {
+             std::mem::take(&mut play.modifiers),
+         );
+         // Its worn armour on its attributes, when it changed.
+-        let selected_item = self.inventory.get(self.selected).and_then(Option::as_ref);
++        // Lumos: the main hand as of the guest's last tick, not a slot its
++        // SetCarriedItem selected since (see `ticked_main`).
++        let selected_item = match &play.ticked_main {
++            Some(main) => main.as_ref(),
++            None => self.inventory.get(self.selected).and_then(Option::as_ref),
++        };
+         let unchanged = play.equipped.as_deref().is_some_and(|eq| {
+             eq.len() == self.armor.len() + 1
+                 && eq[..self.armor.len()] == self.armor[..]
+                 && eq[self.armor.len()].as_ref() == selected_item
+         });
+         if !unchanged {
++            let main = selected_item.cloned();
+             let mut equipped: Vec<Option<ItemStack>> = self.armor.to_vec();
+-            equipped.push(selected_item.cloned());
++            equipped.push(main.clone());
++            // `apply_equipment` reads the selected slot: it holds the ticked
++            // stack for the call.
++            let selected = self.selected;
++            let current = std::mem::replace(&mut self.inventory[selected], main);
+             self.apply_equipment();
++            self.inventory[selected] = current;
+             play.equipped = Some(equipped);
+         }
+         // The player's effects are on the new body before anything it does
+@@ -4260,13 +4280,7 @@ impl Game<'_> {
+             }
+             // Player.tick: a different main-hand item resets the attack
+             // strength, and detectEquipmentUpdates gives the guest its modifiers.
+-            let g = &host.hub.guests[gi];
+-            let held = super::held_items::held_attack_item(&g.inventory, g.selected);
+-            let play = host.play.entry(conn).or_default();
+-            if play.attack_item.as_ref() != held {
+-                play.attack_ticks = 0;
+-                play.attack_item = held.cloned();
+-            }
++            guest_main_hand_tick(host, gi, conn);
+             self.guest_delayed_destroy(host, conn);
+             self.guest_server_tick(host, conn);
+             // Player.tick's statistics and ServerPlayer.tick's triggers, then
+@@ -7261,3 +7275,22 @@ mod item_on_block_cooldown_tests {
+         placement_control(Some(false));
+     }
+ }
++
++/// `Player.tick` for guest `gi`: a different main-hand item resets the attack
++/// strength, and (Lumos) `detectEquipmentUpdates` takes the main-hand stack the
++/// guest's modifiers follow (`GuestPlay::ticked_main`, applied by its next
++/// `as_guest`). Packets handled before this, a SetCarriedItem and an attack in
++/// one tick, still hit with the old item's charge, attack damage and speed.
++fn guest_main_hand_tick(host: &mut LanHost, gi: usize, conn: u32) {
++    let g = &host.hub.guests[gi];
++    let held = super::held_items::held_attack_item(&g.inventory, g.selected);
++    let main = g.inventory.get(g.selected).and_then(Option::as_ref);
++    let play = host.play.entry(conn).or_default();
++    if play.attack_item.as_ref() != held {
++        play.attack_ticks = 0;
++        play.attack_item = held.cloned();
++    }
++    if play.ticked_main.as_ref().is_none_or(|m| m.as_ref() != main) {
++        play.ticked_main = Some(main.cloned());
++    }
++}
+diff --git a/crates/horizon-client/src/game/lan_actions/attribute_swap_tests.rs b/crates/horizon-client/src/game/lan_actions/attribute_swap_tests.rs
+new file mode 100644
+index 0000000..8b282a8
+--- /dev/null
++++ b/crates/horizon-client/src/game/lan_actions/attribute_swap_tests.rs
+@@ -0,0 +1,130 @@
++//! Lumos: attribute swapping on the server side. A number key and an attack in
++//! one client tick reach the server as SetCarriedItem then the attack, both
++//! handled before `ServerPlayer.tick`: the hit is the new item's (its
++//! enchantments, a mace's smash), with the old item's attack strength charge
++//! and its ATTACK_DAMAGE / ATTACK_SPEED modifiers, which only the tick's
++//! `detectEquipmentUpdates` replaces.
++use super::*;
++use crate::game::{Audio, Options, Progress, Settings, load_resources};
++use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig};
++use horizon_protocol::packets::configuration::ClientInformation;
++use std::sync::{Arc, atomic::AtomicI32, mpsc};
++
++#[test]
++#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
++fn a_swap_and_a_hit_in_one_tick_keep_the_old_items_charge_and_modifiers() {
++    let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
++    let settings = Settings::default();
++    let loaded = load_resources(
++        root.clone(),
++        None,
++        &root,
++        &settings,
++        std::time::Instant::now(),
++        false,
++        true,
++        &Progress::new(),
++        &mut |_, _| unreachable!(),
++    )
++    .unwrap();
++    let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
++    options.resources = root.clone();
++    options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
++    let mut game = Game::new(
++        &loaded.resources,
++        loaded.pack,
++        loaded.gui.unwrap(),
++        options,
++        settings,
++        Audio::silent(&root),
++        None,
++    )
++    .unwrap();
++    game.world
++        .chunks
++        .insert((0, 0), Arc::new(horizon_client::chunk::Chunk::empty(0, 0)));
++    game.lan_host(
++        super::super::lan::LanSettings {
++            port: 0,
++            guest_commands: true,
++            force_game_mode: false,
++        },
++        NetConfig {
++            listen: false,
++            announce: false,
++            ..NetConfig::loopback(0, "swap-test".into(), 2)
++        },
++        HubConfig {
++            default_game_mode: 0,
++            guest_commands: true,
++            force_game_mode: false,
++            hardcore: false,
++            view_distance: 2,
++            simulation_distance: 2,
++            dimension: "minecraft:overworld".into(),
++            allow_flight: false,
++            seed: 0,
++            max_players: 2,
++            integrated: false,
++            levels: Default::default(),
++        },
++    )
++    .unwrap();
++    let mut host = game.lan.take().unwrap();
++    let (tx, _rx) = mpsc::channel();
++    let mut guest = Guest::new(
++        Joined {
++            conn: 1,
++            uuid: 1,
++            name: "Swapper".into(),
++            properties: Vec::new(),
++            info: ClientInformation::new(2),
++            brand: "test".into(),
++            sender: PlayerSender::new(tx, Arc::default()),
++            latency: Arc::new(AtomicI32::new(0)),
++            address: "127.0.0.1:25565".parse().unwrap(),
++            expected: false,
++            configured: Default::default(),
++        },
++        1,
++        [0.5, 100.0, 0.5],
++        0,
++    );
++    guest.placed = true;
++    guest.loaded = true;
++    guest.on_ground = true;
++    guest.inventory[0] = Some(ItemStack::new("minecraft:diamond_sword", 1));
++    guest.inventory[1] = Some(ItemStack::new("minecraft:mace", 1));
++    guest.selected = 0;
++    host.hub.guests.push(guest);
++    let speed_and_scale = |game: &mut Game<'_>, host: &mut LanHost| {
++        game.as_guest(host, 1, |g| {
++            let held = g.held().map(|s| s.item.to_string());
++            (held, g.main_hand_attack_speed(), g.attack_strength_scale())
++        })
++        .unwrap()
++    };
++    // The body's first turn (a fresh body forgets any ticked main hand), then
++    // a tick with the sword (1.6 attacks a second: 12.5 ticks), charged for 20.
++    speed_and_scale(&mut game, &mut host);
++    super::guest_main_hand_tick(&mut host, 0, 1);
++    host.play.entry(1).or_default().attack_ticks = 20;
++    let (held, speed, scale) = speed_and_scale(&mut game, &mut host);
++    assert_eq!(held.as_deref(), Some("minecraft:diamond_sword"));
++    assert!((speed - 1.6).abs() < 1e-6, "sword speed, got {speed}");
++    assert_eq!(scale, 1.0);
++    // The number key's SetCarriedItem, then the attack's turn, before the tick.
++    game.lan_guest_packet(&mut host, 1, S::SetCarriedItem(play::SetCarriedItem { slot: 1 }));
++    let (held, speed, scale) = speed_and_scale(&mut game, &mut host);
++    assert_eq!(held.as_deref(), Some("minecraft:mace"), "the hit is the mace's");
++    assert!(
++        (speed - 1.6).abs() < 1e-6,
++        "the sword's attack speed until the tick, got {speed}"
++    );
++    assert_eq!(scale, 1.0, "a full-strength hit");
++    // The tick: the mace's modifiers, and a different item restarts the charge.
++    super::guest_main_hand_tick(&mut host, 0, 1);
++    let (_, speed, _) = speed_and_scale(&mut game, &mut host);
++    assert!((speed - 0.6).abs() < 1e-6, "mace speed after the tick, got {speed}");
++    assert_eq!(host.play.entry(1).or_default().attack_ticks, 0);
++}
