@@ -11,11 +11,22 @@ use crate::game::lumos_map as m;
 pub(super) const MAP: &str = "map";
 /// Adds a waypoint where you stand.
 pub(super) const WAYPOINT: &str = "waypoint";
+/// The minimap's zoom, in and out.
+pub(super) const ZOOM_IN: &str = "zoom_in";
+pub(super) const ZOOM_OUT: &str = "zoom_out";
+/// The minimap's cave view on or off.
+pub(super) const CAVE: &str = "cave";
+/// Shows or hides the minimap.
+pub(super) const MINIMAP: &str = "minimap";
 
 /// Each key: its name, its label on the page, and its default (`key.keyboard.g`).
-const KEYS: [[&str; 3]; 2] = [
+const KEYS: [[&str; 3]; 6] = [
     [MAP, "World Map", "key.keyboard.m"],
     [WAYPOINT, "Add Waypoint", "key.keyboard.b"],
+    [ZOOM_IN, "Minimap Zoom In", "key.keyboard.equal"],
+    [ZOOM_OUT, "Minimap Zoom Out", "key.keyboard.minus"],
+    [CAVE, "Cave View On/Off", "key.keyboard.k"],
+    [MINIMAP, "Show/Hide Minimap", "key.keyboard.h"],
 ];
 
 /// The keys for `NativeMod::keys`.

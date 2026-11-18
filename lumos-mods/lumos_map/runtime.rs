@@ -792,14 +792,11 @@ impl MapView {
 }
 
 /// The mod image slot (1024 square) is shared: the world map's image takes its top
-/// `MAP_IMAGE_H` rows, the minimap's its bottom left corner, player heads beside it.
+/// `MAP_IMAGE_H` rows, the minimap's its bottom left corner.
 pub const IMAGE_W: u32 = 1024;
 pub const MAP_IMAGE_H: u32 = 768;
 pub const MINI_AT: [u32; 2] = [0, 768];
 pub const MINI_MAX: u32 = 256;
-/// Player heads in the slot: 8 x 8 each, in a row after the minimap's corner.
-pub const HEADS_AT: [u32; 2] = [256, 768];
-pub const HEADS: usize = 64;
 
 /// The image for a map `rect` of `w` x `h` GUI pixels: its size in texels and the GUI pixels per
 /// texel (1 unless the map is wider or taller than its part of the slot).
@@ -880,6 +877,7 @@ impl JavaRandom {
         self.0 = (self.0.wrapping_mul(0x5DEE_CE66D).wrapping_add(0xB)) & ((1 << 48) - 1);
         (self.0 >> (48 - bits)) as i32
     }
+    #[cfg(test)]
     pub fn next_int(&mut self) -> i32 {
         self.next(32)
     }
@@ -1751,7 +1749,7 @@ mod tests {
         assert_eq!(h, MAP_IMAGE_H);
         assert_eq!(mini_side(96.0), 192);
         assert_eq!(mini_side(400.0), 256);
-        assert!(MINI_AT[1] + MINI_MAX <= 1024 && HEADS_AT[0] as usize + HEADS * 8 <= 1024);
+        assert!(MINI_AT[1] + MINI_MAX <= 1024 && MAP_IMAGE_H <= MINI_AT[1]);
     }
 
     #[test]

@@ -350,6 +350,19 @@ struct State {
     mini_image: Vec<u8>,
     /// The biome at the player's block, by block.
     biome: Option<([i32; 3], String)>,
+    /// The world map's layer (`MapScreen::slice`), scanned live.
+    slice: Option<Layer>,
+    /// A server's folder and its sub-worlds; when the spawn was last looked at.
+    subworlds: Option<(PathBuf, m::SubWorlds)>,
+    spawn_checked: Option<Instant>,
+    /// Coordinates seen in chat lately, newest last: who said them, and where.
+    chat: VecDeque<(String, [i32; 3])>,
+    /// Text to open the chat with once the map is closed (sharing a waypoint).
+    pending_chat: Option<String>,
+    /// The world map saved as a PNG on the next frame.
+    pending_export: bool,
+    /// A notice on the map's bar, until when.
+    notice: Option<(String, Instant)>,
 }
 
 thread_local! {
@@ -445,7 +458,87 @@ fn follow_world(game: &Game<'_>, s: &mut State) {
         return;
     };
     let dir = base(game).join(&world);
+    let dir = if world.starts_with("mp-") {
+        // A server: one of its sub-worlds.
+        let subs = match s.subworlds.take() {
+            Some((d, subs)) if d == dir => subs,
+            _ => m::SubWorlds::from_text(&std::fs::read_to_string(dir.join("subworlds.txt")).unwrap_or_default()),
+        };
+        let sub = sub_dir(&dir, subs.current_name());
+        s.subworlds = Some((dir, subs));
+        s.spawn_checked = None;
+        sub
+    } else {
+        s.subworlds = None;
+        dir
+    };
     open_world(s, dir, dim);
+}
+
+/// A server's sub-world folder: the first is the server's own (where the first version kept
+/// it), the others beside it.
+fn sub_dir(server: &Path, name: &str) -> PathBuf {
+    if name == "world-1" {
+        server.to_owned()
+    } else {
+        server.join(name)
+    }
+}
+
+fn save_subworlds(s: &State) {
+    if let Some((dir, subs)) = &s.subworlds {
+        let _ = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(dir.join("subworlds.txt"), subs.to_text()));
+    }
+}
+
+/// On a server, the world's spawn tells its sub-worlds apart: a spawn of another one switches
+/// to it (or to a new one).
+fn follow_spawn(game: &Game<'_>, s: &mut State) {
+    if s.spawn_checked.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
+        return;
+    }
+    s.spawn_checked = Some(Instant::now());
+    let Some(spawn) = game.spawn else {
+        return;
+    };
+    let dim = game.dim.id();
+    let Some((dir, subs)) = s.subworlds.as_mut() else {
+        return;
+    };
+    let before = subs.clone();
+    let changed = subs.follow_spawn([spawn.x.floor() as i32, spawn.z.floor() as i32]);
+    let sub = sub_dir(dir, subs.current_name());
+    if *subs != before {
+        save_subworlds(s);
+    }
+    if changed {
+        open_world(s, sub, dim);
+        notice(s, "Another world on this server: its own map and waypoints".into());
+    }
+}
+
+/// Switches a server's sub-world: to the next, or a new one.
+fn switch_subworld(game: &Game<'_>, s: &mut State, new: bool) {
+    let dim = game.dim.id();
+    let Some((dir, subs)) = s.subworlds.as_mut() else {
+        return;
+    };
+    if new {
+        subs.add(None);
+    } else {
+        subs.next();
+    }
+    let sub = sub_dir(dir, subs.current_name());
+    let name = subs.current_name().to_owned();
+    save_subworlds(s);
+    open_world(s, sub, dim);
+    // Chosen by hand: the spawn doesn't switch it back while in this level.
+    s.spawn_checked = Some(Instant::now() + Duration::from_secs(60 * 60 * 24));
+    notice(s, format!("Map world: {name}"));
+}
+
+fn notice(s: &mut State, text: String) {
+    s.notice = Some((text, Instant::now() + Duration::from_secs(3)));
 }
 
 /// Opens the explored map of `dir` (a world, or a server's sub-world) in `dim`.
@@ -461,6 +554,7 @@ fn open_world(s: &mut State, dir: PathBuf, dim: &'static str) {
     }
     s.explored = Some(Explored::open(&dir, dim));
     s.cave = None;
+    s.slice = None;
     s.composed = None;
     s.mini = None;
 }
@@ -577,14 +671,24 @@ fn cave_height(game: &Game<'_>, settings: &m::Settings) -> Option<i32> {
     (game.world.shape.has_ceiling || covered).then_some(head)
 }
 
-/// Keeps the layer at `y` scanned within `radius` chunks of `centre`, within `budget`.
-fn follow_layer(game: &Game<'_>, s: &mut State, y: i32, centre: (i32, i32), radius: i32, budget: Duration) {
+/// Keeps a layer at `y` scanned within `radius` chunks of `centre`, within `budget`: the cave
+/// layer, or the world map's slice.
+#[allow(clippy::too_many_arguments)]
+fn follow_layer(
+    game: &Game<'_>,
+    s: &mut State,
+    slice: bool,
+    y: i32,
+    centre: (i32, i32),
+    radius: i32,
+    budget: Duration,
+) {
     let started = Instant::now();
-    let State { cave, palette, tints, .. } = s;
+    let State { cave, slice: sliced, palette, tints, .. } = s;
     let Some(palette) = palette.as_ref() else {
         return;
     };
-    let layer = cave.get_or_insert_with(Layer::default);
+    let layer = if slice { sliced } else { cave }.get_or_insert_with(Layer::default);
     let world = &game.world;
     // A new height (by more than a step) or changed blocks: scanned again, nearest first.
     if (layer.y - y).abs() >= 2 || layer.tiles.is_empty() {
@@ -624,7 +728,7 @@ fn follow_layer(game: &Game<'_>, s: &mut State, y: i32, centre: (i32, i32), radi
 
 /// The world map's area of a `w` x `h` GUI.
 fn map_rect(w: f32, h: f32) -> [f32; 4] {
-    [0.0, TOP, w, (h - TOP - BOTTOM).max(1.0)]
+    [0.0, TOP, (w - TOOL_W).max(1.0), (h - TOP - BOTTOM).max(1.0)]
 }
 
 fn map_open(game: &Game<'_>) -> bool {
@@ -638,40 +742,119 @@ fn look(settings: &m::Settings) -> m::Look {
     }
 }
 
-/// Composes and uploads the world map's image when the view or the tiles changed.
+/// Composes and uploads the world map's image when the view or the tiles changed: the explored
+/// surface (unloaded ground dimmed), or a layer of the loaded chunks.
 fn refresh_image(game: &mut Game<'_>, s: &mut State, settings: &m::Settings) {
     let (w, h) = game.gui_size();
     let rect = map_rect(w, h);
+    if s.screen.follow
+        && let Some(p) = player_pos(game)
+    {
+        s.screen.view.x = p[0];
+        s.screen.view.z = p[2];
+    }
+    if let Some(y) = s.screen.slice {
+        let view = s.screen.view;
+        let centre = ((view.x.floor() as i32) >> 4, (view.z.floor() as i32) >> 4);
+        let radius = game.settings.render_distance.max(2) + 1;
+        follow_layer(game, s, true, y, centre, radius, CAVE_BUDGET * 2);
+    } else {
+        s.slice = None;
+    }
     let (iw, ih, scale) = m::image_size(rect[2], rect[3]);
-    let Some(e) = s.explored.as_ref() else {
-        return;
-    };
     let view = s.screen.view;
-    let rev = e.store.revision;
+    let rev = match (&s.slice, &s.explored) {
+        (Some(l), _) => l.revision | 1 << 62,
+        (None, Some(e)) => e.store.revision,
+        _ => return,
+    };
     let fresh = s.composed.is_some_and(|(v, r, size, at)| {
-        v == view && size == (iw, ih) && (r == rev || at.elapsed() < RECOMPOSE)
+        v == view && size == (iw, ih) && (r == rev || (r >> 62 == rev >> 62 && at.elapsed() < RECOMPOSE))
     });
     if fresh {
         return;
     }
-    let chunks = &game.world.chunks;
-    let loaded = |x: i32, z: i32| chunks.contains_key(&(x, z));
     let mut image = std::mem::take(&mut s.image);
-    m::compose(
-        |x, z| e.store.column(x, z),
-        &MAP_COLORS,
-        look(settings),
-        &view,
-        iw,
-        ih,
-        scale,
-        Some(&loaded),
-        &mut image,
-    );
+    {
+        let chunks = &game.world.chunks;
+        let loaded = |x: i32, z: i32| chunks.contains_key(&(x, z));
+        match (&s.slice, &s.explored) {
+            (Some(l), _) => m::compose(
+                |x, z| l.column(x, z),
+                &MAP_COLORS,
+                look(settings),
+                &view,
+                iw,
+                ih,
+                scale,
+                None,
+                &mut image,
+            ),
+            (None, Some(e)) => m::compose(
+                |x, z| e.store.column(x, z),
+                &MAP_COLORS,
+                look(settings),
+                &view,
+                iw,
+                ih,
+                scale,
+                Some(&loaded),
+                &mut image,
+            ),
+            _ => {}
+        }
+    }
     if upload(game, [0, 0], iw, ih, image.clone()) {
         s.composed = Some((view, rev, (iw, ih), Instant::now()));
     }
     s.image = image;
+}
+
+/// The explored map around the world map's centre, a block a pixel (at most 2048 across), saved
+/// as a PNG in `<instance>/lumos-map/exports/`.
+fn export_png(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
+    let Some(e) = s.explored.as_ref() else {
+        return;
+    };
+    let view = m::MapView { zoom: 3, ..s.screen.view };
+    // The explored tiles' extent, cut to 2048 blocks around the view.
+    let (mut x0, mut z0, mut x1, mut z1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    let (cx, cz) = ((view.x.floor() as i32) >> 4, (view.z.floor() as i32) >> 4);
+    for &(x, z) in e.store.tiles.keys() {
+        if (x - cx).abs() <= 64 && (z - cz).abs() <= 64 {
+            x0 = x0.min(x);
+            z0 = z0.min(z);
+            x1 = x1.max(x);
+            z1 = z1.max(z);
+        }
+    }
+    if x0 > x1 {
+        notice(s, "Nothing explored here to save".into());
+        return;
+    }
+    let (w, h) = (((x1 - x0 + 1) * 16) as u32, ((z1 - z0 + 1) * 16) as u32);
+    let at = m::MapView {
+        x: f64::from(x0 * 16) + f64::from(w) / 2.0,
+        z: f64::from(z0 * 16) + f64::from(h) / 2.0,
+        zoom: 3,
+    };
+    let mut image = Vec::new();
+    m::compose(|x, z| e.store.column(x, z), &MAP_COLORS, look(settings), &at, w, h, 1.0, None, &mut image);
+    let dir = base(game).join("exports");
+    let world = s
+        .world_dir
+        .as_ref()
+        .and_then(|d| d.strip_prefix(base(game)).ok())
+        .map_or_else(|| "map".to_owned(), |p| m::folder_name(&p.to_string_lossy()));
+    let name = format!("{world}-{}-{}.png", m::folder_name(e.dim), now_secs());
+    let path = dir.join(&name);
+    let _ = std::thread::Builder::new()
+        .name("lumos-map-export".into())
+        .spawn(move || {
+            let png = m::png(w, h, &image);
+            let _ = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, png));
+        });
+    notice(s, format!("Saved lumos-map/exports/{name} ({w} x {h})"));
 }
 
 /// Composes and uploads the minimap's image when what it shows changed.
@@ -697,7 +880,7 @@ fn refresh_minimap(game: &mut Game<'_>, s: &mut State, settings: &m::Settings) {
         let reach = side as f32 / 2.0 * bpp * std::f32::consts::SQRT_2;
         let radius = ((reach / 16.0).ceil() as i32 + 1).min(game.settings.render_distance.max(2));
         let centre = ((p[0].floor() as i32) >> 4, (p[2].floor() as i32) >> 4);
-        follow_layer(game, s, y, centre, radius, CAVE_BUDGET);
+        follow_layer(game, s, false, y, centre, radius, CAVE_BUDGET);
     } else {
         s.cave = None;
     }
@@ -734,10 +917,20 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
     let open = map_open(game);
     let dead = game.screen == Screen::Dead;
     let settings = settings(game);
+    // A waypoint shared from the map: the map closes and the chat opens with it typed.
+    if let Some(text) = with(|s| s.pending_chat.take()) {
+        game.native_mod_screen_close(m::ID);
+        let _ = game.native_open_chat(&text);
+        return;
+    }
     with(|s| {
         follow_colours(game, s);
         follow_world(game, s);
+        follow_spawn(game, s);
         explore(game, s, if open { BUDGET_OPEN } else { BUDGET });
+        if std::mem::take(&mut s.pending_export) {
+            export_png(game, s, &settings);
+        }
         if dead && !s.was_dead && settings.death && s.world_dir.is_some() {
             if let Some(p) = player_pos(game) {
                 s.book.add_death(block_of(p), game.dim.id(), m::DEATHS[settings.deaths], now_secs());
@@ -767,6 +960,8 @@ pub(super) fn on_level_unload(game: &mut Game<'_>) {
         s.world_asked = None;
         s.biome = None;
         s.was_dead = false;
+        s.slice = None;
+        s.spawn_checked = None;
     });
     let _ = game;
 }
@@ -815,6 +1010,48 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
             let text = format!("Added {name} at {} {} {}", pos[0], pos[1], pos[2]);
             game.native_client_action_bar(Text::colored(text, rgb), false);
         }
+    } else {
+        // The minimap's own keys: zoom, cave view, shown.
+        let mut s = settings(game);
+        let said = if keys::pressed(game, keys::ZOOM_IN, key, true) {
+            s.zoom_step(true).then(|| format!("Minimap zoom: {} block(s) a pixel", m::ZOOMS[s.zoom]))
+        } else if keys::pressed(game, keys::ZOOM_OUT, key, true) {
+            s.zoom_step(false).then(|| format!("Minimap zoom: {} block(s) a pixel", m::ZOOMS[s.zoom]))
+        } else if keys::pressed(game, keys::CAVE, key, true) {
+            s.cave = !s.cave;
+            Some(format!("Cave view: {}", if s.cave { "On" } else { "Off" }))
+        } else if keys::pressed(game, keys::MINIMAP, key, true) {
+            s.minimap = !s.minimap;
+            Some(format!("Minimap: {}", if s.minimap { "Shown" } else { "Hidden" }))
+        } else {
+            None
+        };
+        if let Some(text) = said {
+            m::set_settings(s);
+            for (k, v) in s.stored() {
+                game.native_set_setting(m::ID, k, &v);
+            }
+            with(|st| st.mini = None);
+            game.native_client_action_bar(Text::literal(text), false);
+        }
+    }
+}
+
+/// `native_client_chat_received`: coordinates in chat are kept for the waypoint list's "From
+/// chat" (the chat's own text can't be clicked from a mod).
+pub(super) fn on_chat(game: &Game<'_>, overlay: bool, message: &Text) {
+    if overlay || !game.native_on(m::ID) {
+        return;
+    }
+    let line = message.plain();
+    if let Some(at) = m::chat_coords(&line) {
+        let short: String = line.chars().take(40).collect();
+        with(|s| {
+            s.chat.push_back((short, at));
+            while s.chat.len() > 5 {
+                s.chat.pop_front();
+            }
+        });
     }
 }
 
@@ -913,6 +1150,13 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
         let at = [cx + u, cy + v];
         game.native_quad(batch, m::arrow(at, turn, big + 1.0), 0xC000_0000);
         game.native_quad(batch, m::arrow(at, turn, big), m::dot_colour(kind));
+        if kind == m::DotKind::Player
+            && s.names
+            && let Some(name) = game.remote_player_name(mob.id)
+        {
+            let w = game.native_text_width(name);
+            game.native_text(batch, name, [(at[0] - w / 2.0).round(), (at[1] + 4.0).round()], 0xFFFFFF, true);
+        }
         drawn += 1;
     }
     // Your own arrow.
@@ -1005,38 +1249,130 @@ fn inside(r: [f32; 4], p: [f32; 2]) -> bool {
     p[0] >= r[0] && p[0] < r[0] + r[2] && p[1] >= r[1] && p[1] < r[1] + r[3]
 }
 
-/// The top bar's buttons: Waypoints, Centre on me.
-fn top_buttons(w: f32) -> [[f32; 4]; 2] {
-    [[w - 132.0, 2.0, 70.0, 18.0], [w - 60.0, 2.0, 58.0, 18.0]]
+/// The tool column's width at the map's right.
+const TOOL_W: f32 = 96.0;
+/// How far the layer buttons step.
+const LAYER_STEP: i32 = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tool {
+    Waypoints,
+    OnMe,
+    Follow,
+    Grid,
+    Slime,
+    LayerDown,
+    LayerUp,
+    Filter,
+    Png,
+    World,
+    NewWorld,
 }
 
-/// The list's panel and its rows' rects, and its two buttons (Back, Add here).
-fn list_layout(w: f32, h: f32) -> ([f32; 4], usize, [[f32; 4]; 2]) {
-    let pw = 300.0f32.min(w - 20.0);
+/// The tool column's buttons; slime chunks only where the seed is known, sub-worlds only on a
+/// server.
+fn tools(w: f32, mp: bool, slime: bool) -> Vec<(Tool, [f32; 4])> {
+    let x = w - TOOL_W + 3.0;
+    let full = TOOL_W - 6.0;
+    let half = (full - 2.0) / 2.0;
+    let mut y = TOP + 4.0;
+    let mut out = vec![(Tool::Waypoints, [x, y, full, 16.0])];
+    y += 18.0;
+    out.push((Tool::OnMe, [x, y, half, 16.0]));
+    out.push((Tool::Follow, [x + half + 2.0, y, half, 16.0]));
+    y += 18.0;
+    out.push((Tool::Grid, [x, y, half, 16.0]));
+    if slime {
+        out.push((Tool::Slime, [x + half + 2.0, y, half, 16.0]));
+    }
+    y += 30.0;
+    out.push((Tool::LayerDown, [x, y, half, 16.0]));
+    out.push((Tool::LayerUp, [x + half + 2.0, y, half, 16.0]));
+    y += 18.0;
+    out.push((Tool::Filter, [x, y, full, 16.0]));
+    y += 18.0;
+    out.push((Tool::Png, [x, y, full, 16.0]));
+    if mp {
+        y += 18.0;
+        out.push((Tool::World, [x, y, full, 16.0]));
+        y += 18.0;
+        out.push((Tool::NewWorld, [x, y, full, 16.0]));
+    }
+    out
+}
+
+fn tool_label(t: Tool, s: &State) -> String {
+    let on = |b: bool| if b { "ON" } else { "OFF" };
+    match t {
+        Tool::Waypoints => "Waypoints".into(),
+        Tool::OnMe => "On me".into(),
+        Tool::Follow => format!("Follow {}", on(s.screen.follow)),
+        Tool::Grid => format!("Grid {}", on(s.screen.grid)),
+        Tool::Slime => format!("Slime {}", on(s.screen.slime)),
+        Tool::LayerDown => "Down".into(),
+        Tool::LayerUp => "Up".into(),
+        Tool::Filter => format!("Show: {}", m::MAP_FILTERS[s.screen.filter]),
+        Tool::Png => "Save as PNG".into(),
+        Tool::World => s
+            .subworlds
+            .as_ref()
+            .map_or_else(String::new, |(_, w)| format!("Map: {}", w.current_name())),
+        Tool::NewWorld => "New map world".into(),
+    }
+}
+
+/// The layer one step down or up from `now` (`None`: the surface), from the player's feet.
+fn layer_step(now: Option<i32>, feet: i32, down: bool, top: i32) -> Option<i32> {
+    match (now, down) {
+        (None, true) => Some(feet),
+        (None, false) => None,
+        (Some(y), true) => Some(y - LAYER_STEP),
+        (Some(y), false) if y + LAYER_STEP >= top => None,
+        (Some(y), false) => Some(y + LAYER_STEP),
+    }
+}
+
+/// The list's panel, its header buttons (set, set shown, new set, delete set) and its bottom
+/// ones (back, order, from chat, add here).
+fn list_layout(w: f32, h: f32) -> ([f32; 4], usize, [[f32; 4]; 4], [[f32; 4]; 4]) {
+    let pw = 352.0f32.min(w - 12.0);
     let panel = [(w - pw) / 2.0, 10.0, pw, h - 20.0];
     let rows = m::list_rows(h);
+    let x = panel[0] + 6.0;
+    let unit = (pw - 12.0 - 6.0) / 11.0;
+    let head = panel[1] + 22.0;
     let by = h - 34.0;
+    let r = |at: f32, y: f32, w: f32| [x + at * unit + (at.ceil()) * 2.0, y, w * unit, 18.0];
     (
         panel,
         rows,
-        [
-            [panel[0] + 6.0, by, 90.0, 18.0],
-            [panel[0] + panel[2] - 96.0, by, 90.0, 18.0],
-        ],
+        [r(0.0, head, 4.0), r(4.0, head, 2.5), r(6.5, head, 2.0), r(8.5, head, 2.5)],
+        [r(0.0, by, 2.5), r(2.5, by, 3.0), r(5.5, by, 3.0), r(8.5, by, 2.5)],
     )
 }
 
 fn list_row(panel: [f32; 4], i: usize) -> [f32; 4] {
-    [panel[0] + 6.0, panel[1] + 26.0 + i as f32 * 22.0, panel[2] - 12.0, 20.0]
+    [panel[0] + 6.0, panel[1] + 44.0 + i as f32 * 22.0, panel[2] - 12.0, 20.0]
 }
 
-/// The editor's name box and buttons: colour, shown, move here, delete, done.
-fn edit_layout(w: f32, h: f32) -> ([f32; 4], [[f32; 4]; 5]) {
+/// The editor's name box and buttons: colour, shown, set, move here, share, delete, done.
+fn edit_layout(w: f32, h: f32) -> ([f32; 4], [[f32; 4]; 7]) {
     let pw = 220.0;
     let x = (w - pw) / 2.0;
-    let y = (h / 2.0 - 80.0).max(4.0);
-    let b = |i: f32| [x, y + 40.0 + i * 22.0, pw, 20.0];
-    ([x, y + 14.0, pw, 18.0], [b(0.0), b(1.0), b(2.0), b(3.0), b(4.0)])
+    let y = (h / 2.0 - 110.0).max(4.0);
+    let b = |i: f32| [x, y + 52.0 + i * 21.0, pw, 19.0];
+    (
+        [x, y + 14.0, pw, 18.0],
+        [b(0.0), b(1.0), b(2.0), b(3.0), b(4.0), b(5.0), b(6.0)],
+    )
+}
+
+/// The new set's name box and its buttons: create, cancel.
+fn new_set_layout(w: f32, h: f32) -> ([f32; 4], [[f32; 4]; 2]) {
+    let pw = 200.0;
+    let x = (w - pw) / 2.0;
+    let y = h / 2.0 - 30.0;
+    ([x, y, pw, 18.0], [[x, y + 24.0, 98.0, 18.0], [x + 102.0, y + 24.0, 98.0, 18.0]])
 }
 
 fn button(game: &Game<'_>, batch: &mut HudBatch, r: [f32; 4], label: &str, mouse: [f32; 2]) {
@@ -1054,7 +1390,24 @@ fn button(game: &Game<'_>, batch: &mut HudBatch, r: [f32; 4], label: &str, mouse
     );
 }
 
-/// `native_screen_render_post`: the map, the list or the editor.
+fn text_box(game: &Game<'_>, batch: &mut HudBatch, field: [f32; 4], text: &str) {
+    game.native_fill(batch, field, 0xFFA0_A0A0);
+    game.native_fill(batch, [field[0] + 1.0, field[1] + 1.0, field[2] - 2.0, field[3] - 2.0], 0xFF00_0000);
+    let caret = if (game.started.elapsed().as_millis() / 500) % 2 == 0 { "_" } else { "" };
+    game.native_text(batch, &format!("{text}{caret}"), [field[0] + 4.0, field[1] + 5.0], 0xFFFFFF, false);
+}
+
+/// Whether a waypoint shows on the world map with its filter.
+fn on_map(s: &State, w: &m::Waypoint) -> bool {
+    s.book.visible(w)
+        && match s.screen.filter {
+            0 => true,
+            1 => w.set == s.book.current_set(),
+            _ => false,
+        }
+}
+
+/// `native_screen_render_post`: the map, the list, the editor or the new set's name.
 pub(super) fn on_render(game: &Game<'_>, batch: &mut HudBatch, screen: &NativeScreenView<'_>) {
     if !ours(game, screen.id) {
         return;
@@ -1065,9 +1418,16 @@ pub(super) fn on_render(game: &Game<'_>, batch: &mut HudBatch, screen: &NativeSc
     let settings = settings(game);
     with(|s| match s.screen.page.clone() {
         m::Page::Map => draw_map(game, batch, s, &settings, mouse),
-        m::Page::List { scroll } => draw_list(game, batch, s, scroll, mouse),
+        m::Page::List { scroll } => draw_list(game, batch, s, &settings, scroll, mouse),
         m::Page::Edit { index, name } => draw_edit(game, batch, s, index, &name, mouse),
-        m::Page::NewSet { .. } => {}
+        m::Page::NewSet { name } => {
+            let (field, [create, cancel]) = new_set_layout(w, h);
+            game.native_fill(batch, [field[0] - 8.0, field[1] - 20.0, field[2] + 16.0, 70.0], 0xC000_0000);
+            game.native_text(batch, "New set's name", [field[0], field[1] - 12.0], 0xFFFFFF, true);
+            text_box(game, batch, field, &name);
+            button(game, batch, create, "Create", mouse);
+            button(game, batch, cancel, "Cancel", mouse);
+        }
     });
 }
 
@@ -1080,9 +1440,48 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &State, settings: &m::Sett
     {
         draw_image(game, batch, [0.0, 0.0, iw as f32, ih as f32], rect, 255);
     }
+    let (x0, z0, x1, z1) = view.bounds(rect);
+    // The chunk grid, when chunks are at least 4 pixels across.
+    if s.screen.grid && view.bpp() <= 4.0 {
+        let mut cx = (x0 / 16.0).floor() as i64 * 16;
+        while (cx as f64) <= x1 {
+            let [sx, _] = view.screen_of(rect, cx as f64, z0);
+            game.native_fill(batch, [sx.round(), rect[1], 1.0, rect[3]], 0x40FF_FFFF);
+            cx += 16;
+        }
+        let mut cz = (z0 / 16.0).floor() as i64 * 16;
+        while (cz as f64) <= z1 {
+            let [_, sy] = view.screen_of(rect, x0, cz as f64);
+            game.native_fill(batch, [rect[0], sy.round(), rect[2], 1.0], 0x40FF_FFFF);
+            cz += 16;
+        }
+    }
+    // Slime chunks, where the seed is known (single player).
+    if s.screen.slime
+        && view.bpp() <= 4.0
+        && let Some(seed) = game.native_world_seed()
+    {
+        let (cx0, cz0) = ((x0 / 16.0).floor() as i32, (z0 / 16.0).floor() as i32);
+        let (cx1, cz1) = ((x1 / 16.0).floor() as i32, (z1 / 16.0).floor() as i32);
+        let side = (16.0 / view.bpp()) as f32;
+        for cz in cz0..=cz1 {
+            for cx in cx0..=cx1 {
+                if m::slime_chunk(seed, cx, cz) {
+                    let [sx, sy] = view.screen_of(rect, f64::from(cx * 16), f64::from(cz * 16));
+                    let left = sx.max(rect[0]);
+                    let right = (sx + side).min(rect[0] + rect[2]);
+                    let up = sy.max(rect[1]);
+                    let down = (sy + side).min(rect[1] + rect[3]);
+                    if right > left && down > up {
+                        game.native_fill(batch, [left, up, right - left, down - up], 0x5030_E040);
+                    }
+                }
+            }
+        }
+    }
     let dim = game.dim.id();
-    // Waypoints, with their initials; names shown when zoomed in or pointed at.
-    for wp in s.book.list.iter().filter(|w| s.book.visible(w)) {
+    // Waypoints with their initials; names shown when zoomed in or pointed at.
+    for wp in s.book.list.iter().filter(|w| on_map(s, w)) {
         let Some(c) = wp.place_in(dim, settings.convert) else {
             continue;
         };
@@ -1090,12 +1489,15 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &State, settings: &m::Sett
         if !inside(rect, [x, y]) {
             continue;
         }
-        game.native_fill(batch, [x - 4.0, y - 4.0, 8.0, 8.0], 0xFF00_0000);
-        game.native_fill(batch, [x - 3.0, y - 3.0, 6.0, 6.0], 0xFF00_0000 | wp.rgb());
-        let hover = (mouse[0] - x).abs() <= 5.0 && (mouse[1] - y).abs() <= 5.0;
-        if hover || view.bpp() <= 4.0 {
+        let initials = wp.initials();
+        let iw = game.native_text_width(&initials).max(6.0);
+        game.native_fill(batch, [x - iw / 2.0 - 2.0, y - 6.0, iw + 4.0, 11.0], 0xFF00_0000);
+        game.native_fill(batch, [x - iw / 2.0 - 1.0, y - 5.0, iw + 2.0, 9.0], 0xFF00_0000 | wp.rgb());
+        game.native_text(batch, &initials, [x - game.native_text_width(&initials) / 2.0, y - 4.0], 0x000000, false);
+        let hover = (mouse[0] - x).abs() <= iw / 2.0 + 2.0 && (mouse[1] - y).abs() <= 6.0;
+        if hover || view.bpp() <= 2.0 {
             let tw = game.native_text_width(&wp.name);
-            game.native_text(batch, &wp.name, [x - tw / 2.0, y - 14.0], wp.rgb(), true);
+            game.native_text(batch, &wp.name, [x - tw / 2.0, y - 16.0], wp.rgb(), true);
         }
     }
     // You: an arrow the way you face.
@@ -1106,38 +1508,67 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &State, settings: &m::Sett
             game.native_quad(batch, m::arrow([x, y], game.yaw, 5.0), 0xFFFF_FFFF);
         }
     }
+    // The bars and the tools.
     game.native_fill(batch, [0.0, 0.0, w, TOP], 0xE000_0000);
     game.native_fill(batch, [0.0, h - BOTTOM, w, BOTTOM], 0xE000_0000);
-    let title = format!("World Map - {}", m::pretty_id(dim));
+    game.native_fill(batch, [w - TOOL_W, TOP, TOOL_W, h - TOP - BOTTOM], 0xE018_181C);
+    let layer = s.screen.slice.map_or_else(|| "Surface".to_owned(), |y| format!("Y {y}"));
+    let title = format!("World Map - {} - {layer}", m::pretty_id(dim));
     game.native_text(batch, &title, [6.0, 7.0], 0xFFFFFF, true);
-    let [list, centre] = top_buttons(w);
-    button(game, batch, list, "Waypoints", mouse);
-    button(game, batch, centre, "On me", mouse);
-    let hint = "Drag to move, wheel to zoom, click to add a waypoint";
-    let bottom = if inside(rect, mouse) {
-        let (x, z) = view.world_at(rect, mouse);
-        format!("X {}  Z {}   {} block(s) a pixel   {hint}", x.floor() as i64, z.floor() as i64, view.bpp())
-    } else {
-        hint.to_owned()
+    let slime = game.native_world_seed().is_some();
+    for (tool, r) in tools(w, s.subworlds.is_some(), slime) {
+        if tool == Tool::LayerDown {
+            game.native_text(batch, &format!("Layer: {layer}"), [r[0], r[1] - 10.0], 0xC0C0C0, false);
+        }
+        button(game, batch, r, &tool_label(tool, s), mouse);
+    }
+    let hint = "Drag or WASD to move, wheel to zoom, [ ] layers, click to add a waypoint";
+    let bottom = match &s.notice {
+        Some((text, until)) if Instant::now() < *until => text.clone(),
+        _ if inside(rect, mouse) => {
+            let (x, z) = view.world_at(rect, mouse);
+            let (bx, bz) = (x.floor() as i32, z.floor() as i32);
+            let y = match (&s.slice, &s.explored) {
+                (Some(l), _) => l.column(bx, bz),
+                (None, Some(e)) => e.store.column(bx, bz),
+                _ => None,
+            }
+            .map_or_else(String::new, |c| format!(" Y {}", c.height));
+            let other = match dim {
+                m::OVERWORLD => format!("   Nether {} {}", bx.div_euclid(8), bz.div_euclid(8)),
+                m::NETHER => format!("   Overworld {} {}", bx * 8, bz * 8),
+                _ => String::new(),
+            };
+            format!("X {bx}{y} Z {bz}{other}   {} block(s) a pixel", view.bpp())
+        }
+        _ => hint.to_owned(),
     };
     game.native_text(batch, &bottom, [6.0, h - BOTTOM + 3.0], 0xC0C0C0, false);
 }
 
-fn draw_list(game: &Game<'_>, batch: &mut HudBatch, s: &State, scroll: usize, mouse: [f32; 2]) {
+fn draw_list(game: &Game<'_>, batch: &mut HudBatch, s: &State, settings: &m::Settings, scroll: usize, mouse: [f32; 2]) {
     let (w, h) = (batch.width, batch.height);
-    let (panel, rows, [back, add]) = list_layout(w, h);
+    let (panel, rows, [set, set_shown, new_set, del_set], [back, order, from_chat, add]) = list_layout(w, h);
     game.native_fill(batch, panel, 0xC000_0000);
-    let title = format!("Waypoints ({})", s.book.list.len());
+    let title = format!("Waypoints ({})  -  right-click a row to hide it", s.book.list.len());
     game.native_text(batch, &title, [panel[0] + 6.0, panel[1] + 8.0], 0xFFFFFF, true);
+    let cur = &s.book.sets[s.book.current.min(s.book.sets.len() - 1)];
+    button(game, batch, set, &format!("Set: {}", cur.name), mouse);
+    button(game, batch, set_shown, &format!("Shown: {}", if cur.shown { "ON" } else { "OFF" }), mouse);
+    button(game, batch, new_set, "New set", mouse);
+    button(game, batch, del_set, "Delete set", mouse);
     let here = player_pos(game);
     let dim = game.dim.id();
-    for (i, wp) in s.book.list.iter().skip(scroll).take(rows).enumerate() {
+    let ordered = s.book.order(settings.sort, here);
+    for (i, &index) in ordered.iter().skip(scroll).take(rows).enumerate() {
+        let wp = &s.book.list[index];
         let r = list_row(panel, i);
         let hover = inside(r, mouse);
         game.native_fill(batch, r, if hover { 0x6050_5070 } else { 0x4030_3040 });
         game.native_fill(batch, [r[0] + 4.0, r[1] + 6.0, 8.0, 8.0], 0xFF00_0000 | wp.rgb());
-        let colour = if s.book.visible(wp) { 0xFFFFFF } else { 0x808080 };
-        game.native_text(batch, &wp.name, [r[0] + 16.0, r[1] + 6.0], colour, false);
+        let colour = if s.book.visible(wp) { 0xFFFFFF } else { 0x707070 };
+        let label = if wp.set == s.book.current_set() { wp.name.clone() } else { format!("{} ({})", wp.name, wp.set) };
+        game.native_text(batch, &label, [r[0] + 16.0, r[1] + 6.0], colour, false);
         let mut info = format!("{} {} {}", wp.pos[0], wp.pos[1], wp.pos[2]);
         if wp.dim != dim {
             info = format!("{info}  {}", m::pretty_id(&wp.dim));
@@ -1148,12 +1579,26 @@ fn draw_list(game: &Game<'_>, batch: &mut HudBatch, s: &State, scroll: usize, mo
         game.native_text(batch, &info, [r[0] + r[2] - iw - 4.0, r[1] + 6.0], 0xA0A0A0, false);
     }
     if s.book.list.is_empty() {
-        let t = "No waypoints yet: add one here, with B in the world, or by clicking the map";
+        let t = "No waypoints yet: B in the world, a click on the map, or Add here";
         let tw = game.native_text_width(t);
-        game.native_text(batch, t, [(w - tw) / 2.0, panel[1] + 40.0], 0xA0A0A0, false);
+        game.native_text(batch, t, [(w - tw) / 2.0, panel[1] + 60.0], 0xA0A0A0, false);
     }
     button(game, batch, back, "Back to map", mouse);
+    button(game, batch, order, &format!("Order: {}", m::SORTS[settings.sort]), mouse);
+    let chat = match s.chat.back() {
+        Some(_) => format!("From chat ({})", s.chat.len()),
+        None => "From chat".to_owned(),
+    };
+    button(game, batch, from_chat, &chat, mouse);
     button(game, batch, add, "Add here", mouse);
+    if inside(from_chat, mouse)
+        && let Some((line, at)) = s.chat.back()
+    {
+        let tip = format!("{line} -> {} {} {}", at[0], at[1], at[2]);
+        let tw = game.native_text_width(&tip);
+        game.native_fill(batch, [from_chat[0] - 2.0, from_chat[1] - 14.0, tw + 6.0, 12.0], 0xF000_0000);
+        game.native_text(batch, &tip, [from_chat[0] + 1.0, from_chat[1] - 12.0], 0xFFFFA0, false);
+    }
 }
 
 fn draw_edit(game: &Game<'_>, batch: &mut HudBatch, s: &State, index: usize, name: &str, mouse: [f32; 2]) {
@@ -1161,19 +1606,26 @@ fn draw_edit(game: &Game<'_>, batch: &mut HudBatch, s: &State, index: usize, nam
     let Some(wp) = s.book.list.get(index) else {
         return;
     };
-    let (field, [colour, shown, here, delete, done]) = edit_layout(w, h);
-    game.native_fill(batch, [field[0] - 8.0, field[1] - 18.0, field[2] + 16.0, 166.0], 0xC000_0000);
-    let title = format!("Waypoint at {} {} {}", wp.pos[0], wp.pos[1], wp.pos[2]);
+    let (field, [colour, shown, set, here, share, delete, done]) = edit_layout(w, h);
+    game.native_fill(batch, [field[0] - 8.0, field[1] - 18.0, field[2] + 16.0, 214.0], 0xC000_0000);
+    let title = format!("Waypoint at {} {} {} ({})", wp.pos[0], wp.pos[1], wp.pos[2], m::pretty_id(&wp.dim));
     game.native_text(batch, &title, [field[0], field[1] - 12.0], 0xFFFFFF, true);
-    game.native_fill(batch, field, 0xFFA0_A0A0);
-    game.native_fill(batch, [field[0] + 1.0, field[1] + 1.0, field[2] - 2.0, field[3] - 2.0], 0xFF00_0000);
-    let caret = if (game.started.elapsed().as_millis() / 500) % 2 == 0 { "_" } else { "" };
-    game.native_text(batch, &format!("{name}{caret}"), [field[0] + 4.0, field[1] + 5.0], 0xFFFFFF, false);
-    let on = |b: bool| if b { "ON" } else { "OFF" };
+    text_box(game, batch, field, name);
+    let other = match wp.dim.as_str() {
+        m::OVERWORLD => m::converted(wp.pos, m::OVERWORLD, m::NETHER).map(|p| format!("In the Nether: {} {} {}", p[0], p[1], p[2])),
+        m::NETHER => m::converted(wp.pos, m::NETHER, m::OVERWORLD).map(|p| format!("In the Overworld: {} {} {}", p[0], p[1], p[2])),
+        _ => None,
+    };
+    if let Some(t) = other {
+        game.native_text(batch, &t, [field[0], field[1] + 23.0], 0xA0A0A0, false);
+    }
+    let on = |b: bool| if b { "ON" } else { "OFF (hidden for now)" };
     button(game, batch, colour, &format!("Colour: {}", m::COLOURS[wp.colour.min(m::COLOURS.len() - 1)].0), mouse);
-    game.native_fill(batch, [colour[0] + 4.0, colour[1] + 6.0, 8.0, 8.0], 0xFF00_0000 | wp.rgb());
+    game.native_fill(batch, [colour[0] + 4.0, colour[1] + 5.0, 8.0, 8.0], 0xFF00_0000 | wp.rgb());
     button(game, batch, shown, &format!("Shown: {}", on(wp.shown)), mouse);
+    button(game, batch, set, &format!("Set: {}", wp.set), mouse);
     button(game, batch, here, "Move to where I stand", mouse);
+    button(game, batch, share, "Share in chat", mouse);
     button(game, batch, delete, "Delete", mouse);
     button(game, batch, done, "Done", mouse);
 }
@@ -1192,57 +1644,103 @@ fn finish_edit(s: &mut State, to: m::Page) {
     s.screen.page = to;
 }
 
-/// `native_screen_mouse_button_pressed_pre`: buttons, rows, and a press on the map.
+fn edit(s: &mut State, index: usize) {
+    let name = s.book.list[index].name.clone();
+    s.screen.page = m::Page::Edit { index, name };
+}
+
+/// `native_screen_mouse_button_pressed_pre`: buttons, rows, tools, and a press on the map.
 pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i32, canceled: &mut bool) {
     if !ours(game, screen.id) || *canceled {
         return;
     }
     *canceled = true;
-    if button != 0 {
-        return;
-    }
     let (w, h) = game.gui_size();
     let mouse = screen.mouse;
     let here = player_pos(game).map(block_of);
     let dim = game.dim.id();
+    let mut settings = settings(game);
+    let mut settings_changed = false;
     with(|s| match s.screen.page.clone() {
-        m::Page::Map => {
-            let [list, centre] = top_buttons(w);
-            if inside(list, mouse) {
-                s.screen.page = m::Page::List { scroll: 0 };
-            } else if inside(centre, mouse) {
-                if let Some(p) = player_pos(game) {
-                    s.screen.view.x = p[0];
-                    s.screen.view.z = p[2];
+        m::Page::Map if button == 0 => {
+            let slime = game.native_world_seed().is_some();
+            let hit = tools(w, s.subworlds.is_some(), slime).into_iter().find(|(_, r)| inside(*r, mouse));
+            if let Some((tool, _)) = hit {
+                let feet = here.map_or(64, |p| p[1]);
+                let top = game.world.shape.max_y();
+                match tool {
+                    Tool::Waypoints => s.screen.page = m::Page::List { scroll: 0 },
+                    Tool::OnMe => {
+                        if let Some(p) = player_pos(game) {
+                            s.screen.view.x = p[0];
+                            s.screen.view.z = p[2];
+                        }
+                    }
+                    Tool::Follow => s.screen.follow = !s.screen.follow,
+                    Tool::Grid => s.screen.grid = !s.screen.grid,
+                    Tool::Slime => s.screen.slime = !s.screen.slime,
+                    Tool::LayerDown => s.screen.slice = layer_step(s.screen.slice, feet, true, top),
+                    Tool::LayerUp => s.screen.slice = layer_step(s.screen.slice, feet, false, top),
+                    Tool::Filter => s.screen.filter = (s.screen.filter + 1) % m::MAP_FILTERS.len(),
+                    Tool::Png => s.pending_export = true,
+                    Tool::World => switch_subworld(game, s, false),
+                    Tool::NewWorld => switch_subworld(game, s, true),
                 }
             } else if inside(map_rect(w, h), mouse) {
                 s.screen.press = Some((mouse, false));
             }
         }
+        m::Page::Map => {}
         m::Page::List { scroll } => {
-            let (panel, rows, [back, add]) = list_layout(w, h);
-            if inside(back, mouse) {
+            let (panel, rows, [set, set_shown, new_set, del_set], [back, order, from_chat, add]) = list_layout(w, h);
+            let ordered = s.book.order(settings.sort, player_pos(game));
+            let row = (0..rows).find(|&i| inside(list_row(panel, i), mouse)).and_then(|i| ordered.get(scroll + i).copied());
+            if button == 1 {
+                // Right-click: hidden for now, or shown again.
+                if let Some(i) = row {
+                    s.book.list[i].shown = !s.book.list[i].shown;
+                    save_book(s);
+                }
+                return;
+            }
+            if button != 0 {
+                return;
+            }
+            if inside(set, mouse) {
+                s.book.next_set();
+                save_book(s);
+            } else if inside(set_shown, mouse) {
+                let c = s.book.current;
+                s.book.sets[c].shown = !s.book.sets[c].shown;
+                save_book(s);
+            } else if inside(new_set, mouse) {
+                s.screen.page = m::Page::NewSet { name: String::new() };
+            } else if inside(del_set, mouse) {
+                s.book.remove_set();
+                save_book(s);
+            } else if inside(back, mouse) {
                 s.screen.page = m::Page::Map;
+            } else if inside(order, mouse) {
+                settings.sort = (settings.sort + 1) % m::SORTS.len();
+                settings_changed = true;
+            } else if inside(from_chat, mouse) {
+                if let Some((_, at)) = s.chat.pop_back() {
+                    let i = s.book.add(at, dim, now_secs());
+                    save_book(s);
+                    edit(s, i);
+                }
             } else if inside(add, mouse) {
                 if let Some(pos) = here {
                     let i = s.book.add(pos, dim, now_secs());
                     save_book(s);
-                    let name = s.book.list[i].name.clone();
-                    s.screen.page = m::Page::Edit { index: i, name };
+                    edit(s, i);
                 }
-            } else {
-                for i in 0..rows {
-                    let index = scroll + i;
-                    if index < s.book.list.len() && inside(list_row(panel, i), mouse) {
-                        let name = s.book.list[index].name.clone();
-                        s.screen.page = m::Page::Edit { index, name };
-                        break;
-                    }
-                }
+            } else if let Some(i) = row {
+                edit(s, i);
             }
         }
-        m::Page::Edit { index, .. } => {
-            let (_, [colour, shown, move_here, delete, done]) = edit_layout(w, h);
+        m::Page::Edit { index, .. } if button == 0 => {
+            let (_, [colour, shown, set, move_here, share, delete, done]) = edit_layout(w, h);
             if index >= s.book.list.len() {
                 s.screen.page = m::Page::List { scroll: 0 };
                 return;
@@ -1254,11 +1752,21 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
             } else if inside(shown, mouse) {
                 s.book.list[index].shown = !s.book.list[index].shown;
                 save_book(s);
+            } else if inside(set, mouse) {
+                let at = s.book.set_index(&s.book.list[index].set).unwrap_or(0);
+                let next = s.book.sets[(at + 1) % s.book.sets.len()].name.clone();
+                s.book.list[index].set = next;
+                save_book(s);
             } else if inside(move_here, mouse) {
                 if let Some(pos) = here {
                     s.book.list[index].pos = pos;
                     s.book.list[index].dim = dim.to_owned();
                     save_book(s);
+                }
+            } else if inside(share, mouse) {
+                finish_edit(s, m::Page::Map);
+                if let Some(wp) = s.book.list.get(index) {
+                    s.pending_chat = Some(m::share_text(wp));
                 }
             } else if inside(delete, mouse) {
                 s.book.list.remove(index);
@@ -1268,8 +1776,24 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
                 finish_edit(s, m::Page::List { scroll: 0 });
             }
         }
-        m::Page::NewSet { .. } => {}
+        m::Page::NewSet { name } if button == 0 => {
+            let (_, [create, cancel]) = new_set_layout(w, h);
+            if inside(create, mouse) {
+                s.book.add_set(&name);
+                save_book(s);
+                s.screen.page = m::Page::List { scroll: 0 };
+            } else if inside(cancel, mouse) {
+                s.screen.page = m::Page::List { scroll: 0 };
+            }
+        }
+        _ => {}
     });
+    if settings_changed {
+        m::set_settings(settings);
+        for (k, v) in settings.stored() {
+            game.native_set_setting(m::ID, k, &v);
+        }
+    }
 }
 
 /// `native_screen_mouse_button_released_pre`: a click (not a drag) on the map opens the
@@ -1295,22 +1819,22 @@ pub(super) fn on_release(game: &Game<'_>, screen: &NativeScreenView<'_>, button:
                 return false;
             };
             let [x, y] = view.screen_of(rect, c[0], c[2]);
-            s.book.visible(wp) && (mouse[0] - x).abs() <= 5.0 && (mouse[1] - y).abs() <= 5.0
+            on_map(s, wp) && (mouse[0] - x).abs() <= 6.0 && (mouse[1] - y).abs() <= 6.0
         });
         let index = hit.unwrap_or_else(|| {
             let (x, z) = view.world_at(rect, mouse);
             let (x, z) = (x.floor() as i32, z.floor() as i32);
-            let y = s
-                .explored
-                .as_ref()
-                .and_then(|e| e.store.column(x, z))
-                .map_or(fallback_y, |c| i32::from(c.height) + 1);
+            let column = match (&s.slice, &s.explored) {
+                (Some(l), _) => l.column(x, z),
+                (None, Some(e)) => e.store.column(x, z),
+                _ => None,
+            };
+            let y = column.map_or(fallback_y, |c| i32::from(c.height) + 1);
             let i = s.book.add([x, y, z], dim, now_secs());
             save_book(s);
             i
         });
-        let name = s.book.list[index].name.clone();
-        s.screen.page = m::Page::Edit { index, name };
+        edit(s, index);
     });
 }
 
@@ -1347,31 +1871,65 @@ pub(super) fn on_scroll(game: &mut Game<'_>, screen: &str, mouse: [f32; 2], scro
     });
 }
 
-/// `native_screen_key_pressed_pre`: typing a name; Escape and Enter step back a page instead of
-/// closing the map.
+/// `native_screen_key_pressed_pre`: typing names; WASD or the arrows move the map, [ and ] step
+/// its layer; Escape and Enter step back a page instead of closing the map.
 pub(super) fn on_key_pressed(game: &Game<'_>, screen: &NativeScreenView<'_>, key: &str, canceled: &mut bool) {
     if !ours(game, screen.id) || *canceled {
         return;
     }
+    let (w, h) = game.gui_size();
+    let feet = player_pos(game).map_or(64, |p| p[1].floor() as i32);
+    let top = game.world.shape.max_y();
     with(|s| {
-        let editing = matches!(s.screen.page, m::Page::Edit { .. });
+        let typing = matches!(s.screen.page, m::Page::Edit { .. } | m::Page::NewSet { .. });
         match key {
-            "key.keyboard.escape" | "key.keyboard.enter" | "key.keyboard.keypad.enter" if editing => {
-                finish_edit(s, m::Page::List { scroll: 0 });
+            "key.keyboard.escape" | "key.keyboard.enter" | "key.keyboard.keypad.enter" if typing => {
+                if let m::Page::NewSet { name } = s.screen.page.clone() {
+                    if key != "key.keyboard.escape" {
+                        s.book.add_set(&name);
+                        save_book(s);
+                    }
+                    s.screen.page = m::Page::List { scroll: 0 };
+                } else {
+                    finish_edit(s, m::Page::List { scroll: 0 });
+                }
                 *canceled = true;
             }
             "key.keyboard.escape" if matches!(s.screen.page, m::Page::List { .. }) => {
                 s.screen.page = m::Page::Map;
                 *canceled = true;
             }
-            "key.keyboard.backspace" if editing => {
-                if let m::Page::Edit { name, .. } = &mut s.screen.page {
-                    name.pop();
+            "key.keyboard.backspace" if typing => {
+                match &mut s.screen.page {
+                    m::Page::Edit { name, .. } | m::Page::NewSet { name } => {
+                        name.pop();
+                    }
+                    _ => {}
                 }
                 *canceled = true;
             }
             // Letters type, they don't act (the inventory key doesn't close the map).
-            _ if editing => *canceled = true,
+            _ if typing => *canceled = true,
+            _ if s.screen.page == m::Page::Map => {
+                let rect = map_rect(w, h);
+                let pan = match key {
+                    "key.keyboard.w" | "key.keyboard.up" => Some((0, -1)),
+                    "key.keyboard.s" | "key.keyboard.down" => Some((0, 1)),
+                    "key.keyboard.a" | "key.keyboard.left" => Some((-1, 0)),
+                    "key.keyboard.d" | "key.keyboard.right" => Some((1, 0)),
+                    _ => None,
+                };
+                if let Some(dir) = pan {
+                    s.screen.key_pan(rect, dir);
+                    *canceled = true;
+                } else if key == "key.keyboard.left.bracket" {
+                    s.screen.slice = layer_step(s.screen.slice, feet, true, top);
+                    *canceled = true;
+                } else if key == "key.keyboard.right.bracket" {
+                    s.screen.slice = layer_step(s.screen.slice, feet, false, top);
+                    *canceled = true;
+                }
+            }
             _ => {}
         }
     });
@@ -1383,7 +1941,7 @@ pub(super) fn on_char(game: &Game<'_>, screen: &NativeScreenView<'_>, c: char, c
         return;
     }
     with(|s| {
-        if let m::Page::Edit { name, .. } = &mut s.screen.page {
+        if let m::Page::Edit { name, .. } | m::Page::NewSet { name } = &mut s.screen.page {
             if !c.is_control() && name.chars().count() < m::NAME_MAX {
                 name.push(c);
             }
@@ -1409,7 +1967,7 @@ pub(super) fn on_settings(game: &mut Game<'_>, mod_id: &str, buttons: &mut Vec<S
 }
 
 pub(super) fn on_click(game: &mut Game<'_>, mod_id: &str, button: usize) {
-    if mod_id != m::ID {
+    if mod_id != m::ID || button >= m::Settings::COUNT {
         return;
     }
     let mut s = settings(game);

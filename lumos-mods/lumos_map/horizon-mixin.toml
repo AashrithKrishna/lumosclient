@@ -168,6 +168,18 @@ bindings = [
   { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
 ]
 
+# Coordinates in chat, for the waypoint list's "From chat".
+[[injection]]
+id = "chat"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_client_chat_received"
+helper = "hooks/chat.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "overlay", ty = "bool", value = "overlay" },
+  { name = "message", ty = "&Text", value = "&*message" },
+]
+
 # Leaving a level: its explored map is saved.
 [[injection]]
 id = "level-unload"
