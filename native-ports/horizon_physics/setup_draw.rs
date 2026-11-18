@@ -10,5 +10,7 @@ fn horizon_physics_setup_draw(
         return ::core::ops::ControlFlow::Continue(());
     }
     crate::native_horizon_physics_setup::draw(atlas, batch, cursor);
+    // Lumos: its presses are taken only while it is drawn (setup_click.rs).
+    crate::native_horizon_physics::setup_drawn_now();
     ::core::ops::ControlFlow::Break(())
 }

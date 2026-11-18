@@ -4,8 +4,9 @@
 //! that commit with them inside, instead of the bundled engine.
 //!
 //! Each instance records its choice in `lumos-native.json` beside `options.txt`:
-//! `{"build": "<short commit>", "mods": [ids the player installed]}`. The build's other mods
-//! are switched off in `horizon-mods.txt` (those that let themselves be switched off).
+//! `{"build": "<short commit>", "mods": [ids the player installed]}`. In `horizon-mods.txt` the
+//! installed ones are switched on (`mod.<id>:true`: the game runs only the built-in mods whose line
+//! says so) and the build's other mods off (those that let themselves be switched off).
 
 use crate::{horizon_mods, net};
 use serde::{Deserialize, Serialize};
@@ -261,14 +262,25 @@ fn switch_off_unpicked(game_dir: &Path, build: &Path, st: &InstanceNative) {
     ids.dedup();
     for id in ids {
         if id.len() <= 64 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
-            let _ = horizon_mods::set_enabled(game_dir, &id, st.mods.contains(&id));
+            let _ = write_switch(game_dir, &id, st.mods.contains(&id));
         }
+    }
+}
+
+/// One built-in mod's line. The game runs a built-in native mod only while its line says `true`
+/// (engine-patches/04): a mod the player installed gets `true` unless they turned it off (in the
+/// game's Options > Mods or the instance's Mods tab, a `false` line, kept); every other one gets
+/// `false`. Lines already right are left as they are.
+fn write_switch(game_dir: &Path, id: &str, picked: bool) -> Result<(), String> {
+    match (picked, horizon_mods::switch(game_dir, id)) {
+        (true, Some(_)) | (false, Some(false)) => Ok(()),
+        (picked, _) => horizon_mods::set_enabled(game_dir, id, picked),
     }
 }
 
 fn apply_switches(game_dir: &Path, st: &InstanceNative) -> Result<(), String> {
     for (id, _, _) in &st.known {
-        horizon_mods::set_enabled(game_dir, id, st.mods.contains(id))?;
+        write_switch(game_dir, id, st.mods.contains(id))?;
     }
     Ok(())
 }
@@ -313,6 +325,8 @@ pub fn install(base_dir: &Path, game_dir: &Path, mod_id: &str, report: &dyn Fn(&
     fs::create_dir_all(game_dir).map_err(|e| e.to_string())?;
     write_state(game_dir, &st)?;
     apply_switches(game_dir, &st)?;
+    // The mod just installed is on, even when an earlier build had it switched off.
+    horizon_mods::set_enabled(game_dir, mod_id, true)?;
     let always_on: Vec<&str> = b.mods.iter().filter(|(id, _, off)| !off && !st.mods.contains(id)).map(|(_, n, _)| n.as_str()).collect();
     let name = b.mods.iter().find(|m| m.0 == mod_id).map_or(mod_id, |m| m.1.as_str());
     Ok(if always_on.is_empty() {
@@ -370,10 +384,36 @@ mod tests {
         apply_switches(&dir, &st).unwrap();
         assert!(horizon_mods::is_enabled(&dir, "zoom") && !horizon_mods::is_enabled(&dir, "x"));
         assert_eq!(list(&dir).len(), 2);
+        // A mod the player turned off stays off; a mod they didn't pick is written off.
+        horizon_mods::set_enabled(&dir, "minimap", false).unwrap();
+        apply_switches(&dir, &st).unwrap();
+        assert_eq!(horizon_mods::switch(&dir, "minimap"), Some(false));
+        assert_eq!(horizon_mods::switch(&dir, "x"), Some(false));
         remove(&dir, "zoom").unwrap();
         assert_eq!(installed_ids(&dir), vec!["minimap".to_owned()]);
         remove(&dir, "minimap").unwrap();
         assert!(read_state(&dir).is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Before each launch: every installed mod with no line gets `true` (the game runs only
+    /// those), a `false` the player chose is kept, and the build's other mods are written off.
+    #[test]
+    fn launch_switches_installed_mods_on_and_the_rest_off() {
+        let dir = std::env::temp_dir().join(format!("lumos-native-switch-{}", std::process::id()));
+        let build = dir.join("build");
+        fs::create_dir_all(build.join("bin")).unwrap();
+        fs::write(build.join("native.json"), r#"{"mods":[{"id":"zoom"},{"id":"horizon_physics"},{"id":"gyro"}]}"#).unwrap();
+        fs::write(build.join("bin").join("mods.txt"), "minimap\nwaymap\n").unwrap();
+        fs::write(dir.join("horizon-mods.txt"), "mod.gyro:false\nmod.waymap:true\nkey.zoom.in:key.keyboard.c\n").unwrap();
+        let st = InstanceNative { build: "all-9f42064c".into(), mods: vec!["zoom".into(), "gyro".into(), "minimap".into()], known: vec![] };
+        switch_off_unpicked(&dir, &build, &st);
+        assert_eq!(horizon_mods::switch(&dir, "zoom"), Some(true), "installed, no line: on");
+        assert_eq!(horizon_mods::switch(&dir, "minimap"), Some(true));
+        assert_eq!(horizon_mods::switch(&dir, "gyro"), Some(false), "turned off by the player: kept");
+        assert_eq!(horizon_mods::switch(&dir, "horizon_physics"), Some(false), "not installed: off");
+        assert_eq!(horizon_mods::switch(&dir, "waymap"), Some(false));
+        assert!(fs::read_to_string(dir.join("horizon-mods.txt")).unwrap().contains("key.zoom.in:key.keyboard.c"));
         let _ = fs::remove_dir_all(&dir);
     }
 

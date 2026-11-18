@@ -10,3 +10,4 @@
 
 - Targets moved: `break_block` to `game::block_breaking`, `attack` to `game::melee`, `destroy_particles`/`crack_particle` to `game::block_particles`.
 - `shader` hook: `native_material::module` takes `line: (Api, bool)` instead of `api`; the binding and `shader.rs` pass that tuple on to `shader_source` unchanged.
+- Quick setup input (Lumos fix): its title-screen click hook (`setup_click.rs`, a cancellable HEAD at priority 200) took every press whenever `setup_visible()` was true, even when the setup page wasn't drawn, so a game where the setup was due but never shown ignored every title-screen click. `setup_draw.rs` now marks the frame it draws the setup in (`setup_drawn_now`), the frame hook (`setup_load.rs`) counts frames (`setup_new_frame`), and the click hook takes a press only when the setup was drawn this frame or the one before (`setup_on_screen`; a press can be handled before this frame's title screen is drawn). The quick setup has no key hook.

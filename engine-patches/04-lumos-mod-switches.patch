@@ -19,7 +19,7 @@ index 63f4827..d583be8 100644
   "libmimalloc-sys",
   "memmap2",
 diff --git a/crates/horizon-client-render/src/mod_list.rs b/crates/horizon-client-render/src/mod_list.rs
-index 1652ca6..cf1c36c 100644
+index 1652ca6..dfe2681 100644
 --- a/crates/horizon-client-render/src/mod_list.rs
 +++ b/crates/horizon-client-render/src/mod_list.rs
 @@ -59,9 +59,16 @@ pub struct NativePage {
@@ -37,7 +37,7 @@ index 1652ca6..cf1c36c 100644
 +    }
 +    /// Lumos: hands the switches to every native mod's hooks (`horizon_core::lumos_mods`).
 +    pub fn publish(&self) {
-+        horizon_core::lumos_mods::publish(&self.disabled);
++        horizon_core::lumos_mods::publish(&self.enabled);
      }
      pub fn parse(text: &str) -> Self {
          let ids = |value: &str| -> BTreeSet<String> {
@@ -65,8 +65,22 @@ index 1652ca6..cf1c36c 100644
      }
  }
  
+diff --git a/crates/horizon-client/src/game/launch_options.rs b/crates/horizon-client/src/game/launch_options.rs
+index 3404cf6..509035f 100644
+--- a/crates/horizon-client/src/game/launch_options.rs
++++ b/crates/horizon-client/src/game/launch_options.rs
+@@ -143,6 +143,9 @@ impl Options {
+         }
+         split::launcher::read_now();
+         if let Some(dir) = o.game_dir.take() {
++            // Lumos: the native mods' switches are read from this folder; fixed while a relative
++            // one still means the same folder.
++            horizon_core::lumos_mods::game_dir();
+             // These too stay relative to where the game was started.
+             o.resources = std::path::absolute(&o.resources)?;
+             o.report = o.report.map(std::path::absolute).transpose()?;
 diff --git a/crates/horizon-client/src/game/mods.rs b/crates/horizon-client/src/game/mods.rs
-index d53f691..40b63e4 100644
+index d53f691..9275994 100644
 --- a/crates/horizon-client/src/game/mods.rs
 +++ b/crates/horizon-client/src/game/mods.rs
 @@ -427,6 +427,8 @@ fn native_mods_detail(built: &str) -> Option<String> {
@@ -78,14 +92,18 @@ index d53f691..40b63e4 100644
          .map(|m| {
              let text = |key: &str| m[key].as_str().unwrap_or("?").to_owned();
              format!("{} {}", text("id"), text("version"))
-@@ -731,6 +733,7 @@ impl Game<'_> {
+@@ -731,8 +733,10 @@ impl Game<'_> {
      /// (`mod_api::set_mod_on`): the next dispatch skips a mod turned off.
      /// Mixin code checks `native_on` itself.
      pub(super) fn sync_native_switches(&self) {
 +        self.settings.mods.publish();
          for id in horizon_client::mod_api::mod_ids() {
-             let on = !self.settings.mods.disabled.contains(*id);
+-            let on = !self.settings.mods.disabled.contains(*id);
++            // Lumos: a built-in mod runs only while its line says `true` (horizon_core::lumos_mods).
++            let on = horizon_core::lumos_mods::on(id);
              horizon_client::mod_api::set_mod_on(id, on);
+         }
+     }
 diff --git a/crates/horizon-client/src/game/native_hooks.rs b/crates/horizon-client/src/game/native_hooks.rs
 index 73ad423..1a94960 100644
 --- a/crates/horizon-client/src/game/native_hooks.rs
@@ -114,55 +132,101 @@ index e6e9970..94c7ae2 100644
  pub mod paletted;
 diff --git a/crates/horizon-core/src/lumos_mods.rs b/crates/horizon-core/src/lumos_mods.rs
 new file mode 100644
-index 0000000..011b504
+index 0000000..6e5b6ed
 --- /dev/null
 +++ b/crates/horizon-core/src/lumos_mods.rs
-@@ -0,0 +1,145 @@
+@@ -0,0 +1,222 @@
 +//! Lumos Client: which of the native mods built into this game may run.
 +//!
 +//! Lumos's all-in-one game has every native mod compiled in, and the player's instance turns on
-+//! only the ones they installed (`mod.<id>:true` in `horizon-mods.txt`; every other built-in mod
-+//! is `mod.<id>:false`). Lumos's build (tools/lumos_native/gate.py) starts every hook of every
-+//! mod with [`lumos_mod_on!`], so a mod turned off does nothing at all, whether or not its own
-+//! code asks `native_on`.
++//! only the ones they installed: `mod.<id>:true` in `horizon-mods.txt`. The switches are an
++//! allow-list: a built-in mod runs only while its line says `true`, so one with no line at all
++//! (an instance made before the mod was built in, a file edited by hand) is off, like one whose
++//! line says `false`. Lumos's build (tools/lumos_native/gate.py) starts every hook of every mod
++//! with [`lumos_mod_on!`], so a mod turned off does nothing at all, whether or not its own code
++//! asks `native_on`.
 +//!
 +//! The switches are process-wide (the window's game and the integrated server share them), set
 +//! by the settings (`ModList`) whenever they are read or changed. Until then they are read once
-+//! from `horizon-mods.txt` in the game folder (the working directory), so hooks that run before
-+//! the settings (allocator, registries) follow them too.
++//! from `horizon-mods.txt` in the game folder ([`game_dir`]: `--game-dir`, else the working
++//! directory), so hooks that run before the settings (allocator, registries) follow them too.
 +//!
 +//! Hidden mods are the ones off when the game started: the instance doesn't have them, so the
 +//! game shows them nowhere (Options > Mods, Key Binds, mod lists). A mod the player turns off
 +//! during the session stays listed, so it can be turned on again.
 +
 +use std::collections::BTreeSet;
-+use std::sync::RwLock;
++use std::path::PathBuf;
 +use std::sync::atomic::{AtomicU64, Ordering};
++use std::sync::{OnceLock, RwLock};
 +
++#[derive(Debug, Default)]
 +struct Switches {
-+    disabled: BTreeSet<String>,
-+    hidden: Option<BTreeSet<String>>,
++    /// The mods turned on now (`mod.<id>:true`).
++    enabled: BTreeSet<String>,
++    /// The mods on when the game started (the first [`publish`]); `None` until then.
++    started_on: Option<BTreeSet<String>>,
++}
++
++impl Switches {
++    fn on(&self, id: &str) -> bool {
++        self.enabled.contains(id)
++    }
++    /// On now, or on when the game started (turned off since). Before the settings load, the
++    /// file's switches are the start's.
++    fn shown(&self, id: &str) -> bool {
++        self.on(id) || self.started_on.as_ref().is_some_and(|s| s.contains(id))
++    }
 +}
 +
 +static SWITCHES: RwLock<Option<Switches>> = RwLock::new(None);
++static GAME_DIR: OnceLock<PathBuf> = OnceLock::new();
 +/// Bumped at each change, so that each hook's cached answer ([`cached`]) is asked again. Starts
 +/// at 1: a cache of 0 has never been filled.
 +static GENERATION: AtomicU64 = AtomicU64::new(1);
 +
-+/// `mod.<id>:false` lines of a `horizon-mods.txt`.
-+pub fn parse_disabled(text: &str) -> BTreeSet<String> {
++/// `mod.<id>:true` lines of a `horizon-mods.txt`: the mods that may run. Every other built-in
++/// mod (`mod.<id>:false`, or no line) is off.
++pub fn parse_enabled(text: &str) -> BTreeSet<String> {
 +    text.lines()
 +        .filter_map(|l| l.split_once(':'))
-+        .filter(|(_, v)| v.trim() == "false")
++        .filter(|(_, v)| v.trim() == "true")
 +        .filter_map(|(k, _)| k.trim().strip_prefix("mod."))
 +        .map(str::to_owned)
 +        .collect()
 +}
 +
++/// The `--game-dir` (or `--gameDir`) of a command line (the game's own options, before
++/// `--dedicated`), as given.
++fn game_dir_arg(args: impl IntoIterator<Item = String>) -> Option<PathBuf> {
++    let mut args = args.into_iter().take_while(|a| a != "--dedicated");
++    while let Some(a) = args.next() {
++        if a == "--game-dir" || a == "--gameDir" {
++            return args.next().map(PathBuf::from);
++        }
++    }
++    None
++}
++
++/// The game folder `horizon-mods.txt` is in: `--game-dir` (relative to where the game was
++/// started), else the working directory. Fixed at the first call, which the launch options make
++/// before they change the working directory to it (`LaunchOptions::read`), so a relative
++/// `--game-dir` is never taken from inside itself.
++pub fn game_dir() -> PathBuf {
++    GAME_DIR
++        .get_or_init(|| {
++            let cwd = std::env::current_dir().unwrap_or_default();
++            match game_dir_arg(std::env::args().skip(1)) {
++                Some(dir) => cwd.join(dir),
++                None => cwd,
++            }
++        })
++        .clone()
++}
++
 +fn from_game_dir() -> BTreeSet<String> {
-+    let dir = std::env::current_dir().unwrap_or_default();
-+    std::fs::read_to_string(dir.join("horizon-mods.txt"))
-+        .map(|t| parse_disabled(&t))
++    std::fs::read_to_string(game_dir().join("horizon-mods.txt"))
++        .map(|t| parse_enabled(&t))
 +        .unwrap_or_default()
 +}
 +
@@ -176,49 +240,42 @@ index 0000000..011b504
 +    let mut write = SWITCHES.write().unwrap_or_else(|e| e.into_inner());
 +    if write.is_none() {
 +        *write = Some(Switches {
-+            disabled: from_game_dir(),
-+            hidden: None,
++            enabled: from_game_dir(),
++            started_on: None,
 +        });
 +        GENERATION.fetch_add(1, Ordering::AcqRel);
 +    }
 +    f(write.as_ref().expect("set above"))
 +}
 +
-+/// The mods turned off now (`ModList::disabled`). The first call also fixes the hidden mods:
-+/// those off when the game started.
-+pub fn publish(disabled: &BTreeSet<String>) {
++/// The mods turned on now (`ModList::enabled`). The first call also fixes the mods on when the
++/// game started: every other built-in mod is hidden.
++pub fn publish(enabled: &BTreeSet<String>) {
 +    let mut write = SWITCHES.write().unwrap_or_else(|e| e.into_inner());
-+    match write.as_mut() {
-+        Some(s) => {
-+            if s.hidden.is_none() {
-+                s.hidden = Some(disabled.clone());
-+            }
-+            if s.disabled != *disabled {
-+                s.disabled = disabled.clone();
-+                GENERATION.fetch_add(1, Ordering::AcqRel);
-+            }
-+        }
-+        None => {
-+            *write = Some(Switches {
-+                disabled: disabled.clone(),
-+                hidden: Some(disabled.clone()),
-+            });
-+            GENERATION.fetch_add(1, Ordering::AcqRel);
-+        }
++    let s = write.get_or_insert_with(Switches::default);
++    let mut changed = false;
++    if s.started_on.is_none() {
++        s.started_on = Some(enabled.clone());
++        changed = true;
++    }
++    if s.enabled != *enabled {
++        s.enabled = enabled.clone();
++        changed = true;
++    }
++    if changed {
++        GENERATION.fetch_add(1, Ordering::AcqRel);
 +    }
 +}
 +
-+/// Mod `id` may run now.
++/// Mod `id` may run now: its line says `true`.
 +pub fn on(id: &str) -> bool {
-+    with(|s| !s.disabled.contains(id))
++    with(|s| s.on(id))
 +}
 +
 +/// Mod `id` is the instance's (on when the game started, or turned on since): the game may list
 +/// it. A hidden mod turned on during the session shows again.
 +pub fn shown(id: &str) -> bool {
-+    with(|s| {
-+        !s.disabled.contains(id) || !s.hidden.as_ref().is_some_and(|h| h.contains(id))
-+    })
++    with(|s| s.shown(id))
 +}
 +
 +/// [`on`] or [`shown`] (`listing`), remembered in `cache` until the switches change: a hook's
@@ -257,10 +314,48 @@ index 0000000..011b504
 +mod tests {
 +    use super::*;
 +
++    fn file(text: &str) -> Switches {
++        Switches {
++            enabled: parse_enabled(text),
++            started_on: None,
++        }
++    }
++
 +    #[test]
-+    fn reads_the_off_lines() {
-+        let off = parse_disabled("mod.gyro:false\nmod.zoom:true\nkey.zoom.use:key.keyboard.c\n mod.veinminer : false\n");
-+        assert_eq!(off, ["gyro", "veinminer"].map(String::from).into());
++    fn reads_the_on_lines() {
++        let on = parse_enabled("mod.gyro:false\nmod.zoom:true\nkey.zoom.use:key.keyboard.c\n mod.veinminer : true\n");
++        assert_eq!(on, ["veinminer", "zoom"].map(String::from).into());
++    }
++
++    #[test]
++    fn a_mod_is_on_only_when_its_line_says_true() {
++        let s = file("mod.zoom:true\nmod.gyro:false\nkey.horizon_physics.x:key.keyboard.x\n");
++        assert!(s.on("zoom"));
++        assert!(!s.on("gyro"), "`:false` is off");
++        assert!(!s.on("horizon_physics"), "a mod with no line is off");
++        assert!(!file("").on("zoom"), "no file: every built-in mod is off");
++        // Before the settings load, only the file's mods are listed.
++        assert!(s.shown("zoom") && !s.shown("gyro") && !s.shown("horizon_physics"));
++    }
++
++    #[test]
++    fn a_mod_turned_off_during_the_session_stays_listed() {
++        let mut s = file("mod.zoom:true\n");
++        s.started_on = Some(s.enabled.clone());
++        s.enabled.clear();
++        assert!(!s.on("zoom") && s.shown("zoom"));
++        // A hidden one turned on shows.
++        s.enabled.insert("gyro".into());
++        assert!(s.on("gyro") && s.shown("gyro") && !s.shown("other"));
++    }
++
++    #[test]
++    fn finds_the_game_dir_option() {
++        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
++        assert_eq!(game_dir_arg(args(&["--width", "3", "--game-dir", "g"])), Some("g".into()));
++        assert_eq!(game_dir_arg(args(&["--gameDir", "/x/y"])), Some("/x/y".into()));
++        assert_eq!(game_dir_arg(args(&["--dedicated", "--game-dir", "g"])), None);
++        assert_eq!(game_dir_arg(args(&["--world", "w"])), None);
 +    }
 +}
 diff --git a/crates/horizon-mods/Cargo.toml b/crates/horizon-mods/Cargo.toml

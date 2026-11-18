@@ -4,7 +4,8 @@
     python3 tools/lumos_native/gate.py --work work/
 
 Lumos's all-in-one game compiles every native mod in, and an instance turns on only the mods the
-player installed (`mod.<id>:true` in horizon-mixins.txt, every other built-in one `false`). Horizon
+player installed (`mod.<id>:true` in horizon-mods.txt; every other built-in one, `false` or with no
+line at all, is off). Horizon
 leaves it to each mod's own hooks to ask `native_on`, and many never do. So before the mods are
 applied, this rewrites each injection's helper (work/mods/<id>/...) to begin with
 

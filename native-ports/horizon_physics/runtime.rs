@@ -5643,6 +5643,32 @@ pub fn setup_visible() -> bool {
     matches!(g.as_ref(), Some((s, Some(_))) if !s.setup)
 }
 
+/// Lumos: frames counted by the frame hook (`setup_new_frame`), and the frame the quick setup was
+/// last drawn in, plus one (0: never). Its presses are taken only while it is really on screen.
+static SETUP_FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SETUP_DRAWN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Lumos: a new frame begins (the frame hook): what the quick setup drew before is getting old.
+pub fn setup_new_frame() {
+    SETUP_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Lumos: the quick setup was drawn this frame (the title screen's draw hook).
+pub fn setup_drawn_now() {
+    let frame = SETUP_FRAME.load(std::sync::atomic::Ordering::Relaxed);
+    SETUP_DRAWN.store(frame + 1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Lumos: whether the quick setup is on screen: drawn this frame or the one before (a press can
+/// be handled before this frame's title screen is drawn). Its click and key hooks swallow input
+/// only then, never on `setup_visible` alone: a setup that is due but not drawn (another screen
+/// is up, its draw hook didn't run) must not take the title screen's clicks.
+pub fn setup_on_screen() -> bool {
+    let drawn = SETUP_DRAWN.load(std::sync::atomic::Ordering::Relaxed);
+    let frame = SETUP_FRAME.load(std::sync::atomic::Ordering::Relaxed);
+    drawn != 0 && frame + 1 - drawn <= 1
+}
+
 /// Runs `f` on the quick setup, its previews moved on to now.
 pub fn with_setup<R>(f: impl FnOnce(&mut Setup) -> R) -> R {
     let mut g = SETUP.lock().unwrap_or_else(|e| e.into_inner());

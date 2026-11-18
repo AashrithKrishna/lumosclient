@@ -509,6 +509,12 @@ fn edit_entry(game_dir: &Path, id: &str, on: Option<bool>) -> Result<(), String>
 
 /// Whether `horizon-mods.txt` turns a mod on (mods are off until turned on).
 pub fn is_enabled(game_dir: &Path, id: &str) -> bool {
+    switch(game_dir, id) == Some(true)
+}
+
+/// A mod's line in `horizon-mods.txt`: `Some(true)` on, `Some(false)` turned off, `None` no line
+/// (off too: the game runs only the mods whose line says `true`).
+pub fn switch(game_dir: &Path, id: &str) -> Option<bool> {
     let key = format!("mod.{id}");
     fs::read_to_string(enabled_path(game_dir))
         .unwrap_or_default()
@@ -516,7 +522,7 @@ pub fn is_enabled(game_dir: &Path, id: &str) -> bool {
         .filter_map(|l| l.split_once(':'))
         .filter(|(k, _)| k.trim() == key)
         .last()
-        .is_some_and(|(_, v)| v.trim() == "true")
+        .map(|(_, v)| v.trim() == "true")
 }
 
 #[cfg(test)]
