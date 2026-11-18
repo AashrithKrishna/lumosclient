@@ -3592,6 +3592,25 @@
       <div class="tags">${c.native ? '<span class="chip">native Rust</span>' : ''}${cats}</div></div>
       <div class="side">${stats}<div class="row" style="gap:6px">${actionBtn(c)}</div></div></article>`;
   }
+  // Which shown native mods can still join this instance's game: asked again after its native mods change.
+  function recheckNative(profileId) {
+    const ids = Object.values(D.cards).filter(c => c.native).map(c => c.slug || c.id).filter(Boolean);
+    if (ids.length) send('native_blocked', { profileId, ids });
+  }
+  window.onNativeBlocked = function (d) {
+    if (d.profileId !== pid()) return;
+    const blocked = new Set(d.blocked || []), have = new Set(d.installed || []);
+    for (const [key, c] of Object.entries(D.cards)) {
+      if (!c.native) continue;
+      const id = c.slug || c.id;
+      const nb = blocked.has(id), inst = have.has(id);
+      if (c.native_blocked !== nb || (!!c.installed) !== inst) {
+        c.native_blocked = nb; c.installed = inst;
+        if (!inst) D.installedKeys.delete(d.profileId + '|' + key);
+        refreshButtons(key);
+      }
+    }
+  };
   function refreshButtons(key) {
     const c = D.cards[key];
     if (!c) return;
@@ -3666,6 +3685,7 @@
       }
       refreshButtons(key);
       if (D.proj && D.proj.key === key) renderProjectHead();
+      if (status === 'installed' && c && c.native) recheckNative(profileId || pid());
     },
     onState() {
       $('cfKeyChip').className = 'chip ' + (st().curseforgeKeySet ? 'ok' : '');
@@ -3682,7 +3702,7 @@
     // forget what this page remembered as installed there and ask again.
     contentChanged(profileId) {
       for (const k of [...D.installedKeys]) if (k.startsWith(profileId + '|')) D.installedKeys.delete(k);
-      if (profileId === pid()) search(true);
+      if (profileId === pid()) recheckNative(profileId);
     },
     openBrowser(type, q) {
       setMode('browser', true);

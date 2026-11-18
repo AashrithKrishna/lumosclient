@@ -3142,6 +3142,22 @@ fn main() {
                     }
                 }
                 // ── end HUD block ──
+                // Discover asks again which shown native mods can't share this instance's game
+                // (after an install or removal changed the instance's native mods).
+                "native_blocked" => {
+                    if let Some((pid, game_dir, ver)) = ipc_state.lock().unwrap().target_instance(&text("profileId")) {
+                        let ids: Vec<String> = v.get("ids").and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|s| s.as_str()).filter(|s| s.len() <= 64 && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')).take(500).map(str::to_owned).collect()).unwrap_or_default();
+                        let proxy = ipc_proxy.clone();
+                        std::thread::spawn(move || {
+                            let have = native_builds::installed_ids(&game_dir);
+                            let blocked: Vec<&String> = if ver != HORIZON_ID || have.is_empty() { Vec::new() } else {
+                                ids.iter().filter(|id| !have.contains(id) && native_builds::build_for_mod(id).is_some()
+                                    && native_builds::build_with_all(&have.iter().cloned().chain([(*id).clone()]).collect::<Vec<_>>()).is_none()).collect()
+                            };
+                            call_js(&proxy, "onNativeBlocked", json!({"profileId": pid, "blocked": blocked, "installed": have}));
+                        });
+                    }
+                }
                 "list_content" => {
                     if let Some((pid, game_dir, ver)) = ipc_state.lock().unwrap().target_instance(&text("profileId")) {
                         push_content(&ipc_proxy, &game_dir, &text("kind"), &pid, ver == HORIZON_ID);
