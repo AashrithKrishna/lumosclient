@@ -3393,6 +3393,8 @@
   const cur = () => D.f[D.mode];
   const pid = () => st().activeProfileId;
   const hzInst = () => !!(D.ctx && D.ctx.horizon);
+  // Horizon reads Java resource packs, so its packs come from Modrinth (26.3) unless the registry is picked.
+  const hzSrc = () => (cur().type === 'resourcepack' && cur().hzSource !== 'horizon') ? 'modrinth' : 'horizon';
   const keyOf = c => c.source === 'curseforge' ? 'cf-' + c.id : (c.slug || c.id);
   const idOf = c => c.source === 'curseforge' ? String(c.id) : (c.slug || c.id);
 
@@ -3442,7 +3444,7 @@
 
   // ───────── Tags and the filter sidebar ─────────
   function loadTags() {
-    const s = cur().source;
+    const s = D.mode === 'browser' && hzInst() ? hzSrc() : cur().source;
     if (D.tags[s] || D.tagsPending[s]) return;
     D.tagsPending[s] = true;
     send('discover_tags', { source: s });
@@ -3463,7 +3465,9 @@
   function renderFilters() {
     const f = cur(), hz = D.mode === 'browser' && hzInst();
     $('discSource').stableHTML = hz
-      ? opt('source', 'horizon', 'Horizon registry', true) + `<button class="opt" data-dx="url" data-url="https://playhorizon.dev/mods">Website${icon('external')}</button>`
+      ? (f.type === 'resourcepack'
+          ? opt('hzsrc', 'modrinth', 'Modrinth', hzSrc() === 'modrinth') + opt('hzsrc', 'horizon', 'Horizon registry', hzSrc() === 'horizon')
+          : opt('source', 'horizon', 'Horizon registry', true)) + `<button class="opt" data-dx="url" data-url="https://playhorizon.dev/mods">Website${icon('external')}</button>`
       : opt('source', 'modrinth', 'Modrinth', f.source === 'modrinth') + opt('source', 'curseforge', 'CurseForge', f.source === 'curseforge');
     const types = hz ? TYPES.filter(t => ['mod', 'resourcepack', 'shader'].includes(t[0])) : TYPES;
     $('discTypes').stableHTML = types.map(([v, n]) => opt('type', v, n, f.type === v, f.source === 'modrinth' && v === 'world' ? 'disabled title="Modrinth doesn’t host worlds. Use CurseForge."' : '')).join('');
@@ -3484,23 +3488,24 @@
     $('discEnv').stableHTML = opt('env', 'client', 'Client', f.env === 'client') + opt('env', 'server', 'Server', f.env === 'server');
     $('fOpen').classList.toggle('hidden', !mr);
     $('discOpenSrc').checked = !!f.openSource;
-    const tags = D.tags[hz ? 'horizon' : f.source];
+    const tags = D.tags[hz ? hzSrc() : f.source];
     const groups = tags && tags.categories ? (tags.categories[f.type] || []) : null;
     let cats;
     if (f.source === 'curseforge' && !st().curseforgeKeySet && !hz) cats = `<div class="hint-text">Add a CurseForge API key to see its categories.</div>`;
-    else if (!groups) cats = D.tagsPending[hz ? 'horizon' : f.source] ? `<div class="skeleton" style="height:60px"></div>` : `<div class="hint-text">Categories couldn’t load. <button class="btn ghost sm" data-dx="tags-retry">Retry</button></div>`;
+    else if (!groups) cats = D.tagsPending[hz ? hzSrc() : f.source] ? `<div class="skeleton" style="height:60px"></div>` : `<div class="hint-text">Categories couldn’t load. <button class="btn ghost sm" data-dx="tags-retry">Retry</button></div>`;
     else if (!groups.length) cats = `<div class="hint-text">No categories for ${esc(typePlural(f.type).toLowerCase())}.</div>`;
     else cats = groups.map(g => `<div class="cat-h">${esc(g.header)}</div><div class="opt-grid">${g.items.map(i => opt('cat', i.value, esc(i.label), f.categories.includes(String(i.value)))).join('')}</div>`).join('');
     $('discCats').stableHTML = cats;
-    $('modQuery').placeholder = `Search ${SRC[hz ? 'horizon' : f.source]} ${typePlural(f.type).toLowerCase()}…`;
+    $('modQuery').placeholder = `Search ${SRC[hz ? hzSrc() : f.source]} ${typePlural(f.type).toLowerCase()}…`;
     document.querySelectorAll('#discView button').forEach(b => b.classList.toggle('active', b.dataset.view === D.view));
   }
 
   // ───────── Search and results ─────────
   function query() {
     const f = cur(), hub = D.mode === 'hub';
-    return { hub, profileId: hub ? '' : pid(), source: hub || !hzInst() ? f.source : 'horizon', query: $('modQuery').value.trim(), projectType: f.type, sortBy: $('modSort').value,
-      gameVersion: f.gameVersion || 'any', loaders: (f.type === 'mod' || f.type === 'modpack') ? f.loaders : [], categories: f.categories, environment: f.env, openSource: f.openSource, limit: 24 };
+    const src = hub || !hzInst() ? f.source : hzSrc();
+    return { hub, profileId: hub ? '' : pid(), source: src, query: $('modQuery').value.trim(), projectType: f.type, sortBy: $('modSort').value,
+      gameVersion: !hub && hzInst() && src === 'modrinth' ? '26.3' : (f.gameVersion || 'any'), loaders: (f.type === 'mod' || f.type === 'modpack') ? f.loaders : [], categories: f.categories, environment: f.env, openSource: f.openSource, limit: 24 };
   }
   function ready() { return D.mode === 'hub' || (D.ctx && D.ctxFor === instanceKey()); }
   function search(force) {
@@ -4016,6 +4021,7 @@
       case 'mode': break;
       case 'noop': break;
       case 'url': e.preventDefault(); e.stopPropagation(); send('open_url', { url: el.dataset.url }); break;
+      case 'hzsrc': if (f.hzSource !== v) { f.hzSource = v; f.categories = []; loadTags(); changed(); } break;
       case 'source': if (f.source !== v) { f.source = v; f.categories = []; if (v === 'modrinth' && f.type === 'world') f.type = 'mod'; loadTags(); changed(); } break;
       case 'type': if (f.type !== v) { f.type = v; f.categories = []; changed(); } break;
       case 'loader': f.loaders = f.loaders.includes(v) ? f.loaders.filter(x => x !== v) : f.loaders.concat(v); changed(); break;

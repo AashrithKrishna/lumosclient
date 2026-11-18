@@ -1,7 +1,7 @@
 {
 "schema": 1,
 "generated": "2026-11-18T04:28:50Z",
-"note": "Frozen copy of Horizon registry native-v1 listings (horizon-rust/horizon-mods moved them to archive/native-v1 on 2026-11-18). Downloads are the original release assets, checked by sha256.",
+"note": "Frozen copy of Horizon registry listings that horizon-rust/horizon-mods moved to archive/ (native-v1 and api-0.1) on 2026-11-18. Downloads are the original release assets, checked by sha256. Lumos merges only ids the live index no longer lists.",
 "projects": [
 {
 "id": "accurate_block_placement",
@@ -44,6 +44,52 @@
 }
 ],
 "downloads": 9259
+},
+{
+"id": "additional_lights",
+"kind": "mod",
+"name": "Additional Lights",
+"summary": "80 decorative lamps, floor torches and wall torches with the mod's own light levels and recipes.",
+"description": "A port of [Additional Lights](https://github.com/mgen256/AdditionalLights) by\nmgen256 for Horizon. This slice carries the 80 plain decorative light blocks \u2014\n24 lamps (light 15), 28 floor torches (light 14) and 28 wall torches (light 14)\n\u2014 with their materials, shapes, recipes and drops, 1,548 block states in all.\n\n- Place lamps and torches like their vanilla templates; they keep the upstream\n  light levels, including the soul variants' dimmer light.\n- Every block drops itself and is craftable from the mod's own recipes.\n\nThe standing-torch and fire-pit pedestals, the fire blocks and the two wands are\nlater slices. MIT \u2014 original copyright and licence notices are kept in the port\nrepository; see LICENSE and LICENSE-NOTICE.md there.\n",
+"authors": [
+"mgen256",
+"AdLf0208"
+],
+"owners": [
+"AdLf0208"
+],
+"license": "MIT",
+"source": "https://github.com/AdLf0208/additional_lights",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/additional_lights.png",
+"categories": [
+"decoration"
+],
+"tags": [
+"port",
+"lighting",
+"decoration",
+"blocks"
+],
+"versions": [
+{
+"version": "3.1.4",
+"published": "2026-11-09",
+"changelog": "First release",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "additional_lights.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/additional_lights-3.1.4/additional_lights.hmod",
+"size": 262863,
+"sha256": "9fc4f2f9e2a259d475202749c269673301da13a9d2ff0cec6346947becaacb83"
+}
+}
+],
+"downloads": 9039
 },
 {
 "id": "ae2",
@@ -126,6 +172,58 @@
 ],
 "downloads": 7420,
 "stars": 4
+},
+{
+"id": "amidrunk",
+"kind": "shader",
+"name": "Am I Drunk?",
+"summary": "xsoras's Am I Drunk! ported to Horizon: a cursed drunk-like screen with sway, fisheye, double vision and blur.",
+"description": "An unofficial port of [Am I Drunk!](https://modrinth.com/shader/amidrunk) 1.1 by **xsoras** to Horizon's own shader format. All credit for the effect goes to xsoras; this port is not affiliated with or endorsed by them. Licensed Apache-2.0, like the original.\n\nThe original's effect, translated line for line: a drunken sway and drifting view, a breathing zoom, fisheye distortion, a chromatic split with double vision, ghost trails, a pulsing blur towards the edges, a warm colour tint, grain and a vignette. The world itself looks like vanilla, as in the original.\n\nNo settings: pick it and it runs.\n\nSource: https://github.com/fbikat/amidrunk-horizon",
+"authors": [
+"xsoras",
+"fbikat"
+],
+"owners": [
+"fbikat"
+],
+"license": "Apache-2.0",
+"source": "https://github.com/fbikat/amidrunk-horizon",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/amidrunk.png",
+"categories": [
+"cartoon",
+"vanilla-like",
+"low"
+],
+"tags": [
+"drunk",
+"distortion",
+"fisheye",
+"funny",
+"cursed",
+"wobble",
+"meme",
+"port"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/amidrunk/1.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/amidrunk/2.jpg"
+],
+"versions": [
+{
+"version": "1.1.0",
+"published": "2026-11-13",
+"changelog": "First release.",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "amidrunk-1.1.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/amidrunk-1.1.0/amidrunk-1.1.0.hshader",
+"size": 6396,
+"sha256": "7298520614472ced2ab6e93cdbd465f0d1778f6160bfb2b7208aec5bc1a6f1f1"
+}
+}
+],
+"downloads": 48
 },
 {
 "id": "appleskin",
@@ -360,6 +458,51 @@
 "downloads": 9163
 },
 {
+"id": "arsenal",
+"kind": "mod",
+"name": "Arsenal (assets)",
+"summary": "\u00cdtems, modelos 3D, texturas, recetas y textos de Arsenal. Necesita el mod nativo Arsenal.",
+"description": "**Esta es una de las dos partes de [Arsenal](https://playhorizon.dev/mods/arsenal_core), y sola no hace nada.** Instala las dos: esta, los assets, y la parte nativa.\n\nContiene los \u00edtems, modelos 3D, texturas, textos, recetas y la pesta\u00f1a creativa de Arsenal. No tiene c\u00f3digo: el c\u00f3digo, y la descripci\u00f3n de lo que hace el mod, est\u00e1n en Arsenal.\n\nTodo el arte es original, hecho para este proyecto (los modelos de las armas los genera `tools/gun_models.py`). No incluye assets de Minecraft ni de otros mods. MIT.",
+"authors": [
+"stwby"
+],
+"owners": [
+"stwbzy"
+],
+"license": "MIT",
+"source": "https://github.com/stwbzy/horizon-arsenal",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/arsenal.png",
+"categories": [
+"equipment",
+"library"
+],
+"tags": [
+"weapons",
+"guns",
+"assets"
+],
+"versions": [
+{
+"version": "0.2.1",
+"published": "2026-11-15",
+"changelog": "Primera publicaci\u00f3n en el registro. Assets de Arsenal; necesita Arsenal (arsenal_core).",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "arsenal-0.2.1.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/arsenal-0.2.1/arsenal-0.2.1.hmod",
+"size": 29102,
+"sha256": "ea778a1ef0c33dd74398a83c4ee49e02a08705a4e49a41f4a7bc10f400f98555"
+}
+}
+],
+"downloads": 103
+},
+{
 "id": "astral_cruiser",
 "kind": "native-mod",
 "name": "Astral Cruiser",
@@ -473,6 +616,53 @@
 ],
 "downloads": 5551,
 "stars": 2
+},
+{
+"id": "aurora",
+"kind": "shader",
+"name": "Aurora Shaders Horizon",
+"summary": "A shader pack for Horizon, written against Horizon's native shader API 0.1",
+"description": "Aurora brings a full desktop-style shader pipeline to Horizon: real-time shadows, volumetric light shafts, water, clouds, lens flare and HDR emissive lighting. Its GLSL source is translated to WGSL, with adapters that emulate the Iris pipeline inside Horizon.",
+"authors": [
+"iLoong"
+],
+"owners": [
+"tomasmendes01"
+],
+"license": "Apache-2.0",
+"source": "https://github.com/tomasmendes01/aurora-horizon",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/aurora.png",
+"categories": [
+"semi-realistic",
+"atmosphere",
+"medium"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/aurora/1.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/aurora/2.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/aurora/3.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/aurora/4.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/aurora/5.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/aurora/6.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/aurora/7.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/aurora/8.png"
+],
+"versions": [
+{
+"version": "5.9.3",
+"published": "2026-11-09",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "aurora-5.9.3.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/aurora-5.9.3/aurora-5.9.3.hshader",
+"size": 604159,
+"sha256": "2849af94ccc5601e5de733ec0de6fce78b5b6bce9e85b4f166048c62674165c5"
+}
+}
+],
+"downloads": 21351,
+"stars": 1
 },
 {
 "id": "ayynoxs_map_pack",
@@ -921,6 +1111,63 @@
 "stars": 1
 },
 {
+"id": "bodycam",
+"kind": "shader",
+"name": "Bodycam",
+"summary": "LoLip_p's Body Camera Shader ported to Horizon: a realistic body cam look with fisheye, 4:3 frame, lens flare and grain.",
+"description": "An unofficial port of [Body Camera Shader](https://modrinth.com/shader/body-camera-shader) v1.6.2 by **LoLip_p** to Horizon's own shader format. All credit for the look goes to LoLip_p; this port is not affiliated with or endorsed by them. Licensed CC BY 4.0, like the original.\n\n**The lens:** 4:3 frame, zoom, fisheye, camera shake, chromatic aberration, sharpening, lens flare, grain, scanlines, colour distortion, night vision, vignette and black stripes.\n\n**The world:** the original's lighting with soft tinted shadows, day/night transitions, fog, water lighting, swaying leaves and waves, plus ambient occlusion, depth of field, auto exposure, bloom, motion blur and FXAA. 63 settings under Shader Options.\n\n**Not possible in Horizon yet:** entities, the hand and particles keep vanilla lighting (so the thermal imager can't make mobs glow); the flashlight and night vision can't react to sneaking; no profiles or sun path rotation.\n\nSource: https://github.com/fbikat/bodycam-horizon",
+"authors": [
+"LoLip_p",
+"fbikat"
+],
+"owners": [
+"fbikat"
+],
+"license": "CC-BY-4.0",
+"source": "https://github.com/fbikat/bodycam-horizon",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/bodycam.png",
+"categories": [
+"realistic",
+"atmosphere",
+"shadows"
+],
+"tags": [
+"bodycam",
+"camera",
+"fisheye",
+"vhs",
+"night-vision",
+"lens-flare",
+"realistic",
+"port"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/bodycam/1.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/bodycam/2.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/bodycam/3.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/bodycam/4.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/bodycam/5.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/bodycam/6.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/bodycam/7.png"
+],
+"versions": [
+{
+"version": "1.6.2",
+"published": "2026-11-12",
+"changelog": "First release.",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "bodycam-1.6.2.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/bodycam-1.6.2/bodycam-1.6.2.hshader",
+"size": 26695,
+"sha256": "a5877525ed872da6d4e617b88fe02b6d65891d23a9d4bb5ccffc7cd9c8f419b3"
+}
+}
+],
+"downloads": 83
+},
+{
 "id": "carryblock",
 "kind": "native-mod",
 "name": "Carry Block",
@@ -1347,6 +1594,61 @@
 ],
 "downloads": 1500,
 "stars": 4
+},
+{
+"id": "compass_bar",
+"kind": "mod",
+"name": "Compass Enhanced",
+"summary": "A compass bar with degrees and colored directions, plus death points that guide you back.",
+"description": "A compass bar at the top of your screen that shows where you are facing, in degrees, and slides smoothly as you turn.\n\n## Features\n- Compass letters (N, NE, E, SE, S, SW, W, NW) in a color you choose\n- Death points: every time you die, a marker stays on the bar with the distance to where you died\n- Reaching a death point turns it into an X with a countdown, or look at it and press X to dismiss it\n- Arrows with the distance at the edge of the bar for death points out of view\n- Optional background box and four sizes (75% to 150%)\n- No commands\n\nSettings are in Options \u2192 Mods \u2192 Compass Bar. Death points are not saved: they vanish when you close the game.",
+"authors": [
+"Isaac"
+],
+"owners": [
+"Fernandes585"
+],
+"license": "MIT",
+"source": "https://github.com/Fernandes585/Compass-Enhanced",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/compass_bar.png",
+"categories": [
+"utility",
+"adventure"
+],
+"tags": [
+"compass",
+"hud",
+"navigation",
+"death-points"
+],
+"key": "RWScU5xtTnTnu55tXSTPbhM2BQ6KG2FLeMD9aTeX111NlQPh7cCafm1w",
+"versions": [
+{
+"version": "0.1.0",
+"published": "2026-10-28",
+"changelog": "First release.\n\n- Compass bar with degrees and compass letters (N, NE, E, SE, S, SW, W, NW)\n- Death points with distance, arrival countdown and a key to dismiss them (X by default)\n- Settings: bar on/off, background, scale, letter color, arrival distance, X time and death points kept",
+"api": "0.1",
+"side": "client",
+"capabilities": [
+"game-read",
+"chat",
+"storage",
+"render",
+"input",
+"ui"
+],
+"api_level": 0,
+"game": "26.3",
+"file": {
+"name": "compass_bar-0.1.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/compass_bar-0.1.0/compass_bar-0.1.0.hmod",
+"size": 47628,
+"sha256": "bb8f191f89f5ea963301fd2d28315b251dfb8df9656b640975eddffaec3e6b00",
+"signature": "untrusted comment: signature from minisign secret key\r\nRUScU5xtTnTnuz0T7EECJHdaPC5PHAOud+04Uwen4mw75K38TKOCnK9eCKn44pX113qFMvkrP+P4CwF9FJBFX5qws5BedBPbpA0=\r\ntrusted comment: timestamp:1793221575\tfile:target/horizon-mod/compass_bar.hmod\thashed\r\nDedLxzyaxaXaNO8y8pICM4Th3nL0N4oxamDGm0eoQb+6UDBj6pLXbtQLxqnMrbDQYmCE2gX6PGS86G1C33GGDg=="
+}
+}
+],
+"downloads": 14431,
+"stars": 1
 },
 {
 "id": "connected_textures",
@@ -1781,6 +2083,135 @@
 }
 ],
 "downloads": 3257
+},
+{
+"id": "daybreak",
+"kind": "shader",
+"name": "Daybreak",
+"summary": "Sun shadows, reflective water, waving plants, coloured light, sun rays and bloom, built to cost as little GPU time as possible.",
+"description": "Daybreak is a shader pack in Horizon's own format. It runs inside Horizon's renderer, so Horizon's culling, batching and LOD stay in charge, and it adds as little GPU time as it can.\n\n- Sun and moon shadows with smooth edges\n- Warm sunlight, blue sky light in the shade, a dim blue night\n- Coloured block light: soul fire blue, redstone red, copper green, froglights\n- Light from torches in your hand (turn on Horizon's Dynamic lights in Extras)\n- Waving leaves, grass, flowers and crops\n- Water with waves, reflections, refraction and the sun's glint\n- A deeper sky with warm sunsets, sun rays, sun glare and haze\n- Mobs take the sun's shadow; the Nether and the End get their own light\n\nEvery effect can be changed or turned off in the game: Options > Horizon Settings > Shader Packs > Shader Options. The quality is yours to pick there too: turn shadows off for the least GPU time, or choose the shadow map's detail (1024 to 4096) and distance (48 to 160 blocks). The defaults are soft shadows over 64 blocks with screen-space water reflections; the full water mirror is one switch away.\n\nOriginal code, no Minecraft assets. Source: https://github.com/hildlabs/horizon-shaders",
+"authors": [
+"hildlabs"
+],
+"owners": [
+"hildlabs"
+],
+"license": "MIT",
+"source": "https://github.com/hildlabs/horizon-shaders",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/daybreak.png",
+"categories": [
+"semi-realistic",
+"shadows",
+"medium"
+],
+"tags": [
+"shadows",
+"water",
+"reflections",
+"waving-plants",
+"sun-rays",
+"bloom",
+"lightweight"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/daybreak/1.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/daybreak/2.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/daybreak/3.jpg"
+],
+"versions": [
+{
+"version": "0.3.0",
+"published": "2026-11-16",
+"changelog": "Faster: about 11 % more frame rate than 0.2.0 in a scripted benchmark flight (town, mob parade, fireworks, redstone factory, storm), mostly CPU time Horizon spent on the pack.\n\n- **Coloured light only where it is coloured.** Torches, lanterns, fire, glowstone, lava and redstone lamps use block light's warm tint instead of a `[[lights]]` entry, so Horizon rebuilds its colour grid far less often: no more stutters by lamp walls and lava lakes. Soul fire, redstone torches, sea lanterns, amethyst, copper, froglights and end rods keep their colours.\n- **Screen-space water reflections** by default, with no extra pass. The full water mirror is still there as **Full mirror** on the Water page.\n- **Sharper, cheaper shadows:** 1536 texels over 64 blocks by default (was 2048 over 96). Shadow detail and distance are new options, so everyone starts on High; other settings are kept.\n\nShader API 0.1 (the Nightly of 2026-11-13). Release notes: https://github.com/hildlabs/horizon-shaders/releases/tag/v0.3.0",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "daybreak-0.3.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/daybreak-0.3.0/daybreak-0.3.0.hshader",
+"size": 270768,
+"sha256": "a24c755e4f3432bce4b08abd4249927f17aa6e3f03ddaed4bdad7b4ba2010ed1"
+}
+},
+{
+"version": "0.2.0",
+"published": "2026-11-08",
+"changelog": "One pack instead of four: shadows on/off, shadow detail (1024/2048/4096) and shadow distance (64/96/160 blocks) are now options on the Lighting page. The defaults match the old High pack; the Low, Medium and Ultra packs are gone. Needs a Horizon Nightly from 2026-11-05 or newer.",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "daybreak-0.2.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/daybreak-0.2.0/daybreak-0.2.0.hshader",
+"size": 20496,
+"sha256": "2da76c32e18a3d16af4eab348683f9e51fe20cc8d1160eb342d5eb56b43fe365"
+}
+},
+{
+"version": "0.1.1",
+"published": "2026-11-03",
+"changelog": "First release: sun and moon shadows, warm sunlight and blue shade, coloured block light, waving plants, reflective water with waves, a deeper sky, sun rays, sun glare, haze, bloom and a colour grade. The High preset (soft shadows over 96 blocks, water reflections). Needs a Horizon build from 2026-11-03 or newer (Nightly 2944480 and later). Release v0.1.1 of the repository.",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "daybreak-0.1.1.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/daybreak-0.1.1/daybreak-0.1.1.hshader",
+"size": 20268,
+"sha256": "beb3c3de486e1c09c0136f13106f665acfbc4cdcd0826f51fd9fc269447e5cb5"
+}
+}
+],
+"downloads": 62610,
+"stars": 4
+},
+{
+"id": "deepbore_quarry",
+"kind": "mod",
+"name": "Deepbore Quarry (assets)",
+"summary": "The textures, text and recipes of Deepbore Quarry. Needs the Deepbore Quarry native mod.",
+"description": "**This is one of the two parts of [Deepbore Quarry](https://playhorizon.dev/mods/deepbore_quarry_native), and does nothing alone.** Install both: this one, the assets, and the native part. If one is missing, the game says so in chat.\n\nIt holds the mod's models and textures, its English and Russian text, its recipes and drops, and its screen's menu. It has no code. The code, and the description of what the mod does, are in Deepbore Quarry.\n\nAll the art is original. No Minecraft assets are included. MIT licensed.",
+"authors": [
+"bioneisme"
+],
+"owners": [
+"Bioneisme"
+],
+"license": "MIT",
+"source": "https://github.com/Bioneisme/deepbore-quarry",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/deepbore_quarry.png",
+"categories": [
+"technology",
+"library"
+],
+"tags": [
+"quarry",
+"mining",
+"machine",
+"assets"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/deepbore_quarry/1.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/deepbore_quarry/2.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/deepbore_quarry/3.png"
+],
+"versions": [
+{
+"version": "0.1.0",
+"published": "2026-11-05",
+"changelog": "First release.",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "deepbore_quarry-0.1.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/deepbore_quarry-0.1.0/deepbore_quarry-0.1.0.hmod",
+"size": 11955,
+"sha256": "2a75f3adc59aaf273fd833545c50a63a7f829916156b74d85bebbb6273b0d8b6"
+}
+}
+],
+"downloads": 6370
 },
 {
 "id": "deepbore_quarry_native",
@@ -2223,6 +2654,52 @@
 "downloads": 18152
 },
 {
+"id": "factory_blocks",
+"kind": "mod",
+"name": "Factory Blocks",
+"summary": "49 industrial decorative blocks \u2014 panels, grates, vents, pipes and hazard stripes \u2014 for Horizon.",
+"description": "A port of [Factory Blocks](https://github.com/matthewperiut/factory_blocks) by\nslaincow for Horizon: 49 industrial decorative blocks \u2014 factory panels, grating,\nvents, pipes, hazard stripes, riveted plates and machinery faces.\n\n- Craft them from the mod's own recipes and build with them; every block is a\n  full cube with the upstream textures and models.\n- The OptiFine CTM (connected-texture) data is carried, so connected-texture\n  resource packs shade them like the original.\n\nThis is a data-tier carry: no block entity and no behaviour hooks. MIT \u2014 the\nmod's own loader metadata declares MIT, its Modrinth page lists CC0-1.0, and the\ndiscrepancy is recorded in the port repository's LICENSE and LICENSE-NOTICE.md;\noriginal copyright and licence notices are kept there.\n",
+"authors": [
+"slaincow",
+"AdLf0208"
+],
+"owners": [
+"AdLf0208"
+],
+"license": "MIT",
+"source": "https://github.com/AdLf0208/factory_blocks",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/factory_blocks.png",
+"categories": [
+"decoration"
+],
+"tags": [
+"port",
+"building",
+"blocks",
+"industrial"
+],
+"versions": [
+{
+"version": "1.4.2",
+"published": "2026-11-09",
+"changelog": "First release",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "factory_blocks.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/factory_blocks-1.4.2/factory_blocks.hmod",
+"size": 776638,
+"sha256": "520ad2ca64d2d4a0711a56f538074be64ab9a19337dae018bfee625e8672e43b"
+}
+}
+],
+"downloads": 6410
+},
+{
 "id": "fair_freecam",
 "kind": "native-mod",
 "name": "Fair Freecam",
@@ -2581,6 +3058,56 @@
 }
 ],
 "downloads": 2079
+},
+{
+"id": "flesh_to_leather",
+"kind": "mod",
+"name": "Flesh to Leather",
+"summary": "Smelt rotten flesh into leather in a furnace.",
+"description": "Rotten flesh finally has a use: smelt it into leather.\n\nZombies drop it constantly, and it just piles up in chests. This mod lets you put rotten flesh in a furnace with any fuel \u2014 about 10 seconds later you get leather, plus a little experience for your trouble.\n\n**How to use**\n\n1. Install the mod and enable it in Options \u2192 Mods, then restart the game.\n2. Put rotten flesh in the top slot of a furnace, any fuel below.\n3. Collect your leather \u2014 ready for armor, item frames, and books.\n\n**Good to know**\n\n- Uses only vanilla items. No new blocks, textures, or mechanics to learn.\n- Works in single player. On a multiplayer server, the server needs the mod too.\n- Tested on Horizon 0.2.97 (Minecraft Java Edition 26.3).\n- Uninstall any time leather you already smelted stays in your world.\n\nFree and open source under the MIT license. Not an official Minecraft product.",
+"authors": [
+"CGRLabs"
+],
+"owners": [
+"CGRLabs"
+],
+"license": "MIT",
+"source": "https://github.com/CGRLabs/flesh-to-leather",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/flesh_to_leather.png",
+"categories": [
+"game-mechanics",
+"utility"
+],
+"tags": [
+"rotten-flesh",
+"leather",
+"smelting",
+"furnace",
+"survival",
+"vanilla-friendly",
+"quality-of-life"
+],
+"key": "RWSGDRCSH4aQXiul9gcYYshIYBmd+NcHK1iUWDTpVBF0WRokEBZIyrFr",
+"versions": [
+{
+"version": "1.0.0",
+"published": "2026-11-09",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "flesh_to_leather-1.0.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/flesh_to_leather-1.0.0/flesh_to_leather-1.0.0.hmod",
+"size": 812,
+"sha256": "2caac39306a051b53ae489137fa2a3a204fc8f156860fcbc4568275392a7e5c6",
+"signature": "untrusted comment: signature from rsign secret key\nRUSGDRCSH4aQXlr7W0IVfi1Pof8JyHEwpeKc0gS+VmV0zCNLytuZx/LaxT8ipLyvbwziDyTr/4R20rrfw2LQGZPLA3a5AzWM9AU=\ntrusted comment: flesh_to_leather 1.0.0\nKlTveC+S+U/E3E5BXxV6ToQq0Qy7tVdgvosSW0UZkCGImkXcXw5G8gg5opRVVKbEb737HRr1zKKeP2uQO84SCw=="
+}
+}
+],
+"downloads": 2858
 },
 {
 "id": "fly_speed",
@@ -3024,6 +3551,60 @@
 }
 ],
 "downloads": 4488
+},
+{
+"id": "gravestone",
+"kind": "mod",
+"name": "Gravestone (assets)",
+"summary": "Gravestone block, 3D model, obituary item, textures, and EN/RU localizations for Gravestone. Requires the Gravestone native mod.",
+"description": "The content module (`gravestone.hmod`) for **Gravestone**, providing the `gravestone:gravestone` block, 3D gravestone model, `gravestone:obituary` item, GUI assets, and English/Russian localizations.\n\n> **Important:** This is the asset/content pack only. For grave spawning on death, inventory restoration, and the readable obituary book screen to work, you must also install the **`gravestone_core`** native mod (`.hnmod`).\n\n### Credits & License\n- **wareal-nah** \u2014 Horizon implementation & obituary textures (MIT)\n- **PneumonoIsNotAvailable** \u2014 Gravestone 3D model and block/item textures from [Gravestones](https://github.com/PneumonoIsNotAvailable/Gravestones) (MIT)",
+"authors": [
+"wareal-nah",
+"PneumonoIsNotAvailable"
+],
+"owners": [
+"wareal-nah"
+],
+"license": "MIT",
+"source": "https://github.com/wareal-nah/gravestone-horizon#english",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/gravestone.png",
+"categories": [
+"game-mechanics",
+"storage",
+"utility"
+],
+"tags": [
+"gravestone",
+"grave",
+"death",
+"inventory",
+"obituary",
+"qol"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/gravestone/1.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/gravestone/2.png"
+],
+"versions": [
+{
+"version": "1.0.0",
+"published": "2026-11-15",
+"changelog": "Initial release (v1.0.0).\n- Gravestone block, 3D model, obituary item, textures, and EN/RU localizations (requires `gravestone_core` native mod).",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "gravestone-1.0.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/gravestone-1.0.0/gravestone-1.0.0.hmod",
+"size": 8018,
+"sha256": "2695c4885fedfe252271229cc33e771720c44b3c9b5f9230cb10b0b20e9da78f"
+}
+}
+],
+"downloads": 59
 },
 {
 "id": "gyro",
@@ -3855,6 +4436,65 @@
 "stars": 4
 },
 {
+"id": "karak_house",
+"kind": "mod",
+"name": "Karak Tea",
+"summary": "Discover Karak Houses in villages and enjoy six drinks with special powers.",
+"description": "Discover Karak Houses in newly generated villages, with five designs inspired by their surroundings. Meet the Karak Seller and choose from six drinks with distinct powers. A regular Karak Tea costs one emerald, and sellers sometimes offer a complimentary cup. Drinks have individual timers and can be combined.\n\nInstall the mod in Horizon 26.3, enable Karak Tea under Options > Mods, restart, and explore newly generated terrain. Tested on Horizon nightly 66f3981.",
+"authors": [
+"Kian Konrad"
+],
+"owners": [
+"Kian-hdr"
+],
+"license": "MIT",
+"source": "https://github.com/Kian-hdr/karak-tea-minecraft",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/karak_house.png",
+"categories": [
+"food",
+"magic",
+"worldgen"
+],
+"tags": [
+"tea",
+"karak",
+"villages",
+"drinks"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/karak_house/1.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/karak_house/2.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/karak_house/3.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/karak_house/4.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/karak_house/5.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/karak_house/6.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/karak_house/7.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/karak_house/8.jpg"
+],
+"key": "RWRU1Ij+ElkOcSfAwfoL9w7yRrX2JjdT2MuP0R3zXvJo5wF7lY7j/sXy",
+"versions": [
+{
+"version": "0.2.0",
+"published": "2026-11-07",
+"changelog": "First public release: five village-specific Karak Houses and six drinks.",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "karak_house-0.2.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/karak_house-0.2.0/karak_house-0.2.0.hmod",
+"size": 104846,
+"sha256": "ea0db324ecfab441994811829cd3cd544b522576438a2f597a9f956b71f57b64",
+"signature": "untrusted comment: signature from minisign secret key\nRURU1Ij+ElkOcalIWusIf9AeNh0s8HRJUKIK5nDI6KP/nVWCC/+Nae4zIzIiHTtyZiKmhaufqAgmVNMkTSy+N/dc4Hvivk2fWQY=\ntrusted comment: Karak Tea 0.2.0\nx0XJ/brngHYqU7mTfj930gEr90/jjBpMGhToBLwGsaZ3MuhkwG+2v4IpY8wLVe1kAFMsWi7qCnEnn8iEj4egDw=="
+}
+}
+],
+"downloads": 35
+},
+{
 "id": "keystrokes",
 "kind": "native-mod",
 "name": "Keystrokes",
@@ -4105,6 +4745,109 @@
 "downloads": 1101
 },
 {
+"id": "kotost_gems",
+"kind": "mod",
+"name": "Kotost Gems",
+"summary": "Gems for Kotost Skill Tree: citrine, iriscite, jade, ruby and sapphire in six tiers, and vacucite.",
+"description": "The gem items for the native mod **Kotost Skill Tree** (`kotost_skilltree` 0.2.0): citrine, iriscite, jade, ruby and sapphire, each in six tiers from \"crumbled\" to \"exceptional\", and vacucite, with their icons and Russian and English names, in their own creative tab.\n\nThis pack has only the items. Drops from ores, sockets in tools, weapons and armour, socketing on the anvil, tooltips and bonuses are the skill tree's: install both, on the server and the client.\n\nThe textures and names come from Passive Skill Tree 0.6.14a by Daripher (GPL-3.0), baked by `tools/bake.py` in the source repository. No Minecraft code or assets are included.",
+"authors": [
+"Kotost Games"
+],
+"owners": [
+"Leks2000"
+],
+"license": "GPL-3.0-or-later",
+"source": "https://github.com/Leks2000/kotost-skilltree",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/kotost_gems.png",
+"categories": [
+"equipment"
+],
+"tags": [
+"gems",
+"sockets",
+"skill",
+"tree",
+"rpg",
+"items"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/kotost_gems/1.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/kotost_gems/2.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/kotost_gems/3.png"
+],
+"versions": [
+{
+"version": "0.2.0",
+"published": "2026-11-14",
+"changelog": "First release.",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "kotost_gems-0.2.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/kotost_gems-0.2.0/kotost_gems-0.2.0.hmod",
+"size": 60790,
+"sha256": "e3aad2eebf6d82ffdd367e28db1f76f56d3c5339bf019175a12893d1fd11412c"
+}
+}
+],
+"downloads": 43
+},
+{
+"id": "kotost_mage_items",
+"kind": "mod",
+"name": "Kotost Mage Items",
+"summary": "The Mage's Hat, Dress and Staff with recipes, and the spells' sound events, for Kotost Mage.",
+"description": "The items of Kotost Mage: the **Mage's Hat**, the **Mage's Dress** and the **Mage's Staff**, their crafting recipes, a creative tab, English and Russian names, and the sound events of the six spells (they point at the game's own sounds, no audio files are shipped).\n\nInstall it together with the native mod **Kotost Mage** (kotost_mage), which draws them on your model and adds the spells. Content only: no code.",
+"authors": [
+"Kotost Games"
+],
+"owners": [
+"Leks2000"
+],
+"license": "MIT",
+"source": "https://github.com/Leks2000/kotost-mage",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/kotost_mage_items.png",
+"categories": [
+"magic",
+"equipment"
+],
+"tags": [
+"magic",
+"mage",
+"staff",
+"hat",
+"dress"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/kotost_mage_items/1.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/kotost_mage_items/2.png"
+],
+"versions": [
+{
+"version": "0.6.2",
+"published": "2026-11-12",
+"changelog": "The .hmod now ships its MIT LICENSE. Content unchanged.",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "kotost_mage_items-0.6.2.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/kotost_mage_items-0.6.2/kotost_mage_items-0.6.2.hmod",
+"size": 8749,
+"sha256": "30ac207a97283ec84af6cc49dc4e5494c183aad2e568e1568560a535e8f121ce"
+}
+}
+],
+"downloads": 48
+},
+{
 "id": "kotost_roulette",
 "kind": "native-mod",
 "name": "Kotost Roulette",
@@ -4341,6 +5084,142 @@
 "stars": 2
 },
 {
+"id": "lumen",
+"kind": "shader",
+"name": "Lumen",
+"summary": "Cozy Photon-style shader with quality presets: soft shadows, volumetric clouds, light shafts, gorgeous water and underwater, starry nights and an epic End.",
+"description": "A cozy shader pack in Horizon's own format, inspired by the look of Photon. All code is original, no Minecraft assets.\n\n**Overworld**\n- Soft sun and moon shadows, leaves that glow when the sun is behind them\n- Warm sky with a round sun, golden sunsets and volumetric clouds with drifting cloud shadows\n- Light shafts through trees, sun rays, bloom and a soft haze in the distance\n- Clear water with soft random waves, reflections, the sun's glint and a moon path at night\n- Twinkling stars and a faint Milky Way at night, a rainbow after the rain\n- Puddles with rain ripples, shiny ice, metal, polished stone and glass, glittering snow, glowing lava\n- Waving leaves, grass, flowers and seagrass, coloured block light and glowing fireflies\n\n**Underwater**\n- Turquoise water with strong light shafts, caustics and floating particles\n\n**Nether and End**\n- Nether: drifting red haze and glowing embers\n- End: violet light curtains rising from the horizon and a black hole with a glowing ring in the sky\n\n**Performance**\n- Quality presets Low, Medium, High and Ultra to fit your PC\n- Shadow resolution, shadow distance and reflections can be set separately\n- Soft effects are drawn at half resolution, with its own anti-aliasing\n\nEvery effect can be changed in Options > Horizon Settings > Shader Packs > Shader Options.",
+"authors": [
+"Lutziano888"
+],
+"owners": [
+"Lutziano888"
+],
+"license": "MIT",
+"source": "https://github.com/Lutziano888/horizon-lumen",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/lumen.png",
+"categories": [
+"atmosphere",
+"medium",
+"realistic"
+],
+"tags": [
+"shadows",
+"clouds",
+"water",
+"reflections",
+"waving-plants",
+"god-rays",
+"colored-light"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/lumen/1.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/lumen/2.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/lumen/3.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/lumen/4.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/lumen/5.jpg"
+],
+"versions": [
+{
+"version": "2.6.0",
+"published": "2026-11-12",
+"changelog": "- New water surface: soft random waves everywhere, no more lines or patterns\n- Night sky: twinkling stars, a faint Milky Way and a moon path on the water\n- Rainbow after the rain, puddles with rain ripples on flat ground\n- Shiny ice, metal blocks, polished stone and glass, glittering snow, glowing lava\n- Nether: drifting red haze and glowing embers\n- End: violet light curtains and a black hole in the sky\n- You can see much farther: thinner haze in all dimensions\n- New Anti-Aliasing option (smooths jagged edges)\n- Faster: clouds, light shafts, sun rays and bloom drawn at half resolution\n- Fixed: Nether portal frames no longer turn purple\n- New icon",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "lumen-2.6.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/lumen-2.6.0/lumen-2.6.0.hshader",
+"size": 205124,
+"sha256": "453e0e263a8af04f2a2ade0e6bed63dbd2bab444de7697cf177e6a0ee30b05e6"
+}
+},
+{
+"version": "2.5.1",
+"published": "2026-11-09",
+"changelog": "   - New: Quality setting Low / Medium / High / Ultra to fit your PC\n   - New \"Graphics and Performance\" page: shadows on/off, shadow resolution (1024\u20134096), shadow distance (64\u2013256 blocks), reflections\n   - Nicer waves: no repeating pattern, no more lines\n   - Much better underwater: light shafts, floating particles, deeper blue\n   - No more flash when surfacing\n   - Bright sand, snow and quartz no longer glow too much\n   - Softer firefly light\n   - All settings in English",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "lumen-2.5.1.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/lumen-2.5.1/lumen-2.5.1.hshader",
+"size": 49226,
+"sha256": "6ed5abce53d876d334dd6f6bd2604ebe7d24242e473783128dde326f58c1c03c"
+}
+},
+{
+"version": "2.1.0",
+"published": "2026-11-06",
+"changelog": "First release. Needs a Horizon build from 2026-11-03 or newer.",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "lumen-2.1.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/lumen-2.1.0/lumen-2.1.0.hshader",
+"size": 44638,
+"sha256": "3249a3d8706e11c2175a16dbf034b36e41ed47c76c9749e7087ea0aab89a2dce"
+}
+}
+],
+"downloads": 31951
+},
+{
+"id": "lumina",
+"kind": "shader",
+"name": "Lumina",
+"summary": "High performance with real-time shadows, physical water, roof overhang occlusion, volumetric 3D clouds, and sharp anti-aliasing",
+"description": "Native shaders designed for high frame rates and clean, balanced visuals without post-processing blur. All options are fully configurable directly in the shader settings menu.\n\n**Lighting & Overhang Shading**\n- Balanced daytime lighting with warm sun and clean azure shadows.\n- Directional sky dome occlusion: accurate contrast between ground, walls, and ceilings.\n- Non-linear ambient occlusion under house roofs, eaves, porches, and balconies.\n- Selective midtone vibrance on grass and foliage without clipping bright highlights.\n- Foliage subsurface scattering and sun-facing rim lighting.\n\n**Shadows**\n- Real-time sun and moon shadow maps with distortion-aware filtering.\n- Acne-free shadows on terrain, blocks, and thin grass at any distance.\n- Selectable shadow map resolution: 512, 1024, 1536, or 2048.\n\n**Clarity Anti-Aliasing (FXAA)**\n- Edge-selective geometric smoothing on block silhouettes, roofs, and stairs.\n- Flat surfaces, textures, wood, stone, and UI remain 100% sharp with zero blurring.\n- Modes: Sharp, Smooth, or Off.\n\n**Water & Underwater**\n- High-speed Screen Space Reflections (SSR) combined with planar mirror reflections.\n- Physics-based Beer-Lambert light absorption with depth-dependent color transition.\n- Snell's window when looking up from underwater with total internal reflection.\n- Animated seabed caustics, wave refraction, and underwater depth fog.\n\n**Clouds & Atmosphere**\n- Raymarched procedural 3D cumulus clouds with Fast, Balanced, and Cinematic presets.\n- Volumetric god rays through terrain and trees.\n- Procedural rain puddles on grass and dirt with raindrop impact ripples.\n- Custom weather rendering for rain and snow particles.\n- Native block emission and dynamic colored lighting support.\n\n**Setup Note:**\nSet Clouds to OFF in your video settings to let the custom 3D clouds render properly.",
+"authors": [
+"cosmo-jar"
+],
+"owners": [
+"cosmo-jar"
+],
+"license": "GPL-3.0",
+"source": "https://github.com/cosmo-jar/Lumina-Shader-Pack-for-Horizon-Minecraft-on-Rust",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/lumina.png",
+"categories": [
+"atmosphere",
+"shadows",
+"semi-realistic"
+],
+"tags": [
+"shadows",
+"water",
+"reflections",
+"volumetric",
+"clouds",
+"atmosphere",
+"optimized",
+"lighting",
+"god",
+"rays"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/lumina/1.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/lumina/2.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/lumina/3.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/lumina/4.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/lumina/5.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/lumina/6.jpg"
+],
+"versions": [
+{
+"version": "1.0.0",
+"published": "2026-11-06",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "lumina-1.0.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/lumina-1.0.0/lumina-1.0.0.hshader",
+"size": 41770,
+"sha256": "3b81722173fc4c4476def75fbfeff964ccd8a2fde0e31b49507078ea7616dd43"
+}
+}
+],
+"downloads": 37847,
+"stars": 7
+},
+{
 "id": "map_preview",
 "kind": "native-mod",
 "name": "Map Preview",
@@ -4382,6 +5261,198 @@
 }
 ],
 "downloads": 1015
+},
+{
+"id": "mcwdoors",
+"kind": "mod",
+"name": "Macaw's Doors",
+"summary": "239 Macaw's doors on vanilla templates, with the 12 door-print items.",
+"description": "A port of [Macaw's Doors](https://github.com/sketchmacaw/MacawsDoors) by Sketch Macaw and Peachy Macaw\nfor Horizon: 239 door blocks with the 12 door prints.\n\nImplemented so far:\n- 239 door blocks with all 64 vanilla door states (facing, half, hinge, open, powered)\n  and their own models: 231 on the wooden-door template and 8 on the iron-door template.\n- The 8 iron-set doors (metal, jail, store and sliding-glass) behave like vanilla iron\n  doors: they ignore a right-click and open on redstone.\n- The 12 door-print items and their recipes, 251 recipes, 239 loot tables, 12\n  advancements, block/item tags and 17 language files.\n- A creative tab (`itemGroup.mcwdoors`) listing the 239 doors and the 12 prints.\n\nNot yet ported:\n- The 6 garage doors and portcullises (a `part` column with a roll-up animation) and\n  `cherry_waffle_door` (its block models are missing upstream) are not carried; their\n  recipes are left out with them.\n- The shoji/stable doors' per-half opening, the stable door's independent halves and the\n  door-print tooltips are code, not carried.\n- Fuel burn time is the vanilla door's 200 ticks; upstream's `FuelItemBlock` uses 300.\n- Custom shoji/garage click sounds are not played (a content block uses its template's\n  sounds).\n- Hardness/blast resistance/sounds are the template's, not upstream's per-block values.\n\nA data-tier carry: no native code and no hooks. MIT \u2014 the original copyright and licence notices are kept in\nthe port repository (see LICENSE and LICENSE-NOTICE.md there). Pinned to\nHorizon 1d63e0a and horizon-mixins 5a64af93.",
+"authors": [
+"Sketch Macaw",
+"Peachy Macaw",
+"AdLf0208"
+],
+"owners": [
+"AdLf0208"
+],
+"license": "MIT",
+"source": "https://github.com/AdLf0208/mcwdoors",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/mcwdoors.png",
+"categories": [
+"decoration"
+],
+"tags": [
+"port",
+"doors",
+"building",
+"blocks"
+],
+"versions": [
+{
+"version": "0.1.0",
+"published": "2026-11-12",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "mcwdoors-0.1.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/mcwdoors-0.1.0/mcwdoors-0.1.0.hmod",
+"size": 1244033,
+"sha256": "c700189996a89e80e350c0c143fa808e8b63fc6f4fa6da5828c7e493e3222142"
+}
+}
+],
+"downloads": 55
+},
+{
+"id": "mcwfences",
+"kind": "mod",
+"name": "Macaw's Fences and Walls",
+"summary": "All 150 of Macaw's Fences and Walls \u2014 hedges, fences, gates and walls in eleven woods and a range of stone finishes.",
+"description": "A port of [Macaw's Fences and Walls](https://github.com/sketchmacaw/Fences) 1.1.2 by\nSketch Macaw and Peachy Macaw for Horizon: 150 blocks \u2014 10 leaf hedges, 47 fences (picket,\nstockade, horse and wired), 37 gates (highley, pyramid and railing) and 56 walls (modern,\nrailing, pillared and grass-topped) \u2014 in eleven woods and a range of stone finishes.\n\n- Every block keeps the original mod's blockstate, model, texture, item model, name, loot\n  table and tags, with hardness, blast resistance, sounds, map colour and the pickaxe\n  requirement read from the original's own source.\n- The 192 recipes (150 crafting, 42 stonecutting) and five language files are the mod's own.\n\nNot carried, as it needs native code: the 11 wired fences deal no damage (the original hurts\nfor 2.0). Everything else is here: the hedges and grass-topped walls keep their own outline\nshape, the wooden fences burn in a furnace, and crafting and drops work. Nothing else is known\nto differ.\n\nThe full MIT licence and copyright notice are inside the .hmod too\n(assets/mcwfences/license.txt and notice.txt), so every downloaded copy carries them.\n\nThis is a content-only port: no native code and no hooks. MIT \u2014 the original copyright and\nlicence notices are also kept in the port repository; see LICENSE and LICENSE-NOTICE.md.",
+"authors": [
+"Sketch Macaw",
+"Peachy Macaw",
+"unnamed0631"
+],
+"owners": [
+"unnamed0631"
+],
+"license": "MIT",
+"source": "https://github.com/unnamed0631/mcwfences",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/mcwfences.png",
+"categories": [
+"decoration"
+],
+"tags": [
+"port",
+"fences",
+"walls",
+"gates",
+"hedges",
+"building",
+"blocks"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/mcwfences/1.jpg"
+],
+"versions": [
+{
+"version": "1.0.1",
+"published": "2026-11-13",
+"changelog": "Include the full MIT licence and copyright notice inside the .hmod\n(assets/mcwfences/license.txt and notice.txt), so the licence travels with every\ndistributed copy.",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "mcwfences-1.0.1.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/mcwfences-1.0.1/mcwfences-1.0.1.hmod",
+"size": 515365,
+"sha256": "2613024a492f3a566eedd94c5218876271ded4506871e97a5f4474cf7932ee4b"
+}
+}
+],
+"downloads": 50
+},
+{
+"id": "mcwpaths",
+"kind": "mod",
+"name": "Macaw's Paths and Pavings",
+"summary": "315 Macaw's paths, pavings, slabs and stairs in stone, wood and soil styles.",
+"description": "A port of [Macaw's Paths and Pavings](https://github.com/sketchmacaw/Paths-Pavings) by Sketch Macaw and Peachy Macaw for Horizon: 315 path, paving, slab and stair blocks.\n\n**Implemented so far**\n\n- All 315 blocks: 130 thin path/paving blocks, 24 facing paths, 52 engraved pavings, 5 flattened soil paths, 52 slabs and 52 stairs \u2014 4,812 block states, each with the mod's own model and texture.\n- The thin paving shape is upstream's `Block.box(0, 0.01, 0, 16, 0.99, 16)` in block units, declared normalized (0.000625\u20130.061875) rather than inherited from the template, and the engraved/flattened shape is 15/16; both collisions are measured in game.\n- 315 recipes (304 stonecutting, 11 shapeless), 315 loot tables, 11 tags, 25 advancements and 7 language files.\n- A creative tab listing all 315 blocks.\n\n**Not yet ported**\n\n- Engraving and flattening do not toggle: a right-click with a pickaxe or shovel does not cycle `engraved`/`flattened` (nor spend durability). The states exist and bind; the interaction is a later logic-tier slice.\n- Wooden path items do not burn (upstream's `FuelItemBlock`, 50 ticks).\n- The engraved/flattened tooltip lines are in the language files but are not drawn.\n- A facing path takes its template's `getOpposite()` placement rule; upstream uses `getClockWise()`.\n- `forceSolidOn()` has no content field: the outline and collision are upstream's, the entity-solid flag is not reproduced.\n\nA data-tier carry with hand-written 26.3 block declarations: no native code and no hooks. MIT: the original copyright and licence travel inside the archive (`data/mcwpaths/license/`), not only in the source repository. Pinned to Horizon 1d63e0a and horizon-mixins 5a64af93.",
+"authors": [
+"Sketch Macaw",
+"Peachy Macaw",
+"AdLf0208"
+],
+"owners": [
+"AdLf0208"
+],
+"license": "MIT",
+"source": "https://github.com/AdLf0208/mcwpaths",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/mcwpaths.png",
+"categories": [
+"decoration"
+],
+"tags": [
+"port",
+"paths",
+"building",
+"blocks"
+],
+"versions": [
+{
+"version": "0.1.0",
+"published": "2026-11-12",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "mcwpaths-0.1.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/mcwpaths-0.1.0/mcwpaths-0.1.0.hmod",
+"size": 906648,
+"sha256": "9f4800ee7ed2be45446afc477fcb83b6d8f250b991897d502314e1ed465eefa0"
+}
+}
+],
+"downloads": 50
+},
+{
+"id": "mcwtrpdoors",
+"kind": "mod",
+"name": "Macaw's Trapdoors",
+"summary": "All 179 of Macaw's Trapdoors \u2014 vanilla-matched woods plus glass, metal and themed sets.",
+"description": "A port of [Macaw's Trapdoors](https://github.com/sketchmacaw/Trapdoors) by\nSketch Macaw and Peachy Macaw for Horizon: all 179 trapdoors \u2014 the\nvanilla-matched woods plus the glass, metal, barn, beach, cottage and themed\nsets \u2014 with their blockstates, models, textures, recipes, loot, advancements and\nlanguage files.\n\n- Every trapdoor is declared from its vanilla trapdoor template with all 64\n  states and its own model; the 191 recipes (179 trapdoors plus 12 prints) and\n  179 loot tables are the mod's own.\n- The 12 print items are carried with their recipes, and the lang files name all\n  179 blocks.\n\nThis is a data-tier carry: no native code and no hooks. MIT \u2014 original copyright\nand licence notices are kept in the port repository; see LICENSE and\nLICENSE-NOTICE.md there.\n",
+"authors": [
+"Sketch Macaw",
+"Peachy Macaw",
+"AdLf0208"
+],
+"owners": [
+"AdLf0208"
+],
+"license": "MIT",
+"source": "https://github.com/AdLf0208/mcwtrpdoors",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/mcwtrpdoors.png",
+"categories": [
+"decoration"
+],
+"tags": [
+"port",
+"trapdoors",
+"building",
+"blocks"
+],
+"versions": [
+{
+"version": "1.1.5",
+"published": "2026-11-09",
+"changelog": "First release",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "mcwtrpdoors.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/mcwtrpdoors-1.1.5/mcwtrpdoors.hmod",
+"size": 605483,
+"sha256": "c75926e47c2649be36cc86880ac3e09a40035b5134ae96dfb4403be3c2d95905"
+}
+}
+],
+"downloads": 2342
 },
 {
 "id": "minelights",
@@ -4669,6 +5740,77 @@
 "stars": 4
 },
 {
+"id": "montarc",
+"kind": "shader",
+"name": "Montarc",
+"summary": "Bright, colorful shader pack: soft shadows, colored light, living water, wind, and own look for the Nether and the End.",
+"description": "Bright, colorful shader pack for Horizon. Horizon had no shaders on the registry, so I made one. Style is close to Complementary Reimagined, but the code is mine, written from scratch in WGSL.\n\n## What you get\n\n- **Soft shadows.** Sun and moon cast them. Water and stained glass tint the light that goes through.\n- **Sky and fog match.** Blue day, orange sunsets, dark blue night. Far terrain fades into the sky, no hard line at the horizon.\n- **Colored light.** Torches are warm, soul fire is blue, redstone is red, sea lanterns are cyan, amethyst is purple.\n- **Water that looks like water.** Waves, depth color, reflections, sun glitter, foam on the shore and light patterns on the seabed.\n- **Weather.** Rain and snow lit by the scene, puddles with raindrop rings, optional sunbeams.\n- **Wind.** Grass, flowers, crops and leaves move. Rain makes it stronger.\n- **Nether and End look different.** Nether is hot and hazy, with heat shimmer. End is cold and purple.\n- **29+ options.** Everything can be tuned or turned off in game.\n\n## Which version do I take?\n\n- **1.7.0** is for Horizon builds that serve shader API 0.2 (newer than Nightly 2026-11-13).\n- **1.6.1** is for builds that still serve shader API 0.1.\n\nThe launcher offers the one your game can run.\n\n## Slow? Try this\n\n- Shadow quality: Low\n- Shadow map size: 1024 or 512\n- Shadow distance: 64\n- Water reflections: off\n- Bloom: off\n- Shadows: off. Biggest gain.\n\n## Known problems\n\n- Horizon's shader API is experimental and can change.\n- Entities, block entities and particles are not shaded by Montarc yet.\n- Nether and End sky is vanilla. The sky stage only draws in the Overworld.\n- Shadow bias may need tuning on some GPUs. If you see stripes on surfaces, change `Shadow bias`.\n",
+"authors": [
+"Muurrcc"
+],
+"owners": [
+"Muurrcc"
+],
+"license": "MIT",
+"source": "https://github.com/Muurrcc/montarc",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/montarc.png",
+"categories": [
+"semi-realistic",
+"colored-lighting",
+"shadows"
+],
+"tags": [
+"colorful",
+"shadows",
+"water",
+"wind",
+"bloom",
+"fxaa",
+"rain",
+"puddles",
+"caustics",
+"sunbeams"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/montarc/1.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/montarc/2.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/montarc/3.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/montarc/4.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/montarc/5.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/montarc/6.jpg"
+],
+"versions": [
+{
+"version": "1.6.1",
+"published": "2026-11-17",
+"changelog": "- For Horizon builds that serve shader API 0.1. Build 1.7.0 is the same pack for API 0.2.\n- Portals: the Nether portal glows violet and the End portal and gateway glow cyan-green.\n- Shadows: new \"Shadow map size\" (512 to 2048) and \"Shadow distance\" (64 to 160) options.\n- Weather: rain and snow have their own look, lit by the sky, the moon, torches and lightning.\n- Rain puddles that mirror the sky, with raindrop rings (\"Rain puddles\", needs \"Wet surfaces\").\n- Sunbeams: optional light rays toward the sun (\"Sunbeams\", off by default).\n- Underwater: sunlight patterns dance on the seabed (\"Underwater light\"), and the water fog is a clear blue-teal instead of almost black.\n- Screenshots added. Release v1.6.1 of the repository.\n",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "montarc-1.6.1.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/montarc-1.6.1/montarc-1.6.1.hshader",
+"size": 25784,
+"sha256": "ce992ef3f4b2aa202c57d5aae47c37c934b4e5f0e00685b2b7a13fe7f5db6de5"
+}
+},
+{
+"version": "1.1.1",
+"published": "2026-11-04",
+"changelog": "First release: soft shadows from the sun and the moon, sky and fog that match, colored block light, water with waves, reflections and foam, wind on plants and leaves, an own look for the Nether and the End, 29 options. Needs the nightly build of Horizon (2026-11-04 or newer). Release v1.1.1 of the repository.",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "montarc-1.1.1.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/montarc-1.1.1/montarc-1.1.1.hshader",
+"size": 23426,
+"sha256": "3d6b4a457d84db15b63c9b77df887bb1887190901b9e2303e5a2a7d8a2bac01b"
+}
+}
+],
+"downloads": 51242,
+"stars": 1
+},
+{
 "id": "motion_blur",
 "kind": "native-mod",
 "name": "Motion Blur",
@@ -4876,6 +6018,153 @@
 "downloads": 2430
 },
 {
+"id": "mvs",
+"kind": "mod",
+"name": "MVS - Moog's Voyager Structures",
+"summary": "160+ structures carried to 26.3: villages, towers, cathedrals, wells and carts, with their loot.",
+"description": "A port of [MVS - Moog's Voyager Structures](https://github.com/Moog-s-Mods/MoogsVoyagerStructures)\nby FinnDog (built by Phantax) for Horizon. The jar is data only, so this port is\nthe content tier as the mod ships it, mapped to Minecraft 26.3:\n\n- **130 structures** (127 overworld, 3 Nether) generated by the vanilla jigsaw\n  system, **116 structure sets** with the mod's 1.65 spread factor and its\n  `min_distance_from_world_origin`, **170 template pools** and **355 NBT\n  templates**.\n- **13 processor lists**, including the 8 spawner-randomizing ones (weighted\n  mobs and timing) as `horizon:spawner_mobs`, and **32 loot tables** in the 26.3\n  shape.\n- The **16 NeoForge `c:` biome tags** the structures select by are restored:\n  26.3 ships none, and without them the overworld structures could never start\n  (proved in game by removing them).\n\nThe `moogs_structures` library is not shipped: its four types are mapped to\nvanilla `minecraft:jigsaw` plus Horizon's `horizon:start_checks`,\n`horizon:piece_limited` and `horizon:enhanced_terrain_adaptation`. Versioned\ntemplate folders for other game versions are carried but inert for 26.3, and\n`when_replacing` is not modelled (no set here uses it). Spawner mobs are carried\nand read by the engine but spawner spawning was not waited for in the in-game\ncheck. **Generated structures stay in the save after the mod is removed** \u2014\nthey are written into the world's chunks like any other worldgen.\n\nThis port is **LGPL-3.0-only**, the same licence as the original, and the\ncomplete corresponding source of the port is in the repository named below\n(full licence text in LICENSE, the GNU GPL v3.0 it incorporates in COPYING).",
+"authors": [
+"FinnDog",
+"AdLf0208"
+],
+"owners": [
+"AdLf0208"
+],
+"license": "LGPL-3.0-only",
+"source": "https://github.com/AdLf0208/mvs",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/mvs.png",
+"categories": [
+"adventure",
+"decoration"
+],
+"tags": [
+"port",
+"structures",
+"worldgen",
+"loot",
+"exploration"
+],
+"versions": [
+{
+"version": "0.1.0",
+"published": "2026-11-12",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "mvs-0.1.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/mvs-0.1.0/mvs-0.1.0.hmod",
+"size": 2247939,
+"sha256": "19b54b1fecade3ff2894eb598d63629fb6f9aaaad8422eeaee8dd95401592ac2"
+}
+}
+],
+"downloads": 101
+},
+{
+"id": "netherstarrecipe",
+"kind": "mod",
+"name": "Nether Star Crafting",
+"summary": "Adds a Netherstar Shard and a crafting recipe for the Nether Star.",
+"description": "Adds a Netherstar Shard and a crafting recipe for the Nether Star.",
+"authors": [
+"Mya"
+],
+"owners": [
+"MyaJP"
+],
+"license": "MIT",
+"source": "https://github.com/MyaJP/Nether-Star-Crafting-Horizon",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/netherstarrecipe.png",
+"categories": [
+"utility"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/netherstarrecipe/1.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/netherstarrecipe/2.png"
+],
+"versions": [
+{
+"version": "1.0.0",
+"published": "2026-11-07",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "netherstarrecipe-1.0.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/netherstarrecipe-1.0.0/netherstarrecipe-1.0.0.hmod",
+"size": 2726,
+"sha256": "8ce5770dc39156b64f872938e810e6cc037b8d711a82374eaf4e228adda9b266"
+}
+}
+],
+"downloads": 3412
+},
+{
+"id": "nimbe",
+"kind": "shader",
+"name": "Nimbe",
+"summary": "A bright, enchanting world: painted sky, volumetric clouds, sunbeams, soft shadows, living water and colored lights.",
+"description": "An original shader pack written in Horizon's own WGSL shader format (shader API 0.1).\n\n- **Painted sky**: the gradient changes through the day, with a pink band at sunrise and sunset and a halo around the sun.\n- **Clouds**: sunlit cumulus with self-shadowing, glowing edges against the light and darker bases, high cirrus, and a full overcast during storms.\n- **Night**: twinkling stars that turn with the sky, a faint nebula, and auroras in cold biomes.\n- **Shadows**: crisp, stable shadows from the sun and moon, tinted by the water and stained glass they pass through; clouds cast shadows on the ground.\n- **Water**: turquoise (emerald in the shallows, deep teal further out) or biome colors, a living swell that never repeats, sun glitter, and reflections that ripple with the surface. Under it, light loses its red then its green with depth, and caustics dance on the bed.\n- **Lighting**: warm torches, colored soul fire, redstone, amethyst and sea lanterns, and fireflies that cast light.\n- **Materials**: relief derived from textures, LabPBR resource pack support, shiny metals and polished blocks, light through foliage, wet ground and puddles in the rain.\n- **Wind**: grass, flowers, leaves and vines sway; underwater, a current rocks the seagrass and kelp.\n- **Atmosphere and image**: light shafts, haze that matches the sky, ambient occlusion, bloom, adaptive exposure, color grading, vignette and anti-aliasing.\n\nEvery effect can be tuned from the pack's menu.\n\n## Install\n\nPut `nimbe.hshader` in the game's `shaderpacks` folder (the **Open Pack Folder** button opens it), then pick **Nimbe** in Options > Video Settings > Shaders > Shader Packs.\n\n## Performance\n\nThe most expensive settings, in order: shadows and their resolution, water reflections, light shafts, cloud quality. On a small GPU, start with a shadow resolution of 1024 and light shafts on Low.\n\nAll the code is original and not taken from any other shader pack.",
+"authors": [
+"Reminuscul"
+],
+"owners": [
+"Reminuscul"
+],
+"license": "MIT",
+"source": "https://github.com/Reminuscul/nimbe",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/nimbe.png",
+"categories": [
+"atmosphere",
+"realistic",
+"screenshot"
+],
+"tags": [
+"shaders",
+"realistic",
+"clouds",
+"water",
+"shadows",
+"sky",
+"bloom",
+"pbr",
+"volumetric",
+"atmosphere"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/nimbe/1.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/nimbe/2.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/nimbe/3.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/nimbe/4.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/nimbe/5.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/nimbe/6.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/nimbe/7.jpg"
+],
+"versions": [
+{
+"version": "1.0.0",
+"published": "2026-11-07",
+"changelog": "First release.",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "nimbe-1.0.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/nimbe-1.0.0/nimbe-1.0.0.hshader",
+"size": 261595,
+"sha256": "89602f3cd963cc2833354ffb081361a8ad09b1143c70ad9cd7e0132b27897dba"
+}
+}
+],
+"downloads": 16839
+},
+{
 "id": "orbital",
 "kind": "native-mod",
 "name": "Orbital Laser",
@@ -4931,6 +6220,115 @@
 "stars": 245
 },
 {
+"id": "pastel_mystic",
+"kind": "shader",
+"name": "Pastel Mystic",
+"summary": "A soft pastel, dreamlike world with auroras, lavender mist and a breathing light from what you hold.",
+"description": "A soft pastel, dreamlike shader pack in Horizon's own format, written from scratch in WGSL.\n\n- **Pastel sky:** periwinkle overhead and blush at the horizon by day, coral and lilac at dawn and dusk.\n- **Mystic nights:** a deep violet sky with a slowly drifting aurora curtain in mint, lavender and pink, and twinkling stars.\n- **Light in your hand:** what you hold glows in its own pastel colour (torches peach, soul torches mint, amethyst and ender items lilac, glowstone cream, sea lanterns aqua, redstone rose) and gently breathes and shimmers. Dropped glowing items light up too. Turn on **Dynamic lights** in Options > Extras.\n- **Soft light:** peach-and-cream sunlight, lavender shade, soft shadows that never go fully black, a violet night instead of a black one.\n- **Atmosphere:** lavender mist lying low in the valleys (thicker at night and dawn), a pastel haze in the distance and a dreamy glow around light sources.\n- **Pastel grade:** lifted lavender shadows, blush highlights, softer contrast and a violet vignette.\n- Plants sway in a slow breeze, water is a clear pastel aqua with gentle waves, fireflies glow lilac.\n\nEverything is adjustable in Options > Horizon Settings > Shader Packs > Shader Options (Light, Light in hand, Sky, Mist, Dream). Kept light for integrated graphics (tested on Intel Iris Xe): no reflections pass, a small shadow map and quarter-resolution glow.",
+"authors": [
+"palladium7048"
+],
+"owners": [
+"platinum7048"
+],
+"license": "MIT",
+"source": "https://github.com/platinum7048/pastel-mystic",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/pastel_mystic.png",
+"categories": [
+"fantasy",
+"atmosphere",
+"low"
+],
+"tags": [
+"pastel",
+"dreamy",
+"aurora",
+"mist",
+"dynamic-lights",
+"held-light",
+"fantasy",
+"soft-shadows"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/pastel_mystic/1.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/pastel_mystic/2.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/pastel_mystic/3.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/pastel_mystic/4.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/pastel_mystic/5.jpg"
+],
+"versions": [
+{
+"version": "1.0.0",
+"published": "2026-11-06",
+"changelog": "First release.",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "pastel_mystic-1.0.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/pastel_mystic-1.0.0/pastel_mystic-1.0.0.hshader",
+"size": 18188,
+"sha256": "12df7984da6a1f8f6f06eb74267f83ec4e5abe495e0aa547e5fd09951ecb161e"
+}
+}
+],
+"downloads": 22294
+},
+{
+"id": "photon",
+"kind": "shader",
+"name": "Photon",
+"summary": "SixthSurge's Photon shaders ported to Horizon: realistic sky, volumetric clouds, soft coloured shadows, water, fog and bloom.",
+"description": "An unofficial port of [Photon Shaders](https://github.com/sixthsurge/photon) v1.4 by SixthSurge to Horizon's own shader format. All credit for the look goes to SixthSurge and Photon's contributors; this port is not affiliated with or endorsed by them.\n\n**Ported:** Photon's atmosphere, sun, stars and galaxy; soft coloured shadows, subsurface scattering on foliage and block light; water with waves, absorption, refraction and reflections; waving plants; volumetric cumulus and cirrus clouds; fog with light shafts; bloom, colour grading, FXAA and sharpening. 61 of Photon's settings under Shader Options.\n\n**Not possible in Horizon yet:** TAA, ambient occlusion, reflections on land, depth of field, moon phases, some cloud layers, aurora, and shading of entities, the hand and particles.\n\nSource: https://github.com/fbikat/photon-horizon. Licence: Photon's own (in the pack); free to share, not for sale.",
+"authors": [
+"fbi"
+],
+"owners": [
+"fbikat"
+],
+"license": "LicenseRef-Photon-Shaders",
+"source": "https://github.com/fbikat/photon-horizon",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/photon.png",
+"categories": [
+"semi-realistic",
+"atmosphere",
+"shadows"
+],
+"tags": [
+"photon",
+"volumetric-clouds",
+"shadows",
+"water",
+"fog",
+"port",
+"sun",
+"realism",
+"real",
+"life"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/photon/1.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/photon/2.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/photon/3.png"
+],
+"versions": [
+{
+"version": "1.4.0",
+"published": "2026-11-09",
+"changelog": "First release: Photon Shaders v1.4 by SixthSurge, ported to Horizon's shader API 0.1.",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "photon-1.4.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/photon-1.4.0/photon-1.4.0.hshader",
+"size": 1921142,
+"sha256": "9641bfd672c8b3608025a71d5cc1c927d0da75ed6f8d8c46f29213004a8019ba"
+}
+}
+],
+"downloads": 30406,
+"stars": 1
+},
+{
 "id": "pickupnotifier",
 "kind": "native-mod",
 "name": "Pick Up Notifier",
@@ -4984,6 +6382,51 @@
 ],
 "downloads": 926,
 "stars": 4
+},
+{
+"id": "projecte",
+"kind": "mod",
+"name": "ProjectE for Horizon (assets)",
+"summary": "The blocks, items, textures, text and recipes of ProjectE for Horizon. Needs the native mod.",
+"description": "**This is one of the two parts of [ProjectE for Horizon](https://playhorizon.dev/mods/projecte_core), and does little alone.** Install both: this one, the assets, and the native part.\n\nIt holds the blocks, items, creative tab, textures, text and recipes. It has no code. The code, and the description of what the mod does, are in the native part.\n\nAn unofficial port of [ProjectE](https://github.com/sinkillerj/ProjectE) (MIT, Copyright (c) 2020 Sin Tachikawa); its recipes and names are used under that licence. The textures are original work made for this port, inspired by ProjectE's look; ProjectE's and EE2's art isn't included. No Minecraft assets are included. MIT licensed.",
+"authors": [
+"Arthur Black"
+],
+"owners": [
+"d3xc0"
+],
+"license": "MIT",
+"source": "https://github.com/d3xc0/projecte-horizon",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/projecte.png",
+"categories": [
+"technology",
+"library"
+],
+"tags": [
+"emc",
+"transmutation",
+"assets"
+],
+"versions": [
+{
+"version": "0.1.0",
+"published": "2026-11-06",
+"changelog": "First release.",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "projecte-0.1.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/projecte-0.1.0/projecte-0.1.0.hmod",
+"size": 344286,
+"sha256": "da08dffc1d021463e43576db233bc79e943aaf4e76a8a1ea37b66aa8ebab883f"
+}
+}
+],
+"downloads": 12704
 },
 {
 "id": "projecte_core",
@@ -5069,6 +6512,52 @@
 }
 ],
 "downloads": 1317
+},
+{
+"id": "radiant",
+"kind": "shader",
+"name": "Radiant",
+"summary": "Cinematic but playable: warm sun, soft shadows, light shafts, golden haze, sunset clouds, wet rainy ground and a filmic grade.",
+"description": "A cinematic shader pack for Horizon that is built to be played in, not just screenshotted.\n\n- **Light and shadow:** soft sun and moon shadows, light through leaves, coloured block light, flickering torches, ambient occlusion.\n- **Sky:** deep blue days, layered gold, pink and violet sunsets, a round sun, drifting clouds, twinkling stars and a faint Milky Way.\n- **Light shafts:** god rays through canopies and sun shafts fanning out from a low sun, from the moon at night too.\n- **Atmosphere:** golden distance haze toward a low sun, morning mist, clear water when you're underwater, heat shimmer above lava.\n- **Water:** refraction, reflections, a sun path that hides behind hills, glitter, shore foam and raindrop rings.\n- **Rain:** wet, darker ground with a sheen, puddles that spread as it rains, see-through rain.\n- **Camera:** filmic highlights, eye adaptation, five looks (Natural, Cinematic, Warm film, Moody, Vivid), bloom and optional lens effects.\n\nEvery effect has a setting. About 7-8 ms of GPU time per frame; above 60 FPS on an RX 570.",
+"authors": [
+"Daniel"
+],
+"owners": [
+"expensiverest"
+],
+"license": "MIT",
+"source": "https://github.com/expensiverest/radiant",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/radiant.png",
+"categories": [
+"realistic",
+"atmosphere",
+"high"
+],
+"tags": [
+"cinematic",
+"god-rays",
+"shadows",
+"rain",
+"puddles",
+"bloom",
+"filmic"
+],
+"versions": [
+{
+"version": "1.0.0",
+"published": "2026-11-03",
+"changelog": "First release. Release v1.0.0 of the repository.",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "radiant-1.0.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/radiant-1.0.0/radiant-1.0.0.hshader",
+"size": 42445,
+"sha256": "4d079d8ee411a6a70189c3d12b415b96531532fe3cd46be0a778114db08a1605"
+}
+}
+],
+"downloads": 40621
 },
 {
 "id": "rarity_borders",
@@ -5540,6 +7029,75 @@
 "stars": 4
 },
 {
+"id": "salvage",
+"kind": "mod",
+"name": "Salvage",
+"summary": "The all-recycling mod: smelt leather, wood, stone, diamond gear, shells and the elytra back into useful materials, and break down armour and tools at the crafti",
+"description": "Nothing in that chest is trash anymore. Salvage \u2014 the all-recycling mod \u2014 turns old gear back into useful materials.\n\nLeather helmets from zombie drops, stone pickaxes you outgrew, diamond swords you are done with, an elytra you never fly, saddles from horses you never ride \u2014 put them in a furnace with any fuel and get leather, charcoal, cobblestone, diamonds, turtle scutes or phantom membrane back, plus a little experience for your trouble.",
+"authors": [
+"CGRLabs"
+],
+"owners": [
+"CGRLabs"
+],
+"license": "MIT",
+"source": "https://github.com/CGRLabs/salvage",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/salvage.png",
+"categories": [
+"utility",
+"game-mechanics"
+],
+"tags": [
+"smelting",
+"furnace",
+"crafting",
+"recycling",
+"quality-of-life",
+"survival",
+"vanilla-friendly",
+"leather",
+"scute"
+],
+"key": "RWTDxzLUJVk6XFJWJw1WcVOeEbSCS1OUG9MkdU9b1q08Ynf54O92X64F",
+"versions": [
+{
+"version": "1.2.0",
+"published": "2026-11-12",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "salvage-1.2.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/salvage-1.2.0/salvage-1.2.0.hmod",
+"size": 9398,
+"sha256": "6aa95ed89c3e23f20c47a87543eafa123b96bc3e1c3f231e6fc72359c26726f6",
+"signature": "untrusted comment: signature from rsign secret key\nRUTDxzLUJVk6XAW7nh3jOcsiCBAZoXCcz/9/F70De53E4q/mCkjpjqlRCRYacQ5ljwuwhlzJg99pqLPDooOAmPTaxC6D3PwTaQs=\ntrusted comment: salvage 1.2.0\n3sPPd3SEjBjNmP4oZ7BGAsY8cCcyH3R6t/35mmwzgCNZmWF/X6mbIwxKTNLHawJ/7sNX1y7525y3Ej3cHdKzDw=="
+}
+},
+{
+"version": "1.0.0",
+"published": "2026-11-10",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "salvage-1.0.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/salvage-1.0.0/salvage-1.0.0.hmod",
+"size": 4385,
+"sha256": "9404e1a91b474118635ff2c743f41af2b03e809fe419ef7ab3d8f9d48dab5641",
+"signature": "untrusted comment: signature from rsign secret key\nRUTDxzLUJVk6XKdTUZuQmUQtr02bFIk5LE6zwWODz/kLNpGs2OGVM5tpfhtdyAtMYak0k5MTW2Y2jq6hk+3vAKmlE4qf6C1lWQk=\ntrusted comment: salvage 1.0.0\nAdo5T98mZ8dCjmZPrjadGDhZg2dZy/PewnhQ05B9nAA8eQlUbFTq26HRe082T4wrtO7Y7iZurXlMYtnuIgSNBg=="
+}
+}
+],
+"downloads": 2430
+},
+{
 "id": "schematics",
 "kind": "native-mod",
 "name": "Schematics",
@@ -5874,6 +7432,95 @@
 "stars": 4
 },
 {
+"id": "silentgems",
+"kind": "mod",
+"name": "Silent's Gems",
+"summary": "21 gems with storage blocks and 84 ores, plus overworld, nether and end worldgen.",
+"description": "A port of [Silent's Gems](https://github.com/SilentChaos512/SilentGems) by SilentChaos512\nfor Horizon: 21 gems, their storage blocks and their ores.\n\nImplemented so far:\n- The 21 gems as items (ruby, carnelian, topaz, citrine, heliodor, moldavite, peridot,\n  turquoise, kyanite, sapphire, iolite, alexandrite, ammolite, rose quartz, garnet,\n  aquamarine, tanzanite, opal, pearl, black diamond and white diamond) with their own\n  textures and rarities.\n- Their 21 storage blocks and 42 compression/decompression recipes, with 105 loot tables\n  and the mod's own textures, models and language file.\n- 84 ore blocks \u2014 overworld stone, deepslate, nether and end variants of every gem \u2014\n  with their block/item tags.\n- Ore worldgen: the mod's own overworld, nether and end ore features, placed features\n  and biome modifiers (56 worldgen files).\n- A creative tab listing the 126 items of this slice.\n\nNot yet ported:\n- Slices 1\u20132 only: glowrose and other plants, tool/armour sets, lamps, glass, bricks and\n  tiles, teleporters, the silver/chaos material line, food and the Silent Gear\n  integration are not registered yet.\n- An ore always drops one gem: silk touch returns the gem rather than the ore block and\n  fortune does not multiply (the pin has no `match_tool`/`apply_bonus`).\n- Ore experience is the template's (lapis, 2\u20135), not upstream's fixed 1\u20135 provider.\n- Gem names use per-gem keys (`item.silentgems.ruby`) rather than upstream's shared `%s`\n  template.\n- No tooltip shows a gem's colour or harvest tier.\n\nA content/logic data carry: the 21-gem registry is a test-only Rust module (no injection). MIT \u2014 the original copyright and licence notices are kept in\nthe port repository (see LICENSE and LICENSE-NOTICE.md there). Pinned to\nHorizon 1d63e0a and horizon-mixins 5a64af93.\n",
+"authors": [
+"SilentChaos512",
+"AdLf0208"
+],
+"owners": [
+"AdLf0208"
+],
+"license": "MIT",
+"source": "https://github.com/AdLf0208/silentgems",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/silentgems.png",
+"categories": [
+"technology",
+"game-mechanics"
+],
+"tags": [
+"port",
+"gems",
+"ores",
+"worldgen"
+],
+"versions": [
+{
+"version": "5.2.0",
+"published": "2026-11-09",
+"changelog": "First release: the slice described above.",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "silentgems.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/silentgems-5.2.0/silentgems.hmod",
+"size": 302704,
+"sha256": "cd47ec932c984e81ce5b9450a65eeec8ac3b3c48206cc468a63d9979eee0343b"
+}
+}
+],
+"downloads": 4357
+},
+{
+"id": "silk_spawners",
+"kind": "mod",
+"name": "Silk touch spawners",
+"summary": "silk touch able to pick up spawners",
+"description": "you can break spawners with mob in it using silk touch enchanted pickaxe to get the spawner with the mob",
+"authors": [
+"Dex"
+],
+"owners": [
+"Haidar3x3"
+],
+"license": "MIT",
+"source": "https://github.com/Haidar3x3/Silk-spawners",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/silk_spawners.png",
+"categories": [
+"game-mechanics"
+],
+"tags": [
+"enchant"
+],
+"versions": [
+{
+"version": "1.3.0",
+"published": "2026-11-15",
+"changelog": "able to pick up spawners using silk touch pickaxe",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "silk_spawners-1.3.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/silk_spawners-1.3.0/silk_spawners-1.3.0.hmod",
+"size": 4710,
+"sha256": "8e5299ed7459298290303d44cb5f45407f21c0e7fd995a8980457468c55b6f82"
+}
+}
+],
+"downloads": 55
+},
+{
 "id": "simple_voice_chat",
 "kind": "native-mod",
 "name": "Simple Voice Chat client (unofficial)",
@@ -5915,6 +7562,51 @@
 }
 ],
 "downloads": 3073
+},
+{
+"id": "simplylight",
+"kind": "mod",
+"name": "Simply Light",
+"summary": "160 decorative light-emitting blocks and panels in every colour.",
+"description": "A port of [Simply Light](https://github.com/Flanks255/simplylight) by Flanks255 for Horizon: ten families of decorative light blocks \u2014 lamps, slabs, panels, wall lamps, bulbs, rods, posts and edge lights \u2014 in all sixteen colours, 160 blocks and 2048 block states.\n\n**Implemented so far**\n\n- Lamps emit light 15; bulbs and edge lights emit 14; an unlit lamp emits none.\n- Every block drops itself and is craftable from its family's recipe.\n- Builders get the same shapes as upstream: panels and slabs that sit flush, wall-mounted lamps, and edge lights for ceilings and floors.\n\n**Not yet ported**\n\n- Redstone toggling, the lamp-post column and the edge-light editor are later slices.\n\nA content-only carry: no native code and no hooks. MIT: the original copyright and licence travel inside the archive (`data/simplylight/license/`), not only in the source repository. Pinned to Horizon 1d63e0a and horizon-mixins 5a64af93. The artifact the entry pins is `content/simplylight.hmod` in the source repository; the release asset must be re-uploaded from that file so the two hashes agree.",
+"authors": [
+"Flanks255",
+"AdLf0208"
+],
+"owners": [
+"AdLf0208"
+],
+"license": "MIT",
+"source": "https://github.com/AdLf0208/simplylight",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/simplylight.png",
+"categories": [
+"decoration"
+],
+"tags": [
+"port",
+"decoration",
+"lighting",
+"blocks"
+],
+"versions": [
+{
+"version": "0.1.0",
+"published": "2026-11-12",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "simplylight-0.1.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/simplylight-0.1.0/simplylight-0.1.0.hmod",
+"size": 689280,
+"sha256": "179023199bb17d8079010d3c6617bd83e8a08f13d4630b39e39f541028058b7a"
+}
+}
+],
+"downloads": 58
 },
 {
 "id": "skins_3d",
@@ -6630,6 +8322,284 @@
 "downloads": 48993
 },
 {
+"id": "vanilla_horizon",
+"kind": "shader",
+"name": "Vanilla Horizon",
+"summary": "Vanilla Minecraft's light, plus real sunrises and sunsets, water and rain.",
+"description": "Vanilla's own light is the base: the sun and the moon cast shadows on top of it, the blocks the low sun reaches turn warm, rays spill across the horizon, and the air near the ground takes the hour's colour. The water, the rain and the glowing blocks are the pack's own.",
+"authors": [
+"PureEvilValera"
+],
+"owners": [
+"PureEvilValera"
+],
+"license": "MIT",
+"source": "https://github.com/PureEvilValera/vanilla-horizon-shader",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/vanilla_horizon.png",
+"categories": [
+"vanilla-like",
+"atmosphere",
+"shadows"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/vanilla_horizon/1.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/vanilla_horizon/2.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/vanilla_horizon/3.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/vanilla_horizon/4.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/vanilla_horizon/5.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/vanilla_horizon/6.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/vanilla_horizon/7.jpg"
+],
+"versions": [
+{
+"version": "2.10.2",
+"published": "2026-11-15",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "vanilla_horizon-2.10.2.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/vanilla_horizon-2.10.2/vanilla_horizon-2.10.2.hshader",
+"size": 28113,
+"sha256": "4faf2ac501b9862bff4ed27d4d60abed5bab1e20a397506981c3957d09dd7068"
+}
+}
+],
+"downloads": 200
+},
+{
+"id": "vastcompressed",
+"kind": "mod",
+"name": "Vast Compressed",
+"summary": "The game's blocks packed nine at a time, from I (9 blocks) to IX (387,420,489), and back.",
+"description": "A content mod: data only, nothing to build.\n\n- **828 compressed blocks:** 92 of the game's blocks (stones, deepslate, netherrack, end stone, obsidian, terracotta and the 16 concretes, dirt, sand, gravel, clay, mud, snow, every log and plank, moss, hay, wart blocks, pumpkin, melon, coal, iron, gold, copper, raw ores, redstone, lapis, diamond, emerald, netherite, glass, glowstone, magma, blue ice and more), each in nine tiers.\n- **Crafting:** nine make the next tier in the 3 \u00d7 3 grid; one gives nine of the tier below.\n- **Each tier is marked** by a frame drawn over the block: steel for I\u2013III, brass for IV\u2013VI, violet for VII\u2013IX. The tooltip says how many blocks it holds.\n- Each tier is a quarter harder to mine and to blow up. Glowstone and magma still glow; sand and gravel don't fall.\n- English and Brazilian Portuguese. Tags `vastcompressed:compressed` and `vastcompressed:compressed/<block>`.\n\nThe overlays are hand-drawn pixel art made in the repository; a block shows the game's own texture by name, none is shipped. Inspired by AllTheCompressed by the All The Mods team; not affiliated with or endorsed by All The Mods.",
+"authors": [
+"voltzz900"
+],
+"owners": [
+"voltzz900"
+],
+"license": "MIT",
+"source": "https://github.com/voltzz900/vast-compressed",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/vastcompressed.png",
+"categories": [
+"decoration",
+"storage",
+"utility"
+],
+"tags": [
+"compressed",
+"storage",
+"building",
+"blocks"
+],
+"versions": [
+{
+"version": "0.1.0",
+"published": "2026-11-12",
+"changelog": "First release (0.1.0): 828 compressed blocks (92 of the game's blocks in nine tiers), compress and decompress recipes, hand-drawn tier overlays, English and Brazilian Portuguese.",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "vastcompressed-0.1.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/vastcompressed-0.1.0/vastcompressed-0.1.0.hmod",
+"size": 2037452,
+"sha256": "6adfe7efd3aa8aaacae918ac014030b15cee51945df8fbd70b320382a3a4712d"
+}
+}
+],
+"downloads": 36
+},
+{
+"id": "vastdepths",
+"kind": "mod",
+"name": "Vast Depths",
+"summary": "Stellarite, infernium and voidium: end-game metals from the deep overworld, the Nether and the End, with tools and alloys. Needs Vast Ores.",
+"description": "A content mod: data only, nothing to build. **Needs Vast Ores** (its ore hammer crushes these metals too).\n\n| Metal | Where | Mined with |\n| --- | --- | --- |\n| Stellarite | deep overworld, y \u221264 to \u221232 | netherite |\n| Infernium | the Nether, y 8 to 40 | stellarite |\n| Voidium | the End, in end stone | infernium |\n\n- Each metal has raw ore, raw block, ingot, nugget, block, dust, plate, gear and rod.\n- A pickaxe, axe, shovel and sword of each (ingots and blaze rods), and a full armour set (ingots). All of it is unbreakable and stronger at each tier. Each has its own hand-drawn look, in the hand and worn.\n\n| Tier | Sword | Axe | Mining speed | Armour (full set) | Toughness (full set) |\n| --- | --- | --- | --- | --- | --- |\n| Netherite (for comparison) | 8 | 10 | 9 | 20 | 12 |\n| Stellarite | 12 | 14 | 12 | 24 | 16 |\n| Infernium | 18 | 20 | 14 | 28 | 24 |\n| Voidium | 30 | 32 | 16 | 34 | 32 |\n\n- Three alloys, each from one ingot of two metals and a netherite ingot.\n- With the Iron Furnaces port, the three metals make its top furnace tiers, named after them here: the Stellarite, Infernium and Voidium Furnaces and their upgrades.\n\nInspired by Allthemodium by the All The Mods team; a clean-room work with no code, data or art from it, not affiliated with or endorsed by All The Mods.",
+"authors": [
+"voltzz900"
+],
+"owners": [
+"voltzz900"
+],
+"license": "MIT",
+"source": "https://github.com/voltzz900/vast-ores",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/vastdepths.png",
+"categories": [
+"worldgen",
+"equipment",
+"technology"
+],
+"tags": [
+"ores",
+"metals",
+"tools",
+"end-game",
+"progression"
+],
+"versions": [
+{
+"version": "0.4.2",
+"published": "2026-11-11",
+"changelog": "With the Iron Furnaces port, stellarite, infernium and voidium make its top furnace tiers, and Vast Depths now names them after its metals: the Stellarite, Infernium and Voidium Furnaces and their upgrades, in English and Brazilian Portuguese.",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "vastdepths-0.4.2.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/vastdepths-0.4.2/vastdepths-0.4.2.hmod",
+"size": 143710,
+"sha256": "295bdcfe744f61acbabcdae483f4faa9dab7115b3f8f19f04bba00f740ce0d02"
+}
+}
+],
+"downloads": 42
+},
+{
+"id": "vastores",
+"kind": "mod",
+"name": "Vast Ores",
+"summary": "Ten metals, three gems and nine alloys with dusts, plates, gears, rods and an ore hammer, generated in the overworld.",
+"description": "A content mod: data only, nothing to build.\n\n- **Ten metals:** aluminum, lead, nickel, osmium, platinum, silver, tin, uranium, zinc and iridium. Each has a stone and a deepslate ore, raw ore, raw block, ingot, nugget, block, dust, plate, gear and rod.\n- **Three gems:** ruby, sapphire and peridot, with ore, gem, block and dust.\n- **Nine alloys:** bronze, brass, constantan, electrum, invar, steel, enderium, lumium and signalum. Mix their dusts in the crafting grid, then smelt the alloy dust.\n- Dust, plate, gear and rod for iron, gold and copper too.\n- **Ore hammer** (three iron ingots, two sticks): hammer + raw ore = two dusts, hammer + ingot = a plate. It isn't used up.\n- Ores generate in the overworld, with a second, richer layer below y 0 for players who dig deep. Only new chunks get them.\n- `c:` convention tags (`c:ingots/tin`, `c:dusts/bronze`...) so other mods' recipes can use them.\n\nEvery texture is hand-drawn pixel art made in the repository. Inspired by AllTheOres by the All The Mods team; a clean-room work with no code, data or art from it, not affiliated with or endorsed by All The Mods.",
+"authors": [
+"voltzz900"
+],
+"owners": [
+"voltzz900"
+],
+"license": "MIT",
+"source": "https://github.com/voltzz900/vast-ores",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/vastores.png",
+"categories": [
+"worldgen",
+"technology",
+"equipment"
+],
+"tags": [
+"ores",
+"metals",
+"alloys",
+"gems",
+"tech"
+],
+"versions": [
+{
+"version": "0.4.1",
+"published": "2026-11-11",
+"changelog": "- Each .hmod carries the MIT LICENSE notice (review).\n- The description now says the ore hammer takes three iron ingots and two sticks, as its recipe is (review).\n- Since 0.2.0: hand-drawn textures for every item and block.",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "vastores-0.4.1.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/vastores-0.4.1/vastores-0.4.1.hmod",
+"size": 416653,
+"sha256": "d50a6839ce8f52d0961ba5887431e194a6f7e9756c7958562e2e6d615af36af4"
+}
+}
+],
+"downloads": 61
+},
+{
+"id": "vastpacks",
+"kind": "mod",
+"name": "Vast Packs (content)",
+"summary": "The backpacks of Vast Packs: their items, art, recipes and names. Needs the native mod.",
+"description": "The content half of Vast Packs: the backpacks (Leather, Iron, Gold, Diamond, Netherite, and Stellarite, Infernium and Voidium whose recipes need Vast Depths) as items, their sprites drawn for this mod, the recipes (and the upgrades, which keep what a backpack holds) and the names in English and Brazilian Portuguese. **The native mod `vastpacks_native` opens them and keeps what they hold**; install both.",
+"authors": [
+"voltzz900"
+],
+"owners": [
+"voltzz900"
+],
+"license": "MIT",
+"source": "https://github.com/voltzz900/vast-packs",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/vastpacks.png",
+"categories": [
+"storage",
+"equipment"
+],
+"tags": [
+"backpacks",
+"storage"
+],
+"versions": [
+{
+"version": "0.1.0",
+"published": "2026-11-12",
+"changelog": "First release (0.1.0).",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "vastpacks-0.1.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/vastpacks-0.1.0/vastpacks-0.1.0.hmod",
+"size": 14543,
+"sha256": "13e5a6fe5eaf6ed9c1f971b8f4665bdbf561fe257c59149ea9fd818b6a9dd595"
+}
+}
+],
+"downloads": 49
+},
+{
+"id": "vastunify",
+"kind": "mod",
+"name": "Vast Unify",
+"summary": "Other mods' metals, dusts, plates and gems made and taken as Vast Ores' own, so a pack has one tin, not five. Needs Vast Ores.",
+"description": "A content mod: data only, nothing to build. **Install Vast Ores too.**\n\n- Every recipe that made another mod's tin dust, steel ingot or ruby now makes Vast Ores' one, and every recipe that asked for theirs takes the `c:` tag, so ours and theirs both fit.\n- 130 items: what the Horizon ports of Ender IO, Mekanism, Modern Industrialization, Voltz, Big Nukes and Silent's Gems have now, and the ids Create, Mekanism and Tech Reborn use in Java for what their ports will add. A line for a mod that isn't installed does nothing.\n- The game's own iron, gold and copper ingots, nuggets and blocks stay; only their dusts, plates, gears and rods are unified.\n\nUses Horizon's recipe filters, so it reaches every recipe written as data; ore drops and machines that compute their results in code are out of its reach. Made with [Vast Tweaks](https://github.com/voltzz900/vast-tweaks).",
+"authors": [
+"voltzz900"
+],
+"owners": [
+"voltzz900"
+],
+"license": "MIT",
+"source": "https://github.com/voltzz900/vast-unify",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/vastunify.png",
+"categories": [
+"utility",
+"technology"
+],
+"tags": [
+"unification",
+"metals",
+"recipes",
+"tech"
+],
+"versions": [
+{
+"version": "0.1.0",
+"published": "2026-11-12",
+"changelog": "First release (0.1.0): 130 items of other mods made and taken as Vast Ores' own.",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "vastunify-0.1.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/vastunify-0.1.0/vastunify-0.1.0.hmod",
+"size": 24192,
+"sha256": "ddd150ec10aacc2b07fc2230056f187999cccf30dcdd746accaf018afce6c411"
+}
+}
+],
+"downloads": 43
+},
+{
 "id": "veinminer",
 "kind": "native-mod",
 "name": "Veinminer",
@@ -6692,6 +8662,55 @@
 ],
 "downloads": 47599,
 "stars": 2
+},
+{
+"id": "vhs99",
+"kind": "shader",
+"name": "H-VHS",
+"summary": "Adds a visual VHS effect from a camcorder 1990s to horizon launcher",
+"description": "H-VHS effect\n\nIt adds realistic and cool VHS effects from an old 1990s camcorder. \n\nTo use it, download the shader pack, activate it, and have fun! \n\nIt does not require content mods or native mods. \n\n\nFeatures: bloom, bobbing effect, film grain and overlays, JPG comprenssion effect.\n\nBobbing effect is under construction.\nMade by Chainsaww9\nLicence: Apache-2.0",
+"authors": [
+"Chainsaww9"
+],
+"owners": [
+"frigocamelo10-lab"
+],
+"license": "Apache-2.0",
+"source": "https://github.com/frigocamelo10-lab/H-VHS-Shader-for-horizon/tree/main",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/vhs99.png",
+"categories": [
+"screenshot",
+"low",
+"atmosphere"
+],
+"tags": [
+"vhs",
+"camcorder",
+"1990s",
+"90s",
+"video",
+"jpg"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/vhs99/1.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/vhs99/2.jpg"
+],
+"versions": [
+{
+"version": "3.3.0",
+"published": "2026-11-10",
+"changelog": "Adds a VHS effect to Horizon launcher",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "vhs99-3.3.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/vhs99-3.3.0/vhs99-3.3.0.hshader",
+"size": 6277,
+"sha256": "2a22f790cc175a14a1e86255fd82283575e26766debcf0d919f349c637e195b9"
+}
+}
+],
+"downloads": 70
 },
 {
 "id": "viahorizon",
@@ -6804,6 +8823,59 @@
 "downloads": 7465
 },
 {
+"id": "vivid_horizon",
+"kind": "shader",
+"name": "Vivid Horizon",
+"summary": "Vivid colours, volumetric clouds, mirror-like water, rain that soaks the ground and warm torch-lit nights.",
+"description": "An original shader pack in the spirit of the classic vibrant shaders: a soft blue sky with volumetric clouds and the Milky Way, warm sunlight and cool blue shadows, ambient occlusion, god rays, coloured block light, turquoise water with reflections and caustics, glassy waterfalls, raindrop rings and wet ground that reflects the world, depth of field and lens flare.\n\nEvery effect can be tuned or turned off in Shader Options (Colour, Light, Sky, Water and plants). About 4.5 ms of GPU at 1440p on an RTX 5070 Ti; on a slower GPU, lower Shadows, Volumetric clouds and Wet ground reflections first.",
+"authors": [
+"Evan-lhm"
+],
+"owners": [
+"Evan-lhm"
+],
+"license": "MIT",
+"source": "https://github.com/Evan-lhm/vivid-horizon",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/vivid_horizon.png",
+"categories": [
+"semi-realistic",
+"atmosphere",
+"reflections"
+],
+"tags": [
+"vibrant",
+"volumetric-clouds",
+"water",
+"rain",
+"milky-way"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/vivid_horizon/1.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/vivid_horizon/2.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/vivid_horizon/3.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/vivid_horizon/4.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/vivid_horizon/5.jpg",
+"https://horizon-rust.github.io/horizon-mods/screenshots/vivid_horizon/6.jpg"
+],
+"versions": [
+{
+"version": "1.0.0",
+"published": "2026-11-08",
+"changelog": "First public release.",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "vivid_horizon-1.0.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/vivid_horizon-1.0.0/vivid_horizon-1.0.0.hshader",
+"size": 113417,
+"sha256": "0f8a0acb769e93a0821d147e544dcbf7209296e5131fe89399b45b8e5f0a2aa4"
+}
+}
+],
+"downloads": 25357,
+"stars": 1
+},
+{
 "id": "voicechat",
 "kind": "native-mod",
 "name": "Horizon Voice Chat",
@@ -6853,6 +8925,87 @@
 "stars": 2
 },
 {
+"id": "volexstorm",
+"kind": "shader",
+"name": "Volex",
+"summary": "Volex",
+"description": "A realistic visual enhancement shader featuring dynamic lighting, atmospheric skies, immersive weather effects, realistic rain interactions, reflective water, and enhanced natural colors \u2014 bringing the Minecraft world to life while maintaining smooth performance.",
+"authors": [
+"ZEIBLD"
+],
+"owners": [
+"ijai76"
+],
+"license": "MIT",
+"source": "https://github.com/ijai76/VOLEX",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/volexstorm.png",
+"categories": [
+"semi-realistic",
+"shadows",
+"low"
+],
+"versions": [
+{
+"version": "2.0.1",
+"published": "2026-11-08",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "volexstorm-2.0.1.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/volexstorm-2.0.1/volexstorm-2.0.1.hshader",
+"size": 13483,
+"sha256": "f7675bcfed4f010fe3bb29e510e7c3aa35b1097621cb34ae8e6fa6c93bc81974"
+}
+}
+],
+"downloads": 13490
+},
+{
+"id": "voltz",
+"kind": "mod",
+"name": "Voltz (assets)",
+"summary": "The blocks, items, textures, text and recipes of Voltz. Needs the Voltz native mod.",
+"description": "**This is one of the two parts of [Voltz](https://playhorizon.dev/mods/voltz_core), and does little alone.** Install both: this one, the assets, and the native part.\n\nIt holds the blocks, items, creative tabs, textures, text and recipes of Voltz. It has no code. The code, and the description of what the mod does, are in Voltz.\n\nAll the art is original and drawn for this project. No Minecraft assets and no art from other mods are included. MIT licensed.",
+"authors": [
+"Arthur Black"
+],
+"owners": [
+"d3xc0"
+],
+"license": "MIT",
+"source": "https://github.com/d3xc0/voltz-horizon",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/voltz.png",
+"categories": [
+"technology",
+"library"
+],
+"tags": [
+"machines",
+"energy",
+"assets"
+],
+"versions": [
+{
+"version": "0.3.0",
+"published": "2026-11-06",
+"changelog": "First release in the registry. Pinned to Horizon Nightly 66f3981 and Horizon Mixins e8cd0aa.",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "voltz-0.3.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/voltz-0.3.0/voltz-0.3.0.hmod",
+"size": 720920,
+"sha256": "241548ff66203b4587bdbe5f48d04e8ac24b61ffc8773ea6714b1bd494f96c0a"
+}
+}
+],
+"downloads": 14246
+},
+{
 "id": "voltz_core",
 "kind": "native-mod",
 "name": "Voltz",
@@ -6895,6 +9048,69 @@
 }
 ],
 "downloads": 4968
+},
+{
+"id": "wayfarer_stones",
+"kind": "mod",
+"name": "Wayfarer Stones (assets)",
+"summary": "The textures, text, recipes and villages of Wayfarer Stones. Needs the Wayfarer Stones mod.",
+"description": "**This is one of the two parts of [Wayfarer Stones](https://playhorizon.dev/mods/wayfarer_stones_native), and does nothing alone.** Install both.\n\nIt holds the mod's models and textures, its English and Russian text, its recipes and drops, and the stones villages build. It has no code. The code, and the description of what the mod does, are in Wayfarer Stones.\n\nAll the art is original. No Minecraft assets are included. MIT licensed.",
+"authors": [
+"bioneisme"
+],
+"owners": [
+"Bioneisme"
+],
+"license": "MIT",
+"source": "https://github.com/Bioneisme/wayfarer-stones",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/wayfarer_stones.png",
+"categories": [
+"transportation",
+"library"
+],
+"tags": [
+"teleport",
+"waystones",
+"fast-travel",
+"assets"
+],
+"versions": [
+{
+"version": "0.6.1",
+"published": "2026-11-05",
+"changelog": "Says in chat, with a link, when the assets mod is missing. Pinned to Nightly 2026-11-04 (67dad0d) and Horizon Mixins e8cd0aa; also checked in the game on Nightly 2026-11-05 (f319701).",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "wayfarer_stones-0.6.1.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/wayfarer_stones-0.6.1/wayfarer_stones-0.6.1.hmod",
+"size": 18600,
+"sha256": "075df3102918ff059abab53392584a58a17b9090a352a7d29018be69fde23034"
+}
+},
+{
+"version": "0.6.0",
+"published": "2026-11-04",
+"changelog": "First release.",
+"api": "0.2",
+"side": "both",
+"capabilities": [
+"registries"
+],
+"game": "26.3",
+"file": {
+"name": "wayfarer_stones-0.6.0.hmod",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/wayfarer_stones-0.6.0/wayfarer_stones-0.6.0.hmod",
+"size": 17799,
+"sha256": "87bec46b6bbe05d95563a4bf7b8a3b92340ca1dd54c2d5709b6a0a41989d7176"
+}
+}
+],
+"downloads": 12045
 },
 {
 "id": "wayfarer_stones_native",
@@ -7119,6 +9335,133 @@
 }
 ],
 "downloads": 12655
+},
+{
+"id": "wisdom_horizon",
+"kind": "shader",
+"name": "Wisdom Shaders V3 (Horizon port)",
+"summary": "bobcao3's Wisdom Shaders V3 ported to Horizon's native shader API.",
+"description": "bobcao3's Wisdom Shaders V3 (Build 3300) ported to Horizon's shader API: its sun, ambient and torch colours, Oren-Nayar and GGX lighting, jittered soft shadows, atmosphere, 2D clouds, fog and AgX tonemap, translated from GLSL to WGSL. Adds bloom, FXAA, mob and chest relighting, held light sources and a horizon haze as Horizon post passes.\n\nUnofficial port by iLoong. A lighter version for more FPS is published as `wisdom_horizon_lite`.",
+"authors": [
+"bobcao3",
+"iLoong"
+],
+"owners": [
+"tomasmendes01"
+],
+"license": "Apache-2.0",
+"source": "https://github.com/tomasmendes01/wisdom-horizon",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/wisdom_horizon.png",
+"categories": [
+"semi-realistic",
+"shadows",
+"high"
+],
+"tags": [
+"wisdom",
+"bloom",
+"atmosphere",
+"clouds",
+"port"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/wisdom_horizon/1.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/wisdom_horizon/2.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/wisdom_horizon/3.png"
+],
+"versions": [
+{
+"version": "1.3.7",
+"published": "2026-11-04",
+"changelog": "- Night: the sky and fog no longer turn black when rain hides the stars, rain streaks stay faint in the dark, and a \"Night brightness\" option raises the moonlight and night ambient light (3x Wisdom's by default).\n- Rain: lighter fog in the rain (\"Rain fog\", 0.5 by default; 1 is Wisdom's), the water gets the same fog as the land, and the sun's glint on water fades under rain clouds.\n- Water: its top stays flat (the waves are in the normals, as in Wisdom), and the mirror Horizon draws with vanilla's light is brought to this pack's light.\n- Mobs, items, chests and particles: a post pass relights them to match this pack's light on the terrain in view, eased over time (\"Light mobs and chests\", with a diagnostic view).\n- Held light sources light the terrain when Horizon's Dynamic lights extra is on.\n- Glowing blocks show their own colour instead of burning out to white at night (\"Glowing blocks\"), with extra bloom around them (\"Glow bloom\").\n- The far edge of the loaded terrain blends into the sky (\"Horizon haze\").",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "wisdom_horizon-1.3.7.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/wisdom_horizon-1.3.7/wisdom_horizon-1.3.7.hshader",
+"size": 39196,
+"sha256": "3c1dc775e3eac9e67ced2e346bf7edd5cb83161b35eca7231ca9aff7725a40b4"
+}
+},
+{
+"version": "1.1.0",
+"published": "2026-11-04",
+"changelog": "First release: a port of Wisdom Shaders V3 (Build 3300) to Horizon's shader API.",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "wisdom_horizon-1.1.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/wisdom_horizon-1.1.0/wisdom_horizon-1.1.0.hshader",
+"size": 31976,
+"sha256": "2b7b4e11e3506b65e8c4162ed56fbf3c33bc51bbc56038a4b1297219d917dd1e"
+}
+}
+],
+"downloads": 124741,
+"stars": 3
+},
+{
+"id": "wisdom_horizon_lite",
+"kind": "shader",
+"name": "Wisdom Shaders V3 Lite (Horizon port)",
+"summary": "A lighter Wisdom Shaders V3 port for Horizon, for more FPS.",
+"description": "A lighter version of the Wisdom Shaders V3 port (`wisdom_horizon`) for more FPS: the same lighting, atmosphere, fog and AgX tonemap, with a smaller shadow map, no bloom or FXAA, and soft shadows, cloud shadows and water reflections off by default (each can be turned back on in the settings).\n\nUnofficial port of bobcao3's Wisdom Shaders V3 by tomasmendes01 (in-game name: iLoong).",
+"authors": [
+"bobcao3",
+"tomasmendes01"
+],
+"owners": [
+"tomasmendes01"
+],
+"license": "Apache-2.0",
+"source": "https://github.com/tomasmendes01/wisdom-horizon",
+"icon": "https://horizon-rust.github.io/horizon-mods/icons/wisdom_horizon_lite.png",
+"categories": [
+"semi-realistic",
+"atmosphere",
+"low"
+],
+"tags": [
+"wisdom",
+"lite",
+"performance",
+"port"
+],
+"screenshots": [
+"https://horizon-rust.github.io/horizon-mods/screenshots/wisdom_horizon_lite/1.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/wisdom_horizon_lite/2.png",
+"https://horizon-rust.github.io/horizon-mods/screenshots/wisdom_horizon_lite/3.png"
+],
+"versions": [
+{
+"version": "1.3.7",
+"published": "2026-11-04",
+"changelog": "- Night: the sky and fog no longer turn black when rain hides the stars, rain streaks stay faint in the dark, and a \"Night brightness\" option raises the moonlight and night ambient light (3x Wisdom's by default).\n- Rain: lighter fog in the rain (\"Rain fog\", 0.5 by default; 1 is Wisdom's), the water gets the same fog as the land, and the sun's glint on water fades under rain clouds.\n- Water: its top stays flat (the waves are in the normals, as in Wisdom), and the mirror Horizon draws with vanilla's light is brought to this pack's light.\n- Mobs, items, chests and particles: a post pass relights them to match this pack's light on the terrain in view, eased over time (\"Light mobs and chests\", with a diagnostic view).\n- Held light sources light the terrain when Horizon's Dynamic lights extra is on.\n- Glowing blocks show their own colour instead of burning out to white at night (\"Glowing blocks\").\n- The far edge of the loaded terrain blends into the sky (\"Horizon haze\").",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "wisdom_horizon_lite-1.3.7.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/wisdom_horizon_lite-1.3.7/wisdom_horizon_lite-1.3.7.hshader",
+"size": 37136,
+"sha256": "ba41f0094a886b2e86a462994206fa184ebabf424dc0736829ddc7024ea9e880"
+}
+},
+{
+"version": "1.1.0",
+"published": "2026-11-04",
+"changelog": "First release: the LITE profile of Wisdom Shaders V3 (Build 3300), ported to Horizon's shader API.",
+"api": "0.1",
+"game": "26.3",
+"file": {
+"name": "wisdom_horizon_lite-1.1.0.hshader",
+"url": "https://github.com/horizon-rust/horizon-mods/releases/download/wisdom_horizon_lite-1.1.0/wisdom_horizon_lite-1.1.0.hshader",
+"size": 30140,
+"sha256": "662570653111bd34fec37a7482791b8b1d0bdcee1bcba5351c4137acababb818"
+}
+}
+],
+"downloads": 89497,
+"stars": 3
 },
 {
 "id": "worldedit",

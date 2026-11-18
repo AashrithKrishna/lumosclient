@@ -62,7 +62,7 @@ fn merge_frozen(idx: &mut Value, frozen: &Value) {
     let live: std::collections::HashSet<String> = idx.get("projects").and_then(Value::as_array)
         .map(|a| a.iter().filter_map(|p| p.get("id").and_then(Value::as_str).map(str::to_owned)).collect()).unwrap_or_default();
     let extra: Vec<Value> = frozen.get("projects").and_then(Value::as_array).map(|a| a.iter()
-        .filter(|p| p.get("kind").and_then(Value::as_str) == Some("native-mod"))
+        .filter(|p| matches!(p.get("kind").and_then(Value::as_str), Some("native-mod" | "shader" | "mod")))
         .filter(|p| p.get("id").and_then(Value::as_str).is_some_and(|i| !live.contains(i))).cloned().collect()).unwrap_or_default();
     if let Some(arr) = idx.get_mut("projects").and_then(Value::as_array_mut) {
         arr.extend(extra);
@@ -78,10 +78,10 @@ mod frozen_tests {
     #[test]
     fn frozen_native_fills_in_only_missing_ids() {
         let mut idx = json!({"schema": 1, "projects": [{"id": "zoom", "kind": "mod"}], "revoked": []});
-        let frozen = json!({"projects": [{"id": "zoom", "kind": "native-mod"}, {"id": "minimap", "kind": "native-mod"}, {"id": "x", "kind": "shader"}], "revoked": [{"id": "bad"}]});
+        let frozen = json!({"projects": [{"id": "zoom", "kind": "native-mod"}, {"id": "minimap", "kind": "native-mod"}, {"id": "x", "kind": "shader"}, {"id": "pack", "kind": "modpack"}], "revoked": [{"id": "bad"}]});
         merge_frozen(&mut idx, &frozen);
         let ids: Vec<&str> = idx["projects"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap()).collect();
-        assert_eq!(ids, ["zoom", "minimap"]);
+        assert_eq!(ids, ["zoom", "minimap", "x"]);
         assert_eq!(idx["revoked"].as_array().unwrap().len(), 1);
     }
 }

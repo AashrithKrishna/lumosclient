@@ -1849,6 +1849,9 @@ fn discover_target(shared: &Arc<Mutex<AppState>>, profile_id: &str) -> Option<(S
     st.target_instance(profile_id).map(|(pid, dir, ver)| (pid, dir, ver, st.paths.clone()))
 }
 
+/// The Minecraft version Horizon plays (its Java resource packs are made for this).
+const HORIZON_MC: &str = "26.3";
+
 fn discover_folder(project_type: &str) -> &'static str {
     match project_type {
         "resourcepack" => "resourcepacks",
@@ -2050,6 +2053,20 @@ fn discover_install(proxy: &EventLoopProxy<UserEvent>, shared: &Arc<Mutex<AppSta
                 None => PackSource::Modrinth(id),
             },
         ),
+        // Java resource packs work in Horizon too: a Modrinth pack goes into a Horizon instance's
+        // resourcepacks/ for Minecraft 26.3, checked by its install plan like any other.
+        ("modrinth", "resourcepack") if discover_target(shared, &profile_id).is_some_and(|t| t.2 == HORIZON_ID) => {
+            let (proxy, shared, key, pid) = (proxy.clone(), shared.clone(), key.clone(), profile_id.clone());
+            std::thread::spawn(move || {
+                let Some((pid, dir, _, _)) = discover_target(&shared, &pid) else { return };
+                push_install_status(&proxy, &key, "installing", &format!("Installing {id}..."), &pid);
+                match plan_and_install_modrinth(&proxy, &dir, &id, "resourcepack", HORIZON_MC, "minecraft", None, force) {
+                    PlanOutcome::Installed(msg) => push_install_status(&proxy, &key, "installed", &msg, &pid),
+                    PlanOutcome::Blocked(summary) => send_plan(&proxy, &summary, &key, "resourcepack", &pid),
+                    PlanOutcome::Failed(err) => push_install_status(&proxy, &key, "error", &err, &pid),
+                }
+            });
+        }
         // Horizon registry ids and Modrinth slugs are different namespaces: sent to the other kind
         // of instance, download_modrinth_async would look the name up in the wrong one.
         (src, _) if discover_target(shared, &profile_id).is_some_and(|t| (t.2 == HORIZON_ID) != (src == "horizon")) => {
