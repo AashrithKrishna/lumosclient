@@ -209,6 +209,7 @@ const OWN: &[(&str, &str, &str, &[&str])] = &[
     ("lumos_particle_rain", "Particle Rain", "Rain and snow as falling particles, with splashes and optional mist.", &["decoration"]),
     ("lumos_paginated_advancements", "Paginated Advancements", "Pages for the advancement tabs, so no tab is ever cut off.", &["utility"]),
     ("lumos_hud", "LumosHUD", "Lunar-style HUD modules (FPS, CPS, keystrokes, armour, effects and more). Right Shift opens the editor.", &["utility", "decoration"]),
+    ("lumos_fullbright_key", "Fullbright Key", "A key (G) that turns Horizon's Fullbright on and off, with a notice.", &["utility"]),
 ];
 
 fn own_projects() -> Vec<Value> {

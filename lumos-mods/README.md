@@ -1,9 +1,9 @@
 # Lumos native mods
 
-Five Horizon native mods written for Lumos Client. Each folder is one horizon-mixins bundle: what a
+Horizon native mods written for Lumos Client. Each folder is one horizon-mixins bundle: what a
 registry `.hnmod` keeps under `mixins/<id>/` (`horizon-mixin.toml`, the `.rs` files it names).
-They are original Rust. The first four do the same jobs as four Java Fabric mods but share no code or
-assets with them; `lumos_hud` is the native form of Lumos's own Fabric LumosHUD.
+They are original Rust. Some do the same jobs as Java Fabric mods but share no code or assets
+with them.
 
 | Folder | What it does |
 |---|---|
@@ -12,10 +12,11 @@ assets with them; `lumos_hud` is the native form of Lumos's own Fabric LumosHUD.
 | `lumos_particle_rain` | Turns rain into falling drop particles with splashes on the ground and snow into drifting flakes. Heavy weather can add a mist. It replaces vanilla's rain sheets and limits its own particle count. |
 | `lumos_paginated_advancements` | Splits the Advancements screen's tabs into pages. Use the `<` `>` buttons, Page Up/Page Down or the mouse wheel over the tabs to reach every tab. |
 | `lumos_hud` | Lunar-style HUD modules (FPS, CPS, coordinates, keystrokes, armour, potion effects, ping, clock, server, day, speed, reach, combo, item counter, memory, sprint, direction, biome) in the Lunar or Minimal style. Right Shift opens the editor: drag modules, right-click to hide, switch them on and off and pick the style. The layout is saved to `horizon-mods/.horizon-mod-data/lumos_hud/layout`. Its hotkeys (editor, HUD toggle) are rebindable on its Options > Mods page; `keys.rs` is the only file that reads them. |
+| `lumos_fullbright_key` | A key (G by default) that turns Horizon's own Fullbright (Video Settings > Quality) on and off, with a notice over the hotbar. On other people's servers, where Horizon holds Fullbright off, it says so instead. |
 
 ## Pin
 
-All five are planned and built against Horizon `9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0`
+All of them are planned and built against Horizon `9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0`
 (Nightly 2026-11-13) with horizon-mixins `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`. The pin is set by
 `[compatibility] horizon_revision` in each manifest. For another Horizon commit, re-plan the mods and
 rebuild them. The hooks they use are listed in each manifest.
@@ -27,6 +28,7 @@ lumos-mods/<id>/
   horizon-mixin.toml   # modules + injections
   runtime.rs           # the rules: std only, unit tests inside
   glue.rs              # reads Horizon's Game, calls runtime
+  keys.rs              # a mod with keys: every key it reads (id, label, default), and only here
   hooks/*.rs           # one small helper per injection
 ```
 
@@ -41,6 +43,15 @@ Every hook checks `game.native_on("<id>")` first. Each mod also adds itself to O
 (`native_mods`), so it can be switched off there. That writes `mod.<id>:false` to `horizon-mods.txt`
 and takes effect at runtime with no rebuild. Each mod has its own settings page, saved with
 `native_set_setting`.
+
+## Keys
+
+Horizon 9f42064c has no Controls-screen API for a native mod's keys. A mod with keys lists them in
+`NativeMod::keys` (name, label, default such as `key.keyboard.g`): its page in Options > Mods shows
+them as Key Binds rows and rebinds them there, kept as `key.<id>.<name>` in `horizon-mods.txt`. All
+key handling goes through the mod's `keys.rs` (`listed`, `bound`, `pressed`, `held`), so moving to
+`Registrar::register_key_mapping` later changes that one file. A key pressed with F3 held is left
+to the debug keys.
 
 ## Tests
 
