@@ -1,0 +1,7 @@
+Applied Energistics 2
+Copyright (c) 2026 AlgorithmX2, TeamAppliedEnergistics, Joeypc6
+
+SPDX-License-Identifier: LGPL-3.0-only AND CC-BY-NC-SA-3.0
+Full licence text: https://spdx.org/licenses/ (look up the identifier above)
+
+This is a modified version of the Applied Energistics 2 release on Horizon's mod registry, changed only so it builds against Horizon 9f42064c; every change is listed in PORT.md. It stays under the same licence.

@@ -1,0 +1,7 @@
+X To Xray
+Copyright (c) 2026 1_st_Cat
+
+SPDX-License-Identifier: Apache-2.0
+Full licence text: https://spdx.org/licenses/ (look up the identifier above)
+
+This is a modified version of the X To Xray release on Horizon's mod registry, changed only so it builds against Horizon 9f42064c; every change is listed in PORT.md. It stays under the same licence.
