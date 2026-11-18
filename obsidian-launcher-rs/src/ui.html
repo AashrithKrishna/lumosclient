@@ -1994,7 +1994,11 @@
   function renderInstSettings(fill) {
     const p = activeProfile();
     $('isVersion').textContent = profVersion(p);
-    $('isBoostRow').classList.toggle('hidden', !/^Fabric /.test(profVersion(p)));
+    const hz = /horizon/i.test(profVersion(p));
+    $('isBoostRow').classList.toggle('hidden', !/^Fabric /.test(profVersion(p)) && !hz);
+    $('isBoostRow').querySelector('.txt span').textContent = hz
+      ? "Turns on Horizon's own entity, particle and hidden-leaf culling and its block-entity caches: things you can't see stop costing frames. Nothing looks different."
+      : 'Adds the best performance mods this version has (Sodium, Lithium, FerriteCore, ImmediatelyFast, culling, Dynamic FPS, and RetiNO on Mac) and tuned Java settings.';
     // The HUD card depends on the version (LumosHUD for Fabric, Horizon's own for 26.3): reload when it changes.
     if (ui.hudFor !== state.activeProfileId + '|' + profVersion(p)) { ui.hudFor = state.activeProfileId + '|' + profVersion(p); if (!fill) hudLoad(); }
     const only = (state.profiles || []).length <= 1;
@@ -2612,7 +2616,7 @@
       case 'close-new': $('newInstScrim').classList.remove('open'); break;
       case 'create-instance': createInstance(); break;
       case 'inst-save': saveInstSettings(false); break;
-      case 'inst-boost': send('boost_instance', { profileId: state.activeProfileId }); toast('Boosting FPS: adding performance mods…', 'info'); break;
+      case 'inst-boost': send('boost_instance', { profileId: state.activeProfileId }); toast(/horizon/i.test(profVersion(activeProfile())) ? 'Boosting FPS: turning on Horizon culling…' : 'Boosting FPS: adding performance mods…', 'info'); break;
       case 'inst-reset': saveInstSettings(true); break;
       case 'instance-settings':
         e.stopPropagation(); selectProfile(d.id); go('library');

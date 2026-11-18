@@ -2447,6 +2447,40 @@ const BOOST_JVM_ARGS: &str = "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGC
 
 /// Adds the performance mods missing from a Fabric instance and, unless the player set their
 /// own, the tuned Java settings.
+/// Horizon settings that cost frames for nothing visible; all are Horizon's own options.
+const HORIZON_BOOST: &[(&str, &str)] = &[
+    ("entityCulling", "async"), ("particleCulling", "async"), ("leafCulling", "hidden"), ("caveCulling", "true"),
+    ("blockEntityCacheShulkerBoxes", "true"), ("blockEntityCacheSigns", "true"), ("blockEntityCacheDecoratedPots", "true"),
+    ("blockEntityCacheBells", "true"), ("blockEntityCacheChests", "true"), ("blockEntityCacheBanners", "true"),
+    ("blockEntityCacheCopperGolemStatues", "true"),
+];
+
+/// Writes HORIZON_BOOST into the instance's horizon-graphics.txt (kept once as .before-lumos-boost).
+/// Returns how many settings changed.
+fn boost_horizon_graphics(game_dir: &Path) -> Result<usize, String> {
+    let path = game_dir.join("horizon-graphics.txt");
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    let backup = game_dir.join("horizon-graphics.txt.before-lumos-boost");
+    if !text.is_empty() && !backup.exists() {
+        let _ = fs::write(&backup, &text);
+    }
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let mut changed = 0;
+    for (k, v) in HORIZON_BOOST {
+        let want = format!("{k}:{v}");
+        match lines.iter_mut().find(|l| l.split_once(':').is_some_and(|(key, _)| key == *k)) {
+            Some(l) if *l == want => {}
+            Some(l) => { *l = want; changed += 1; }
+            None => { lines.push(want); changed += 1; }
+        }
+    }
+    if changed > 0 {
+        if let Some(l) = lines.iter_mut().find(|l| l.starts_with("preset:")) { *l = "preset:custom".into(); }
+        fs::write(&path, lines.join("\n") + "\n").map_err(|e| format!("Couldn't save Horizon's graphics settings: {e}"))?;
+    }
+    Ok(changed)
+}
+
 fn boost_instance_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, profile_id: String) {
     std::thread::spawn(move || {
         let target = {
@@ -2457,8 +2491,19 @@ fn boost_instance_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppS
             call_js(&proxy, "onNotice", json!({"message": GONE_INSTANCE, "kind": "err"}));
             return;
         };
+        if selected == HORIZON_ID {
+            // Horizon 26.3: switch on the culling and caches Horizon has but leaves off (no visual change).
+            let msg = match boost_horizon_graphics(&game_dir) {
+                Ok(0) => "Horizon's culling and block-entity caches were already on for this instance.".to_owned(),
+                Ok(n) => format!("Boosted Horizon: entity, particle and hidden-leaf culling plus block-entity caches are on ({n} settings changed). The old settings are saved beside them. Restart the game to apply."),
+                Err(e) => e,
+            };
+            call_js(&proxy, "onNotice", json!({"message": msg, "kind": "ok"}));
+            let _ = pid;
+            return;
+        }
         if !is_fabric_version(&selected) {
-            call_js(&proxy, "onNotice", json!({"message": "Boost FPS works on Fabric instances. Switch this instance to a Fabric version first.", "kind": "err"}));
+            call_js(&proxy, "onNotice", json!({"message": "Boost FPS works on Fabric and Horizon instances. Switch this instance to a Fabric version first.", "kind": "err"}));
             return;
         }
         let mc_ver = mc_version_for(&paths, &selected);
@@ -3730,6 +3775,24 @@ fn main() {
             _ => {}
         }
     });
+}
+
+#[cfg(test)]
+mod horizon_boost_tests {
+    use super::*;
+    #[test]
+    fn boost_sets_culling_and_keeps_a_backup() {
+        let dir = std::env::temp_dir().join(format!("lumos-boost-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("horizon-graphics.txt"), "preset:balanced\nentityCulling:off\nsky:true\n").unwrap();
+        let n = boost_horizon_graphics(&dir).unwrap();
+        let t = fs::read_to_string(dir.join("horizon-graphics.txt")).unwrap();
+        assert!(n >= 2 && t.contains("entityCulling:async") && t.contains("sky:true") && t.contains("preset:custom"));
+        assert!(fs::read_to_string(dir.join("horizon-graphics.txt.before-lumos-boost")).unwrap().contains("entityCulling:off"));
+        assert_eq!(boost_horizon_graphics(&dir).unwrap(), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]
