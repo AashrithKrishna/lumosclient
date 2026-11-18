@@ -1,9 +1,9 @@
 # Lumos native mods
 
-Four Horizon native mods written for Lumos Client. Each folder is one horizon-mixins bundle: what a
+Five Horizon native mods written for Lumos Client. Each folder is one horizon-mixins bundle: what a
 registry `.hnmod` keeps under `mixins/<id>/` (`horizon-mixin.toml`, the `.rs` files it names).
-They are original Rust. They do the same jobs as four Java Fabric mods but share no code or assets
-with them.
+They are original Rust. The first four do the same jobs as four Java Fabric mods but share no code or
+assets with them; `lumos_hud` is the native form of Lumos's own Fabric LumosHUD.
 
 | Folder | What it does |
 |---|---|
@@ -11,10 +11,11 @@ with them.
 | `lumos_totem_counter` | Shows a HUD counter (totem icon and number) of the Totems of Undying you carry. It flashes when the count drops, turns gold when you are low, and shows a notice over the hotbar when one of your totems pops. |
 | `lumos_particle_rain` | Turns rain into falling drop particles with splashes on the ground and snow into drifting flakes. Heavy weather can add a mist. It replaces vanilla's rain sheets and limits its own particle count. |
 | `lumos_paginated_advancements` | Splits the Advancements screen's tabs into pages. Use the `<` `>` buttons, Page Up/Page Down or the mouse wheel over the tabs to reach every tab. |
+| `lumos_hud` | Lunar-style HUD modules (FPS, CPS, coordinates, keystrokes, armour, potion effects, ping, clock, server, day, speed, reach, combo, item counter, memory, sprint, direction, biome) in the Lunar or Minimal style. Right Shift opens the editor: drag modules, right-click to hide, switch them on and off and pick the style. The layout is saved to `horizon-mods/.horizon-mod-data/lumos_hud/layout`. Its hotkeys (editor, HUD toggle) are rebindable on its Options > Mods page; `keys.rs` is the only file that reads them. |
 
 ## Pin
 
-All four are planned and built against Horizon `9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0`
+All five are planned and built against Horizon `9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0`
 (Nightly 2026-11-13) with horizon-mixins `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`. The pin is set by
 `[compatibility] horizon_revision` in each manifest. For another Horizon commit, re-plan the mods and
 rebuild them. The hooks they use are listed in each manifest.
@@ -33,6 +34,8 @@ lumos-mods/<id>/
 `<id>_glue`.
 
 ## On, off and settings
+
+`lumos_hud` also has `keys.rs`, a module (`lumos_hud_keys`) with its hotkeys.
 
 Every hook checks `game.native_on("<id>")` first. Each mod also adds itself to Options > Mods
 (`native_mods`), so it can be switched off there. That writes `mod.<id>:false` to `horizon-mods.txt`
