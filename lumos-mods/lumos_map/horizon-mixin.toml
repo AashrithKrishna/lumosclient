@@ -28,19 +28,8 @@ file = "crates/horizon-client/src/game.rs"
 name = "lumos_map_keys"
 source = "keys.rs"
 
-# Horizon's own minimap (its tiles, cave view underground, image, arrow), set up from the settings.
-[[injection]]
-id = "minimap"
-kind = "HEAD"
-target = "horizon_client::game::native_hooks::Game<'_>::native_minimap"
-helper = "hooks/minimap.rs"
-bindings = [
-  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
-  { name = "minimap", ty = "&mut Option<NativeMinimap>", value = "&mut *minimap" },
-]
-
-# Over the minimap: entity dots and waypoints; under it, coordinates and biome. First of the
-# HUD hooks, so its box is the first after the minimap in that corner (which says where it is).
+# The minimap (the mod's own image) with entity arrows and waypoints, and its info lines. First
+# of the HUD hooks, so it is first in its corner.
 [[injection]]
 id = "hud"
 kind = "HEAD"
