@@ -208,7 +208,8 @@ public final class LumosHud {
     public static void renderHud(GuiGraphics g) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.options.hideGui || mc.player == null || mc.screen instanceof HudEditorScreen) return;
-        if (mc.gui.getDebugOverlay().showDebugScreen()) return;
+        // No "hide under F3" check: since 1.21.9 the debug overlay also reports itself shown for
+        // F3+B hitboxes and other debug entries, which hid every module while hitboxes were on.
         try {
             HudModule.Ctx c = new HudModule.Ctx(mc, g, mc.font, false, System.currentTimeMillis());
             for (Placed p : layout(c)) draw(c, p);

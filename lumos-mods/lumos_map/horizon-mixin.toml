@@ -64,7 +64,7 @@ bindings = [
   { name = "pressed", ty = "bool", value = "pressed" },
 ]
 
-# Waypoints in the world: name and distance through walls, and a beam.
+# The old style's waypoint beams, when turned on (markers are on screen, in the HUD hook).
 [[injection]]
 id = "world"
 kind = "HEAD"

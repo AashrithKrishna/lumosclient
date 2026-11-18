@@ -409,6 +409,8 @@ struct State {
     cells_gen: u64,
     /// The cave layer under the player's head.
     cave: Option<Layer>,
+    /// Entity faces in the slot's icon row.
+    icons: Icons,
     /// The biome at the player's block, by block.
     biome: Option<([i32; 3], String)>,
     /// The world map's layer (`MapScreen::slice`), scanned live.
@@ -991,6 +993,7 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
             follow_cave(game, s, &settings);
         }
         draw_wanted_cells(game, s, &settings, if open { CELL_BUDGET_OPEN } else { CELL_BUDGET });
+        s.icons.follow(game);
     });
 }
 
@@ -1178,6 +1181,7 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
     let Some(p) = player_pos(game) else {
         return;
     };
+    draw_waypoint_markers(game, batch, &s);
     if !s.minimap {
         return;
     }
@@ -1241,37 +1245,8 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
         game.native_text(batch, line, [x + (size - w) / 2.0, text_y + i as f32 * 10.0], 0xFFFFFF, true);
     }
     let radius = size / 2.0 - 2.0;
-    // Mobs and players: arrows the way they face.
-    let mut drawn = 0;
-    for mob in game.mobs.iter() {
-        if drawn >= MAX_DOTS {
-            break;
-        }
-        if mob.removed || mob.invisible {
-            continue;
-        }
-        let kind = m::dot_kind(&mob.kind.id, &mob.kind.category);
-        if !s.shows(kind) {
-            continue;
-        }
-        let (u, v) = to_map(mob.position.x, mob.position.z);
-        if m::clamp_to_map((u, v), radius, s.round).1 {
-            continue;
-        }
-        let turn = if s.rotate { mob.yaw - game.yaw + 180.0 } else { mob.yaw };
-        let big = if kind == m::DotKind::Player { 3.2 } else { 2.4 };
-        let at = [cx + u, cy + v];
-        game.native_quad(batch, m::arrow(at, turn, big + 1.0), 0xC000_0000);
-        game.native_quad(batch, m::arrow(at, turn, big), m::dot_colour(kind));
-        if kind == m::DotKind::Player
-            && s.names
-            && let Some(name) = game.remote_player_name(mob.id)
-        {
-            let w = game.native_text_width(name);
-            game.native_text(batch, name, [(at[0] - w / 2.0).round(), (at[1] + 4.0).round()], 0xFFFFFF, true);
-        }
-        drawn += 1;
-    }
+    // Items, mobs and players: their faces (or dots).
+    draw_entities(game, batch, &s, p, [cx, cy], radius, &to_map);
     // Your own arrow.
     let turn = if s.rotate { 180.0 } else { yaw };
     game.native_quad(batch, m::arrow([cx, cy], turn, 5.0), 0xFF00_0000);
@@ -1297,6 +1272,246 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
             let (tx, ty) = (cx + dx * reach - w / 2.0, cy + dy * reach - 4.0);
             let colour = if letter == 'N' { 0xFF5555 } else { 0xE0E0E0 };
             game.native_text(batch, &t, [tx.round(), ty.round()], colour, true);
+        }
+    }
+}
+
+/// Entity icons: each type's face (a player's skin face), cut once from the texture the game
+/// draws it with and kept in the mod image slot's icon row.
+#[derive(Default)]
+struct Icons {
+    /// The game's entity models (`entity-models.json`), read off the frame once.
+    models: Option<horizon_client::mobs::EntityModelDocument>,
+    loading: Option<Receiver<Option<horizon_client::mobs::EntityModelDocument>>>,
+    /// Per texture and model: its slot and size, or None (no face: a dot).
+    faces: HashMap<(String, String), Option<(usize, u32, u32)>>,
+    next: usize,
+    /// The slot's place in the atlas the icons were uploaded to.
+    for_rect: Option<[f32; 4]>,
+}
+
+/// New icons cut a frame at most (each decodes a texture).
+const ICONS_PER_FRAME: usize = 2;
+
+/// Every face of `part` and its children named `name` (the first found), as runtime faces.
+fn part_faces(part: &horizon_client::mobs::Part, name: &str) -> Option<Vec<m::Face>> {
+    if part.name == name {
+        return Some(
+            part.polygons
+                .iter()
+                .map(|p| (p.normal, p.vertices.map(|v| [v[3], v[4]])))
+                .collect(),
+        );
+    }
+    part.children.iter().find_map(|c| part_faces(c, name))
+}
+
+fn all_faces(part: &horizon_client::mobs::Part, out: &mut Vec<m::Face>) {
+    out.extend(part.polygons.iter().map(|p| (p.normal, p.vertices.map(|v| [v[3], v[4]]))));
+    for c in &part.children {
+        all_faces(c, out);
+    }
+}
+
+impl Icons {
+    /// The icon of an entity drawn with `texture` and model `model` (slot, width, height):
+    /// cut now if there is budget left this frame, else asked again next frame.
+    fn get(&mut self, game: &mut Game<'_>, texture: &str, model: &str, budget: &mut usize) -> Option<(usize, u32, u32)> {
+        let key = (texture.to_owned(), model.to_owned());
+        if let Some(found) = self.faces.get(&key) {
+            return *found;
+        }
+        if *budget == 0 {
+            return None;
+        }
+        let doc = self.models.as_ref()?;
+        *budget -= 1;
+        let made = (|| {
+            let part = doc.model(&m::model_key(model))?;
+            let head = part_faces(&part, "head").and_then(|f| m::front(&f));
+            let rect = head.or_else(|| {
+                let mut all = Vec::new();
+                all_faces(&part, &mut all);
+                m::front(&all)
+            })?;
+            let hat = part_faces(&part, "hat").and_then(|f| m::front(&f));
+            let tex = game.native_client_texture(texture)?;
+            m::cut_icon(tex.width, tex.height, &tex.rgba, rect, hat)
+        })();
+        let entry = made.and_then(|(w, h, cell)| {
+            if self.next >= m::ICON_SLOTS {
+                // Full: start over (rare: hundreds of kinds and skins).
+                self.faces.clear();
+                self.next = 0;
+            }
+            let slot = self.next;
+            self.next += 1;
+            upload(game, m::icon_origin(slot), m::ICON, m::ICON, cell).then_some((slot, w, h))
+        });
+        self.faces.insert(key, entry);
+        entry
+    }
+
+    /// Keeps the models loading and forgets the icons when the atlas was rebuilt.
+    fn follow(&mut self, game: &Game<'_>) {
+        let rect = game.gui.atlas.sprites.get(MOD_IMAGE_SPRITE).map(|r| [r.u0, r.v0, r.u1, r.v1]);
+        if rect != self.for_rect {
+            self.for_rect = rect;
+            self.faces.clear();
+            self.next = 0;
+        }
+        if let Some(rx) = &self.loading
+            && let Ok(doc) = rx.try_recv()
+        {
+            self.loading = None;
+            self.models = doc;
+        }
+        if self.models.is_none() && self.loading.is_none() {
+            let (tx, rx) = mpsc::channel();
+            let root = game.options.resources.clone();
+            let _ = std::thread::Builder::new()
+                .name("lumos-map-models".into())
+                .spawn(move || {
+                    let _ = tx.send(horizon_client::mobs::EntityModelDocument::load(&root).ok());
+                });
+            self.loading = Some(rx);
+        }
+    }
+}
+
+/// Draws icon `icon` centred on `at`, `size` GUI pixels for its longer side, on a dark outline.
+fn draw_icon(game: &Game<'_>, batch: &mut HudBatch, icon: (usize, u32, u32), at: [f32; 2], size: f32, alpha: u8) {
+    let Some(r) = game.gui.atlas.sprites.get(MOD_IMAGE_SPRITE).copied() else {
+        return;
+    };
+    let (slot, iw, ih) = icon;
+    let k = size / iw.max(ih) as f32;
+    let (w, h) = (iw as f32 * k, ih as f32 * k);
+    let (x, y) = ((at[0] - w / 2.0).round(), (at[1] - h / 2.0).round());
+    game.native_fill(batch, [x - 1.0, y - 1.0, w + 2.0, h + 2.0], u32::from(alpha / 4 * 3) << 24);
+    let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
+    let [ox, oy] = m::icon_origin(slot);
+    let mut src = r;
+    src.u0 = r.u0 + (ox as f32 + 0.01) * du;
+    src.v0 = r.v0 + (oy as f32 + 0.01) * dv;
+    src.u1 = r.u0 + (ox as f32 + iw as f32 - 0.01) * du;
+    src.v1 = r.v0 + (oy as f32 + ih as f32 - 0.01) * dv;
+    batch.rect_uv(x, y, w, h, src, rgba(255, 255, 255, alpha));
+}
+
+/// A round dot (an octagon) with a dark rim.
+fn draw_dot(game: &Game<'_>, batch: &mut HudBatch, at: [f32; 2], r: f32, argb: u32) {
+    let rim = m::outline(at, r + 1.0, true);
+    fill_polygon(game, batch, &rim, (argb & 0xFF00_0000) / 4 * 3 & 0xFF00_0000);
+    fill_polygon(game, batch, &m::outline(at, r, true), argb);
+}
+
+/// The entities on the minimap: dropped items, then mobs, then players on top; faces, or dots.
+#[allow(clippy::too_many_arguments)]
+fn draw_entities(
+    game: &mut Game<'_>,
+    batch: &mut HudBatch,
+    s: &m::Settings,
+    p: [f64; 3],
+    c: [f32; 2],
+    radius: f32,
+    to_map: &dyn Fn(f64, f64) -> (f32, f32),
+) {
+    let size = m::ICON_SIZES[s.icon_size.min(m::ICON_SIZES.len() - 1)];
+    let range = s.max_range();
+    let t = game.clock.fraction();
+    let near = |x: f64, z: f64| range.is_none_or(|r| (x - p[0]).powi(2) + (z - p[2]).powi(2) <= r * r);
+    // Above or below you by more than a few blocks: fainter.
+    let alpha = |y: f64| if (y - p[1]).abs() > 8.0 { 150u8 } else { 255 };
+    // Dots, or (holding the player list key, or always) faces as faint badges with names.
+    let details = s.always_details || (s.tab_details && keys::vanilla_held(game, "key.playerlist"));
+    if s.items {
+        let items: Vec<(String, [f64; 3])> = game
+            .dropped
+            .iter()
+            .filter(|e| e.stack.count > 0)
+            .map(|e| {
+                let at = e.previous.lerp(e.position, t);
+                (e.stack.item.to_string(), [at.x, at.y, at.z])
+            })
+            .filter(|(_, at)| near(at[0], at[2]))
+            .take(100)
+            .collect();
+        for (item, at) in items {
+            let (u, v) = to_map(at[0], at[2]);
+            if m::clamp_to_map((u, v), radius, s.round).1 {
+                continue;
+            }
+            let pos = [c[0] + u, c[1] + v];
+            if !details {
+                draw_dot(game, batch, pos, 1.5, 0xFFE0_C060);
+            } else {
+                let sz = (size * 0.8).max(5.0);
+                game.native_item(batch, &item, [pos[0] - sz / 2.0, pos[1] - sz / 2.0], sz);
+            }
+        }
+    }
+    // (kind, texture, model, place, name)
+    let mut list: Vec<(m::DotKind, String, String, [f64; 3], Option<String>)> = Vec::new();
+    for mob in game.mobs.iter() {
+        if list.len() >= MAX_DOTS {
+            break;
+        }
+        if mob.removed || mob.invisible {
+            continue;
+        }
+        let kind = m::dot_kind(&mob.kind.id, &mob.kind.category);
+        if !s.shows(kind) {
+            continue;
+        }
+        let at = mob.previous.lerp(mob.position, t);
+        if !near(at.x, at.z) {
+            continue;
+        }
+        let (model, texture) = horizon_client::mobs::render::body(mob);
+        let name = if kind == m::DotKind::Player {
+            s.names.then(|| game.remote_player_name(mob.id).map(str::to_owned)).flatten()
+        } else {
+            Some(mob.custom_name.clone().unwrap_or_else(|| m::pretty_id(&mob.kind.id)))
+        };
+        list.push((kind, texture.into_owned(), model.into_owned(), [at.x, at.y, at.z], name));
+    }
+    list.sort_by_key(|e| e.0 == m::DotKind::Player);
+    let label = m::LABEL_SIZES[s.label_size.min(m::LABEL_SIZES.len() - 1)];
+    let mut budget = ICONS_PER_FRAME;
+    for (kind, texture, model, at, name) in list {
+        let (u, v) = to_map(at[0], at[2]);
+        if m::clamp_to_map((u, v), radius, s.round).1 {
+            continue;
+        }
+        let pos = [c[0] + u, c[1] + v];
+        let a = alpha(at[1]);
+        let rgb = s.dot_rgb(kind);
+        if !details {
+            let r = if kind == m::DotKind::Player { 2.2 } else { 1.7 };
+            draw_dot(game, batch, pos, r, u32::from(a) << 24 | rgb);
+            continue;
+        }
+        let icon = with(|st| st.icons.get(game, &texture, &model, &mut budget));
+        let half = size / 2.0;
+        // The badge: a faint glass square in the entity's colour with a brighter rim.
+        let (bx, by) = ((pos[0] - half).round() - 1.5, (pos[1] - half).round() - 1.5);
+        let glow = |al: u32| (al * u32::from(a) / 255) << 24 | rgb;
+        game.native_fill(batch, [bx - 1.0, by - 1.0, size + 5.0, size + 5.0], glow(0x22));
+        game.native_fill(batch, [bx, by, size + 3.0, size + 3.0], glow(0x55));
+        game.native_fill(batch, [bx + 1.0, by + 1.0, size + 1.0, size + 1.0], (u32::from(a) * 0x60 / 255) << 24);
+        match icon {
+            Some(icon) => draw_icon(game, batch, icon, pos, size, (u32::from(a) * 0xD8 / 255) as u8),
+            None => draw_dot(game, batch, pos, half * 0.6, u32::from(a) << 24 | rgb),
+        }
+        let text = name.unwrap_or_default();
+        if !text.is_empty() {
+            let w = game.native_text_width(&text) * label;
+            let (tx, ty) = ((bx + size + 5.0).round(), (pos[1] - 4.0 * label).round());
+            game.native_fill(batch, [tx - 1.0, ty - 1.0, w + 2.0, 9.0 * label + 1.0], 0x7000_0000);
+            let start = batch.vertices.len();
+            game.native_text(batch, &text, [tx, ty], 0xFFFFFF, false);
+            batch.scale_since(start, tx, ty, label, label);
         }
     }
 }
@@ -1368,13 +1583,121 @@ fn draw_minimap_terrain(
     }
 }
 
-/// `native_world_primitives`: each waypoint's name and distance, seen through walls, and a beam.
+/// Waypoints on screen: a small marker in the waypoint's colour with its initials where the
+/// waypoint is, its distance under it and its name over it when looked at (or always); kept at
+/// the screen's edge with an arrow when it is off screen. No beams.
+fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings) {
+    if !s.markers {
+        return;
+    }
+    let Some(cam) = game.native_camera() else {
+        return;
+    };
+    let (w, h) = (batch.width, batch.height);
+    let dim = game.dim.id();
+    let range: Option<f64> = m::WP_RANGES.get(s.wp_range).and_then(|r| r.parse().ok());
+    let eye = cam.position;
+    // (distance, screen point, pushed to the edge, edge angle, waypoint data)
+    let mut shown: Vec<(f64, [f32; 2], bool, f32, String, String, u32)> = Vec::new();
+    with(|st| {
+        for wp in st.book.list.iter().filter(|w| st.book.visible(w)) {
+            let Some(c) = wp.place_in(dim, s.convert) else {
+                continue;
+            };
+            let at = [c[0], c[1] + 1.0, c[2]];
+            let d = m::distance(eye, at);
+            if range.is_some_and(|r| d > r) {
+                continue;
+            }
+            let rel = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+            let (p, front) = m::project(&cam.view, &cam.projection, rel, w, h);
+            let (q, angle, pushed) = m::to_edge(p, w, h, 14.0);
+            if (pushed || !front) && !s.wp_edge {
+                continue;
+            }
+            shown.push((d, q, pushed || !front, angle, wp.initials(), wp.name.clone(), wp.rgb()));
+        }
+    });
+    // Far ones first, so near ones are on top.
+    shown.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let centre = [w / 2.0, h / 2.0];
+    // The one nearest the crosshair (within reach) shows its name when names show "looked at".
+    let looked = shown
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| !e.2)
+        .map(|(i, e)| (i, (e.1[0] - centre[0]).hypot(e.1[1] - centre[1])))
+        .filter(|&(_, r)| r < 40.0)
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i);
+    for (i, (d, q, edge, angle, initials, name, rgb)) in shown.into_iter().enumerate() {
+        let alpha = if s.fade { u32::from(m::fade(d)).max(if edge { 120 } else { 0 }) } else { 255 };
+        if alpha == 0 {
+            continue;
+        }
+        let k = if s.wp_scale { m::marker_scale(d) } else { 1.0 };
+        let r = 6.0 * k;
+        let [x, y] = [q[0].round(), q[1].round()];
+        let a = alpha << 24;
+        // The marker: a dark rim, the colour, a lighter top half for a little depth.
+        if s.wp_shape == 0 {
+            let dia = |r: f32| [[x, y - r], [x + r, y], [x, y + r], [x - r, y]];
+            game.native_quad(batch, dia(r + 1.5), a / 255 * 200 & 0xFF00_0000);
+            game.native_quad(batch, dia(r), a | rgb);
+            game.native_quad(batch, [[x, y - r], [x + r, y], [x, y], [x - r, y]], (alpha * 50 / 255) << 24 | 0xFF_FFFF);
+        } else {
+            game.native_fill(batch, [x - r - 1.0, y - r - 1.0, r * 2.0 + 2.0, r * 2.0 + 2.0], a / 255 * 200 & 0xFF00_0000);
+            game.native_fill(batch, [x - r, y - r, r * 2.0, r * 2.0], a | rgb);
+            game.native_fill(batch, [x - r, y - r, r * 2.0, r], (alpha * 50 / 255) << 24 | 0xFF_FFFF);
+        }
+        // Initials, dark on a light colour and light on a dark one.
+        let lum = ((rgb >> 16) & 255) * 3 + ((rgb >> 8) & 255) * 6 + (rgb & 255);
+        let ink = if lum > 1300 { 0x000000 } else { 0xFFFFFF };
+        let text: String = initials.chars().take(if s.wp_shape == 0 { 1 } else { 2 }).collect();
+        let tw = game.native_text_width(&text);
+        let start = batch.vertices.len();
+        game.native_text(batch, &text, [x - tw / 2.0, y - 3.5], ink, false);
+        let ts = (k * 0.75).clamp(0.5, 1.0);
+        batch.scale_since(start, x, y, ts, ts);
+        if edge {
+            // An arrow beside it pointing the way to turn.
+            let (sa, ca) = angle.sin_cos();
+            let tip = [x + ca * (r + 7.0), y + sa * (r + 7.0)];
+            let base = [x + ca * (r + 3.0), y + sa * (r + 3.0)];
+            let side = [-sa * 3.0, ca * 3.0];
+            game.native_quad(
+                batch,
+                [tip, [base[0] + side[0], base[1] + side[1]], base, [base[0] - side[0], base[1] - side[1]]],
+                a | rgb,
+            );
+        }
+        // Distance under it; the name over it.
+        let dist = m::distance_text(d, s.units);
+        let dw = game.native_text_width(&dist) * 0.75;
+        let start = batch.vertices.len();
+        game.native_text(batch, &dist, [x - dw / 2.0, y + r + 3.0], 0xE0E0E0, true);
+        batch.scale_since(start, x, y + r + 3.0, 0.75, 0.75);
+        let show_name = match s.wp_names {
+            1 => true,
+            0 => looked == Some(i),
+            _ => false,
+        };
+        if show_name && !name.is_empty() {
+            let nw = game.native_text_width(&name);
+            let (nx, ny) = ((x - nw / 2.0).round(), (y - r - 12.0).round());
+            game.native_fill(batch, [nx - 2.0, ny - 1.0, nw + 4.0, 10.0], (alpha * 0x90 / 255) << 24);
+            game.native_text(batch, &name, [nx, ny], rgb, false);
+        }
+    }
+}
+
+/// `native_world_primitives`: the old style's beam over each waypoint, when it is turned on.
 pub(super) fn on_world(game: &Game<'_>, camera: [f64; 3], primitives: &mut WorldPrimitives) {
     if !game.native_on(m::ID) || game.player.is_none() {
         return;
     }
     let s = settings(game);
-    if !s.markers && !s.beams {
+    if !s.beams {
         return;
     }
     let dim = game.dim.id();
@@ -1384,37 +1707,13 @@ pub(super) fn on_world(game: &Game<'_>, camera: [f64; 3], primitives: &mut World
             let Some(c) = w.place_in(dim, s.convert) else {
                 continue;
             };
-            let label_at = [c[0], c[1] + 1.5, c[2]];
-            let d = m::distance(camera, label_at);
+            let d = m::distance(camera, c);
             let alpha = if s.fade { u32::from(m::fade(d)) } else { 255 };
             if alpha == 0 {
                 continue;
             }
-            let argb = alpha << 24 | w.rgb();
-            if s.beams {
-                let height = (top - c[1] as i32).clamp(1, 2048) as u32;
-                primitives.beam(c, height, argb);
-            }
-            if s.markers {
-                // Far ones are drawn nearer along the same line, at the size they would have.
-                let near = 24.0;
-                let at = if d > near {
-                    let t = near / d;
-                    [
-                        camera[0] + (label_at[0] - camera[0]) * t,
-                        camera[1] + (label_at[1] - camera[1]) * t,
-                        camera[2] + (label_at[2] - camera[2]) * t,
-                    ]
-                } else {
-                    label_at
-                };
-                let text = format!("[{}] {} ({})", w.initials(), w.name, m::format_distance(d));
-                primitives
-                    .text(at, text, argb, 1.0)
-                    .through_walls()
-                    .scale_with_distance()
-                    .background();
-            }
+            let height = (top - c[1] as i32).clamp(1, 2048) as u32;
+            primitives.beam(c, height, alpha << 24 | w.rgb());
         }
     });
 }

@@ -31,6 +31,17 @@ pub const ZOOMS: [f32; 9] = [0.25, 0.35, 0.5, 0.71, 1.0, 1.41, 2.0, 2.83, 4.0];
 pub const OPACITY: [u8; 5] = [255, 217, 178, 140, 102];
 pub const DEATHS: [usize; 4] = [1, 3, 5, 10];
 pub const SORTS: [&str; 3] = ["Name", "Distance", "Newest"];
+/// Entity icons' side on the minimap, GUI pixels.
+pub const ICON_SIZES: [f32; 5] = [6.0, 8.0, 10.0, 12.0, 16.0];
+/// How far from you entities show on the minimap: to its edge, or within so many blocks.
+pub const RANGES: [&str; 6] = ["Map edge", "16", "32", "64", "128", "256"];
+/// When a waypoint marker shows its name.
+pub const WP_NAMES: [&str; 3] = ["Looked at", "Always", "Never"];
+pub const WP_SHAPES: [&str; 2] = ["Diamond", "Square"];
+pub const WP_RANGES: [&str; 6] = ["Any distance", "100", "250", "500", "1000", "5000"];
+pub const UNITS: [&str; 2] = ["Metres", "Blocks"];
+/// Name labels' size in the detail view.
+pub const LABEL_SIZES: [f32; 3] = [0.5, 0.75, 1.0];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
@@ -62,11 +73,42 @@ pub struct Settings {
     pub names: bool,
     pub hostile: bool,
     pub passive: bool,
-    /// Waypoint names and distances in the world.
+    /// Dropped items.
+    pub items: bool,
+    /// Entities that are neither players nor mobs that attack or graze (armour stands, golems...).
+    pub others: bool,
+    /// Index in `ICON_SIZES`.
+    pub icon_size: usize,
+    /// Index in `RANGES`.
+    pub range: usize,
+    /// Faces and names while the player list key is held (else dots).
+    pub tab_details: bool,
+    /// Faces and names all the time.
+    pub always_details: bool,
+    /// Index in `LABEL_SIZES`.
+    pub label_size: usize,
+    /// Dot colours, indices in `COLOURS`.
+    pub player_colour: usize,
+    pub hostile_colour: usize,
+    pub passive_colour: usize,
+    pub other_colour: usize,
+    /// Waypoint markers on screen, where each waypoint is.
     pub markers: bool,
-    /// A beam over each waypoint in the world.
+    /// Index in `WP_NAMES`: when a marker shows its name.
+    pub wp_names: usize,
+    /// Index in `WP_SHAPES`.
+    pub wp_shape: usize,
+    /// Markers off screen kept at its edge with an arrow.
+    pub wp_edge: bool,
+    /// Markers smaller the farther away.
+    pub wp_scale: bool,
+    /// Index in `WP_RANGES`: how far markers show.
+    pub wp_range: usize,
+    /// Index in `UNITS`.
+    pub units: usize,
+    /// A beam over each waypoint in the world (an older style).
     pub beams: bool,
-    /// Markers fade with distance.
+    /// Markers fade right beside you and far away.
     pub fade: bool,
     /// Overworld waypoints shown in the Nether at their Nether place, and the other way.
     pub convert: bool,
@@ -99,8 +141,25 @@ impl Default for Settings {
             names: true,
             hostile: true,
             passive: true,
+            items: false,
+            others: false,
+            icon_size: 1,
+            range: 0,
+            tab_details: true,
+            always_details: false,
+            label_size: 1,
+            player_colour: 8,
+            hostile_colour: 0,
+            passive_colour: 3,
+            other_colour: 9,
             markers: true,
-            beams: true,
+            wp_names: 0,
+            wp_shape: 0,
+            wp_edge: true,
+            wp_scale: false,
+            wp_range: 0,
+            units: 0,
+            beams: false,
             fade: true,
             convert: true,
             death: true,
@@ -127,6 +186,11 @@ impl ShowEntry for f32 {
 impl ShowEntry for u8 {
     fn show(&self) -> String {
         format!("{}%", (u32::from(*self) * 100 + 127) / 255)
+    }
+}
+impl ShowEntry for (&str, u32) {
+    fn show(&self) -> String {
+        self.0.to_owned()
     }
 }
 impl ShowEntry for usize {
@@ -198,9 +262,26 @@ settings_table! {
     names: flag, "Player names";
     hostile: flag, "Hostile mobs";
     passive: flag, "Passive mobs";
-    markers: flag, "Waypoints in the world";
-    beams: flag, "Waypoint beams";
-    fade: flag, "Waypoints fade with distance";
+    items: flag, "Dropped items";
+    others: flag, "Other entities";
+    icon_size: index(ICON_SIZES), "Entity icon size";
+    range: index(RANGES), "Entities within (blocks)";
+    tab_details: flag, "Faces and names while the player list key is held";
+    always_details: flag, "Faces and names always";
+    label_size: index(LABEL_SIZES), "Name label size";
+    player_colour: index(COLOURS), "Player dots";
+    hostile_colour: index(COLOURS), "Hostile mob dots";
+    passive_colour: index(COLOURS), "Passive mob dots";
+    other_colour: index(COLOURS), "Other entity dots";
+    markers: flag, "Waypoint markers on screen";
+    wp_names: index(WP_NAMES), "Waypoint names";
+    wp_shape: index(WP_SHAPES), "Waypoint marker";
+    wp_edge: flag, "Off-screen waypoints at the edge";
+    wp_scale: flag, "Waypoint markers shrink with distance";
+    wp_range: index(WP_RANGES), "Waypoints within (blocks)";
+    units: index(UNITS), "Distances in";
+    beams: flag, "Waypoint beams (old style)";
+    fade: flag, "Waypoints fade near and far";
     convert: flag, "Overworld/Nether waypoints converted";
     death: flag, "Death waypoints";
     deaths: index(DEATHS), "Deaths kept";
@@ -213,8 +294,24 @@ impl Settings {
             DotKind::Player => self.players,
             DotKind::Hostile => self.hostile,
             DotKind::Passive => self.passive,
-            DotKind::Other => false,
+            DotKind::Other => self.others,
         }
+    }
+
+    /// The dot colour (0xRRGGBB) of an entity of `kind`.
+    pub fn dot_rgb(&self, kind: DotKind) -> u32 {
+        let i = match kind {
+            DotKind::Player => self.player_colour,
+            DotKind::Hostile => self.hostile_colour,
+            DotKind::Passive => self.passive_colour,
+            DotKind::Other => self.other_colour,
+        };
+        COLOURS[i.min(COLOURS.len() - 1)].1
+    }
+
+    /// The farthest an entity shows, in blocks (None: the map's edge).
+    pub fn max_range(&self) -> Option<f64> {
+        RANGES.get(self.range).and_then(|r| r.parse().ok())
     }
 
     /// One zoom step in (`in_`) or out; whether it changed.
@@ -253,15 +350,6 @@ pub fn dot_kind(kind: &str, category: &str) -> DotKind {
     }
 }
 
-pub fn dot_colour(kind: DotKind) -> u32 {
-    match kind {
-        DotKind::Player => 0xFFFF_FFFF,
-        DotKind::Hostile => 0xFFE0_3C3C,
-        DotKind::Passive => 0xFF5C_D65C,
-        DotKind::Other => 0xFFA0_A0A0,
-    }
-}
-
 /// An arrow of `size` at `at` pointing along `angle` degrees on screen, measured as the game's
 /// yaw on a north-up map (0 points down, 90 points left): its four corners, tip first.
 pub fn arrow(at: [f32; 2], angle: f32, size: f32) -> [[f32; 2]; 4] {
@@ -275,6 +363,106 @@ pub fn arrow(at: [f32; 2], angle: f32, size: f32) -> [[f32; 2]; 4] {
         ]
     };
     [pt(1.0, 0.0), pt(-0.7, 0.7), pt(-0.35, 0.0), pt(-0.7, -0.7)]
+}
+
+// ---------------------------------------------------------------- entity faces
+
+/// One face of a model part: its normal and its four corners' texture coordinates (0 to 1).
+pub type Face = ([f32; 3], [[f32; 2]; 4]);
+
+fn uv_box(f: &Face) -> [f32; 4] {
+    let (mut u0, mut v0, mut u1, mut v1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for [u, v] in f.1 {
+        u0 = u0.min(u);
+        v0 = v0.min(v);
+        u1 = u1.max(u);
+        v1 = v1.max(v);
+    }
+    [u0, v0, u1, v1]
+}
+
+/// The front of a model part: its biggest face looking north (-Z, where a model's face is), as
+/// a texture rectangle `[u0, v0, u1, v1]`.
+pub fn front(faces: &[Face]) -> Option<[f32; 4]> {
+    faces
+        .iter()
+        .filter(|f| f.0[2] < -0.9)
+        .map(uv_box)
+        .filter(|b| b[2] > b[0] && b[3] > b[1])
+        .max_by(|a, b| {
+            let area = |b: &[f32; 4]| (b[2] - b[0]) * (b[3] - b[1]);
+            area(a).partial_cmp(&area(b)).unwrap_or(std::cmp::Ordering::Equal)
+        })
+}
+
+/// An icon cut from a `w` x `h` RGBA texture: rectangle `rect` (texture coordinates), with
+/// `over` (a hat layer) laid over it, fitted into `ICON` x `ICON` texels by nearest sampling.
+/// Its size in texels and the `ICON` x `ICON` RGBA cell; None for a clear or empty cut.
+pub fn cut_icon(w: u32, h: u32, rgba: &[u8], rect: [f32; 4], over: Option<[f32; 4]>) -> Option<(u32, u32, Vec<u8>)> {
+    if w == 0 || h == 0 || rgba.len() < (w * h * 4) as usize {
+        return None;
+    }
+    let px = |r: [f32; 4]| {
+        let x0 = (r[0] * w as f32).round() as i64;
+        let y0 = (r[1] * h as f32).round() as i64;
+        let x1 = (r[2] * w as f32).round() as i64;
+        let y1 = (r[3] * h as f32).round() as i64;
+        (x0, y0, (x1 - x0).max(0), (y1 - y0).max(0))
+    };
+    let (x0, y0, fw, fh) = px(rect);
+    if fw == 0 || fh == 0 {
+        return None;
+    }
+    let scale = (fw.max(fh) as f32 / ICON as f32).max(1.0);
+    let (iw, ih) = (((fw as f32 / scale).round() as u32).max(1), ((fh as f32 / scale).round() as u32).max(1));
+    let read = |x: i64, y: i64| -> [u8; 4] {
+        if x < 0 || y < 0 || x >= i64::from(w) || y >= i64::from(h) {
+            return [0; 4];
+        }
+        let o = ((y as u32 * w + x as u32) * 4) as usize;
+        [rgba[o], rgba[o + 1], rgba[o + 2], rgba[o + 3]]
+    };
+    let over = over.map(px).filter(|o| o.2 > 0 && o.3 > 0);
+    let mut out = vec![0u8; (ICON * ICON * 4) as usize];
+    let mut seen = false;
+    for j in 0..ih {
+        for i in 0..iw {
+            let (fx, fy) = ((i as f32 + 0.5) / iw as f32, (j as f32 + 0.5) / ih as f32);
+            let mut c = read(x0 + (fx * fw as f32) as i64, y0 + (fy * fh as f32) as i64);
+            if let Some((ox, oy, ow, oh)) = over {
+                let o = read(ox + (fx * ow as f32) as i64, oy + (fy * oh as f32) as i64);
+                let a = u32::from(o[3]);
+                for k in 0..3 {
+                    c[k] = ((u32::from(c[k]) * (255 - a) + u32::from(o[k]) * a) / 255) as u8;
+                }
+                c[3] = c[3].max(o[3]);
+            }
+            if c[3] > 16 {
+                seen = true;
+            }
+            let o = ((j * ICON + i) * 4) as usize;
+            out[o..o + 4].copy_from_slice(&c);
+        }
+    }
+    seen.then_some((iw, ih, out))
+}
+
+/// The slot of icon `i` in the mod image: its top left texel.
+pub fn icon_origin(i: usize) -> [u32; 2] {
+    let i = i as u32;
+    [(i % ICON_COLS) * ICON, ICONS_Y + (i / ICON_COLS) * ICON]
+}
+
+/// A model layer's key as the model file names it: `cow#main` is `minecraft:cow#main`, and the
+/// player's `main` is `minecraft:player#main`.
+pub fn model_key(key: &str) -> String {
+    if key == "main" {
+        "minecraft:player#main".into()
+    } else if key.contains(':') {
+        key.into()
+    } else {
+        format!("minecraft:{key}")
+    }
 }
 
 // ---------------------------------------------------------------- terrain colours
@@ -1604,6 +1792,54 @@ pub fn format_distance(d: f64) -> String {
     }
 }
 
+/// A distance in the chosen units (`UNITS`): "12 m" / "1.4 km", or "12 blocks".
+pub fn distance_text(d: f64, units: usize) -> String {
+    if units == 1 {
+        format!("{} blocks", d.round() as i64)
+    } else {
+        format_distance(d)
+    }
+}
+
+/// Where a point `rel` (from the camera, in blocks) lands on a `w` x `h` screen through the
+/// camera's `view` and `projection` (column-major): its screen point and whether it is in
+/// front of the camera. Behind, the point is mirrored, so it still says which way to turn.
+pub fn project(view: &[f32; 16], projection: &[f32; 16], rel: [f64; 3], w: f32, h: f32) -> ([f32; 2], bool) {
+    let mul = |m: &[f32; 16], v: [f32; 4]| -> [f32; 4] {
+        std::array::from_fn(|r| (0..4).map(|c| m[c * 4 + r] * v[c]).sum())
+    };
+    let v = mul(view, [rel[0] as f32, rel[1] as f32, rel[2] as f32, 1.0]);
+    let c = mul(projection, v);
+    let front = c[3] > 1e-4;
+    let wv = if c[3].abs() < 1e-4 { 1e-4 } else { c[3].abs() };
+    let (mut x, mut y) = (c[0] / wv, c[1] / wv);
+    if !front {
+        // Behind: push it to the edge on the side it is on.
+        x = -x * 1e3 + if x == 0.0 { 1.0 } else { 0.0 };
+        y = -y.abs() * 1e3;
+    }
+    ([(x + 1.0) / 2.0 * w, (1.0 - y) / 2.0 * h], front)
+}
+
+/// A marker at `p` kept `margin` inside a `w` x `h` screen: its place, the direction it was
+/// pushed towards (radians, 0 right, clockwise as y grows down) and whether it was pushed.
+pub fn to_edge(p: [f32; 2], w: f32, h: f32, margin: f32) -> ([f32; 2], f32, bool) {
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    let (dx, dy) = (p[0] - cx, p[1] - cy);
+    let (hx, hy) = ((cx - margin).max(1.0), (cy - margin).max(1.0));
+    let k = (dx.abs() / hx).max(dy.abs() / hy);
+    let angle = dy.atan2(dx);
+    if k <= 1.0 {
+        return (p, angle, false);
+    }
+    ([cx + dx / k, cy + dy / k], angle, true)
+}
+
+/// A marker's size factor at `d` blocks when it shrinks with distance.
+pub fn marker_scale(d: f64) -> f32 {
+    (1.45 - (d.max(1.0).ln() as f32) / 6.5).clamp(0.6, 1.3)
+}
+
 /// A marker's opacity at `d` blocks: clear right beside it, full from 8 blocks, fading again
 /// far away to a third at 2000 blocks.
 pub fn fade(d: f64) -> u8 {
@@ -1857,8 +2093,48 @@ mod tests {
         assert_eq!(dot_kind("minecraft:armor_stand", "misc"), DotKind::Other);
         let s = Settings { passive: false, ..Settings::default() };
         assert!(!s.shows(DotKind::Passive) && s.shows(DotKind::Hostile) && !s.shows(DotKind::Other));
+        assert!(Settings { others: true, ..s }.shows(DotKind::Other));
         let a = arrow([0.0, 0.0], 0.0, 4.0);
         assert!(a[0][1] > 3.9 && a[0][0].abs() < 1e-4, "yaw 0 points down");
+    }
+
+    #[test]
+    fn faces_are_cut_from_the_front() {
+        let n = [0.0, 0.0, -1.0];
+        let side = ([1.0, 0.0, 0.0], [[0.0, 0.0], [0.1, 0.0], [0.1, 0.1], [0.0, 0.1]]);
+        let small = (n, [[0.5, 0.5], [0.55, 0.5], [0.55, 0.55], [0.5, 0.55]]);
+        let big = (n, [[0.125, 0.125], [0.25, 0.125], [0.25, 0.25], [0.125, 0.25]]);
+        assert_eq!(front(&[side, small, big]), Some([0.125, 0.125, 0.25, 0.25]));
+        assert_eq!(front(&[side]), None);
+        // A 64x64 texture: red face at 8..16, a half-clear blue hat at 40..48.
+        let mut tex = vec![0u8; 64 * 64 * 4];
+        for y in 8..16 {
+            for x in 8..16 {
+                let o = (y * 64 + x) * 4;
+                tex[o..o + 4].copy_from_slice(&[255, 0, 0, 255]);
+                let h = (y * 64 + x + 32) * 4;
+                if x < 12 {
+                    tex[h..h + 4].copy_from_slice(&[0, 0, 255, 255]);
+                }
+            }
+        }
+        let (w, h, cell) = cut_icon(64, 64, &tex, [0.125, 0.125, 0.25, 0.25], Some([0.625, 0.125, 0.75, 0.25])).unwrap();
+        assert_eq!((w, h), (8, 8));
+        assert_eq!(&cell[..4], &[0, 0, 255, 255]);
+        assert_eq!(&cell[7 * 4..7 * 4 + 4], &[255, 0, 0, 255]);
+        assert_eq!(cell[8 * 4 + 3], 0, "outside the face is clear");
+        assert!(cut_icon(64, 64, &tex, [0.5, 0.5, 0.6, 0.6], None).is_none(), "clear");
+        let (w, h, _) = cut_icon(64, 64, &tex, [0.0, 0.0, 1.0, 0.5], None).unwrap();
+        assert_eq!((w, h), (16, 8), "bigger faces shrink to fit");
+        assert_eq!(icon_origin(65), [16, ICONS_Y + 16]);
+        assert_eq!(model_key("main"), "minecraft:player#main");
+        assert_eq!(model_key("llama#main"), "minecraft:llama#main");
+        assert_eq!(model_key("mymod:golem#main"), "mymod:golem#main");
+        let s = Settings { range: 3, ..Settings::default() };
+        assert_eq!(s.max_range(), Some(64.0));
+        assert_eq!(Settings::default().max_range(), None);
+        assert_eq!(Settings::default().dot_rgb(DotKind::Hostile), 0xFF5555);
+        assert_eq!(Settings::default().dot_rgb(DotKind::Player), 0xFFFFFF);
     }
 
     #[test]
@@ -2164,6 +2440,17 @@ mod tests {
         assert_eq!(converted([1, 2, 3], OVERWORLD, "minecraft:the_end"), None);
         assert!(b.list[0].place_in(NETHER, true).is_some());
         assert!(b.list[0].place_in(NETHER, false).is_none());
+        assert_eq!(distance_text(12.4, 1), "12 blocks");
+        assert_eq!(distance_text(12.4, 0), "12 m");
+        assert!(marker_scale(5.0) > marker_scale(500.0));
+        // An identity camera: x right, y up, w = 1.
+        let id: [f32; 16] = std::array::from_fn(|i| if i % 5 == 0 { 1.0 } else { 0.0 });
+        let (p, front) = project(&id, &id, [0.5, 0.0, 0.0], 200.0, 100.0);
+        assert!(front && (p[0] - 150.0).abs() < 1e-3 && (p[1] - 50.0).abs() < 1e-3);
+        let (q, _, _) = to_edge([1000.0, 50.0], 200.0, 100.0, 10.0);
+        assert_eq!(q, [190.0, 50.0]);
+        let (r, _, pushed) = to_edge([100.0, 50.0], 200.0, 100.0, 10.0);
+        assert!(!pushed && r == [100.0, 50.0]);
         assert_eq!(fade(0.0), 0);
         assert_eq!(fade(50.0), 255);
         assert!(fade(5000.0) < 100 && fade(5000.0) > 50);

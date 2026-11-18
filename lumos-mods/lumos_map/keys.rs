@@ -58,3 +58,13 @@ pub(super) fn held(game: &Game<'_>, name: &str) -> bool {
     }
     horizon_client::keybinds::mouse_button(&key).is_some_and(|b| game.physical_buttons.contains(&b))
 }
+
+/// Whether vanilla's key mapping `mapping` (`key.playerlist`) is held now, on the key the
+/// player bound it to in Controls.
+pub(super) fn vanilla_held(game: &Game<'_>, mapping: &str) -> bool {
+    let key = game.settings.keys.get(mapping).to_owned();
+    if let Some(code) = horizon_client::keybinds::key_code(&key) {
+        return game.physical_keys.contains(&code);
+    }
+    horizon_client::keybinds::mouse_button(&key).is_some_and(|b| game.physical_buttons.contains(&b))
+}
