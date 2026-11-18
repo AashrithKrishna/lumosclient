@@ -114,6 +114,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <string>13.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Voice chat mods in your games use the microphone.</string>
 </dict>
 </plist>
 PLIST
