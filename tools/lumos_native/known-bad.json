@@ -1,5 +1,7 @@
 {
  "xtoxray": "didn't compile with this Horizon version: its mesher patch misses fields MeshTables has now",
  "simple_voice_chat": "didn't compile with this Horizon version: its voice library (svc_client) fails to build",
- "hitbox_plus": "didn't compile with this Horizon version: its module isn't visible where its hitbox hook lands"
+ "hitbox_plus": "didn't compile with this Horizon version: its module isn't visible where its hitbox hook lands",
+ "chop": "didn't compile with this Horizon version (its licence also forbids patching it)",
+ "spider_man": "didn't compile with this Horizon version: SoundEngine::unseeded is gone"
 }
