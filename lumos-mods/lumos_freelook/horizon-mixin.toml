@@ -1,7 +1,7 @@
 # Lumos Freelook: hold a key to look around while the player keeps facing and moving its way.
 [mod]
 id = "lumos_freelook"
-version = "1.0.0"
+version = "1.0.1"
 priority = 100
 
 # Horizon Nightly 2026-11-13. Planned with horizon-mixins e59da9094f0c2fdda6c627fe9eff22dec6a906f0.
@@ -28,19 +28,20 @@ file = "crates/horizon-client/src/game.rs"
 name = "lumos_freelook_keys"
 source = "keys.rs"
 
-# A look from the mouse or a pad (`Entity.turn` units), before it turns the player: while
-# freelook is on it turns the camera instead. (At 9f42064c `apply_mouse_look` hands every
-# look to this one function.)
+# Every turn of the player's view (`Entity.turn` units, zoom already applied): while freelook is
+# on it turns the camera instead. This is the one function every look reaches at 9f42064c: the
+# game's mouse look, a pad, the arrow keys, and mods that replace the mouse look (Gyro overwrites
+# `apply_mouse_look` and calls `turn_player` itself, so a hook on `look_turn` misses the mouse).
 [[injection]]
 id = "turn"
 kind = "HEAD"
 cancellable = true
-target = "horizon_client::game::pointer_capture::Game<'_>::look_turn"
+target = "horizon_client::game::perspective::Game<'_>::turn_player"
 helper = "hooks/turn.rs"
 bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
-  { name = "x", ty = "f64", value = "x" },
-  { name = "y", ty = "f64", value = "y" },
+  { name = "x", ty = "f64", value = "xo" },
+  { name = "y", ty = "f64", value = "yo" },
 ]
 
 # The camera's pose this frame (API 402): turned to the free look and, in third person, backed

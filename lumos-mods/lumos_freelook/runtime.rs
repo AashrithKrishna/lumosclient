@@ -12,7 +12,7 @@ use std::time::Duration;
 
 pub const ID: &str = "lumos_freelook";
 pub const NAME: &str = "Freelook";
-pub const VERSION: &str = "1.0.0";
+pub const VERSION: &str = "1.0.1";
 pub const DESCRIPTION: &str = "Hold a key (Left Alt unless you change it) to look around \
 while you keep facing and moving the way you were. Letting go turns the camera back.";
 

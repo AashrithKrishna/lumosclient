@@ -97,14 +97,14 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
     }
 }
 
-/// `look_turn`: while looking, the mouse (or a pad) turns the camera and not the player.
+/// `turn_player`: while looking, every turn (the mouse, whatever mod reads it, a pad, the arrow
+/// keys) turns the camera and not the player. The game has already scaled it for zoom.
 pub(super) fn on_turn(game: &mut Game<'_>, x: f64, y: f64) -> bool {
-    if !game.native_on(m::ID) || !m::with_look(|l| l.phase == m::Phase::Looking) {
+    if !game.native_on(m::ID) || game.studio.flying() || !m::with_look(|l| l.phase == m::Phase::Looking) {
         return false;
     }
     let invert = settings(game).invert;
-    let zoom = game.zoom_turn_scale();
-    m::with_look(|l| l.turn(x * zoom, y * zoom, invert));
+    m::with_look(|l| l.turn(x, y, invert));
     true
 }
 
