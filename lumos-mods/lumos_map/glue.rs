@@ -39,8 +39,6 @@ const SAVE_EVERY: Duration = Duration::from_secs(30);
 /// Time a frame may spend drawing terrain cells, with the map closed and open.
 const CELL_BUDGET: Duration = Duration::from_micros(800);
 const CELL_BUDGET_OPEN: Duration = Duration::from_micros(3000);
-/// The most entity markers drawn.
-const MAX_DOTS: usize = 400;
 
 /// The map screen's bars, in GUI pixels.
 const TOP: f32 = 22.0;
@@ -400,12 +398,16 @@ struct Explored {
     loading: Option<Receiver<Vec<((i32, i32), m::Tile)>>>,
     /// Saved cave layers by band (None: the full cave map), under `<dim>/caves/`.
     caves: HashMap<Option<i32>, Saved>,
+    /// Your recent path here (`<dim>/footsteps.txt`), and whether it changed since saved.
+    steps: m::Footsteps,
+    steps_dirty: bool,
 }
 
 impl Explored {
     fn open(world: &Path, dim: &'static str) -> Self {
         let dir = world.join(m::folder_name(dim));
         let loading = Some(load_regions(dir.clone(), None));
+        let steps = m::Footsteps::from_text(&std::fs::read_to_string(dir.join("footsteps.txt")).unwrap_or_default());
         Self {
             dim,
             dir,
@@ -417,6 +419,8 @@ impl Explored {
             saved: Instant::now(),
             loading,
             caves: HashMap::new(),
+            steps,
+            steps_dirty: false,
         }
     }
 
@@ -426,6 +430,12 @@ impl Explored {
         write_regions(&mut self.store, &self.dir);
         for c in self.caves.values_mut() {
             write_regions(&mut c.store, &c.dir);
+        }
+        if std::mem::take(&mut self.steps_dirty) {
+            let (dir, text) = (self.dir.clone(), self.steps.to_text());
+            let _ = std::thread::Builder::new().name("lumos-map-save".into()).spawn(move || {
+                let _ = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join("footsteps.txt"), text));
+            });
         }
     }
 
@@ -583,6 +593,13 @@ struct State {
     cave_switch: m::CaveSwitch,
     roof_checked: Option<Instant>,
     clock: Option<Instant>,
+    /// The light overlay: per chunk near you, a bit per column of each row marked dark; when it
+    /// was last made.
+    light_mask: HashMap<(i32, i32), [u16; 16]>,
+    light_at: Option<Instant>,
+    /// The minimap is enlarged now (key held, or toggled on).
+    big: bool,
+    big_toggled: bool,
     /// What the minimap's cave view shows this frame (None: the surface).
     cave_view: Option<m::CaveView>,
     /// The world map's cave map type per dimension (`<world>/cave-maps.txt`).
@@ -866,11 +883,15 @@ fn explore(game: &Game<'_>, s: &mut State, budget: Duration) {
         return;
     };
     let full = roof_top(game).is_none() && cave_type(game, s) == m::CaveType::Full;
+    let footsteps = settings(game).footsteps;
     let State { explored, palette, tints, .. } = s;
     let (Some(e), Some(palette)) = (explored.as_mut(), palette.as_ref()) else {
         return;
     };
     e.follow_loading();
+    if footsteps && e.steps.step(p[0], p[2]) {
+        e.steps_dirty = true;
+    }
     let world = &game.world;
     let centre = ((p[0].floor() as i32) >> 4, (p[2].floor() as i32) >> 4);
     if e.queue.is_empty() && e.refilled.is_none_or(|t| t.elapsed() >= REFILL) {
@@ -1194,7 +1215,17 @@ fn export_png(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
 
 /// The minimap's blocks per GUI pixel.
 fn mini_bpp(settings: &m::Settings, cave: bool) -> f32 {
-    m::ZOOMS[settings.zoom_now(cave)]
+    settings.bpp_now(cave, with(|s| s.big))
+}
+
+/// The minimap's side in GUI pixels: its size, or most of the screen while enlarged.
+fn mini_size(game: &Game<'_>, settings: &m::Settings, big: bool) -> f32 {
+    if big {
+        let (w, h) = game.gui_size();
+        (w.min(h) * 0.8).floor().max(m::SIZES[settings.size])
+    } else {
+        m::SIZES[settings.size]
+    }
 }
 
 /// Underground: the cave layer under the head, kept scanned around the player.
@@ -1212,8 +1243,8 @@ fn follow_cave(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
             return;
         }
     };
-    let size = m::SIZES[settings.size];
-    let reach = size / 2.0 * mini_bpp(settings, true) * std::f32::consts::SQRT_2;
+    let size = mini_size(game, settings, s.big);
+    let reach = size / 2.0 * settings.bpp_now(true, s.big) * std::f32::consts::SQRT_2;
     let radius = ((reach / 16.0).ceil() as i32 + 1).min(game.settings.render_distance.max(2));
     let centre = ((p[0].floor() as i32) >> 4, (p[2].floor() as i32) >> 4);
     follow_layer(game, s, false, mode, centre, radius, CAVE_BUDGET);
@@ -1222,6 +1253,116 @@ fn follow_cave(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
 /// A saved cave layer of the dimension shown (`band` None: the full cave map).
 fn saved(s: &State, band: Option<i32>) -> Option<&Saved> {
     s.explored.as_ref()?.caves.get(&band)
+}
+
+/// How far round you (chunks) the light overlay looks, and how often it looks again.
+const LIGHT_RADIUS: i32 = 2;
+const LIGHT_EVERY: Duration = Duration::from_millis(500);
+
+/// The light overlay's marks, twice a second: the floors near you (the cave view's in a cave)
+/// whose block light over them is at most the setting's, where mobs can spawn. Water, rock and
+/// drops are left out.
+fn follow_light(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
+    if !settings.light_overlay {
+        s.light_mask.clear();
+        return;
+    }
+    if s.light_at.is_some_and(|t| t.elapsed() < LIGHT_EVERY) {
+        return;
+    }
+    s.light_at = Some(Instant::now());
+    let Some(p) = player_pos(game) else {
+        return;
+    };
+    let max = m::LIGHT_MAXES[settings.light_max.min(m::LIGHT_MAXES.len() - 1)] as u8;
+    let centre = ((p[0].floor() as i32) >> 4, (p[2].floor() as i32) >> 4);
+    let cave = s.cave.as_ref().filter(|_| s.cave_view.is_some());
+    let mut mask = HashMap::new();
+    for dz in -LIGHT_RADIUS..=LIGHT_RADIUS {
+        for dx in -LIGHT_RADIUS..=LIGHT_RADIUS {
+            let (cx, cz) = (centre.0 + dx, centre.1 + dz);
+            if !game.world.chunks.contains_key(&(cx, cz)) {
+                continue;
+            }
+            let mut rows = [0u16; 16];
+            for (lz, row) in rows.iter_mut().enumerate() {
+                for lx in 0..16 {
+                    let (x, z) = (cx * 16 + lx, cz * 16 + lz as i32);
+                    let col = match cave {
+                        Some(l) => l.column(x, z),
+                        None => s.explored.as_ref().and_then(|e| e.store.column(x, z)),
+                    };
+                    let Some(c) = col.filter(|c| c.kind == m::FLOOR && c.depth == 0 && c.color != m::WATER) else {
+                        continue;
+                    };
+                    if game.world.light(x, i32::from(c.height) + 1, z) & 15 <= max {
+                        *row |= 1 << lx;
+                    }
+                }
+            }
+            if rows.iter().any(|r| *r != 0) {
+                mask.insert((cx, cz), rows);
+            }
+        }
+    }
+    s.light_mask = mask;
+}
+
+/// The minimap's overlays over its terrain: dark floors (the light overlay), slime chunks and
+/// the chunk grid, each turned with the map and cut to its outline.
+fn draw_overlays(
+    game: &Game<'_>,
+    batch: &mut HudBatch,
+    s: &State,
+    settings: &m::Settings,
+    area: [f64; 4],
+    to_screen: &dyn Fn(f64, f64) -> [f32; 2],
+    shape: &m::Shape,
+) {
+    let outline = shape.polygon();
+    let mut fill = |corners: [[f32; 2]; 4], argb: u32| {
+        let poly = corners.map(|c| [c[0], c[1], 0.0, 0.0]);
+        for q in shape.cut(&poly, &outline) {
+            game.native_quad(batch, q.map(|v| [v[0], v[1]]), argb);
+        }
+    };
+    let (cx0, cz0) = ((area[0] / 16.0).floor() as i32, (area[1] / 16.0).floor() as i32);
+    let (cx1, cz1) = ((area[2] / 16.0).floor() as i32, (area[3] / 16.0).floor() as i32);
+    let rect = |x0: f64, z0: f64, x1: f64, z1: f64| [to_screen(x0, z0), to_screen(x1, z0), to_screen(x1, z1), to_screen(x0, z1)];
+    if settings.light_overlay {
+        for (&(cx, cz), rows) in &s.light_mask {
+            for (lz, row) in rows.iter().enumerate() {
+                for (x, n) in m::runs(*row) {
+                    let (x0, z0) = (f64::from(cx * 16 + x), f64::from(cz * 16 + lz as i32));
+                    fill(rect(x0, z0, x0 + f64::from(n), z0 + 1.0), 0x70FF_3030);
+                }
+            }
+        }
+    }
+    if settings.mini_slime
+        && let Some(seed) = game.native_world_seed()
+    {
+        for cz in cz0..=cz1 {
+            for cx in cx0..=cx1 {
+                if m::slime_chunk(seed, cx, cz) {
+                    let (x0, z0) = (f64::from(cx * 16), f64::from(cz * 16));
+                    fill(rect(x0, z0, x0 + 16.0, z0 + 16.0), 0x5030_E040);
+                }
+            }
+        }
+    }
+    if settings.mini_grid {
+        let (z0, z1) = (f64::from(cz0 * 16), f64::from((cz1 + 1) * 16));
+        let (x0, x1) = (f64::from(cx0 * 16), f64::from((cx1 + 1) * 16));
+        for cx in cx0..=cx1 + 1 {
+            let x = f64::from(cx * 16);
+            fill(m::line_quad(to_screen(x, z0), to_screen(x, z1), 1.0), 0x50FF_FFFF);
+        }
+        for cz in cz0..=cz1 + 1 {
+            let z = f64::from(cz * 16);
+            fill(m::line_quad(to_screen(x0, z), to_screen(x1, z), 1.0), 0x50FF_FFFF);
+        }
+    }
 }
 
 /// A source's epoch for its cells: they are drawn again when it changes (a live layer's, with
@@ -1345,7 +1486,9 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
         game.send_command(&command);
         return;
     }
+    let held = keys::held(game, keys::ENLARGE);
     with(|s| {
+        s.big = settings.minimap && if settings.enlarge_toggle { s.big_toggled } else { held && game.native_playing() };
         follow_colours(game, s);
         follow_world(game, s);
         follow_spawn(game, s);
@@ -1366,6 +1509,7 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
             }
         } else if settings.minimap && !game.ui.hide_gui {
             follow_cave(game, s, &settings);
+            follow_light(game, s, &settings);
         }
         draw_wanted_cells(game, s, &settings, if open { CELL_BUDGET_OPEN } else { CELL_BUDGET });
         s.icons.follow(game);
@@ -1567,6 +1711,23 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
             s.cave = 1;
             s.cave_start = head_block(game);
             s.cave_start.map(|y| format!("Cave view: Manual from Y {y}"))
+        } else if keys::pressed(game, keys::RADAR, key, true) {
+            s.radar = !s.radar;
+            Some(format!("Entities on the minimap: {}", if s.radar { "Shown" } else { "Hidden" }))
+        } else if keys::pressed(game, keys::GRID, key, true) {
+            s.mini_grid = !s.mini_grid;
+            Some(format!("Minimap chunk grid: {}", if s.mini_grid { "On" } else { "Off" }))
+        } else if keys::pressed(game, keys::SLIME, key, true) {
+            s.mini_slime = !s.mini_slime;
+            Some(format!("Minimap slime chunks: {}", if s.mini_slime { "On" } else { "Off" }))
+        } else if keys::pressed(game, keys::LIGHT, key, true) {
+            s.light_overlay = !s.light_overlay;
+            Some(format!("Light overlay: {}", if s.light_overlay { "On" } else { "Off" }))
+        } else if keys::pressed(game, keys::ENLARGE, key, true) {
+            if s.enlarge_toggle {
+                with(|st| st.big_toggled = !st.big_toggled);
+            }
+            None
         } else if keys::pressed(game, keys::WAYPOINTS, key, true) {
             s.waypoints = !s.waypoints;
             Some(format!("Waypoints: {}", if s.waypoints { "Shown" } else { "Hidden" }))
@@ -1628,10 +1789,17 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
         return;
     }
     let at = corner(s.corner);
-    if !game.native_corner_shown(at) {
+    if !with(|st| st.big) && !game.native_corner_shown(at) {
         return;
     }
-    let size = m::SIZES[s.size];
+    let big = with(|st| st.big);
+    // Enlarged: centred, most of the screen, north up unless it keeps turning.
+    let mut s = s;
+    if big {
+        s.rotate &= s.enlarge_rotate;
+    }
+    let s = s;
+    let size = mini_size(game, &s, big);
     let bpp = mini_bpp(&s, with(|st| st.cave_view.is_some()));
     let block = block_of(p);
     let mut lines: Vec<String> = Vec::new();
@@ -1666,11 +1834,16 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
     let pad = 3.0;
     let info_h = lines.len() as f32 * 10.0;
     let (ox, oy) = (m::OFFSETS[s.offset_x.min(m::OFFSETS.len() - 1)], m::OFFSETS[s.offset_y.min(m::OFFSETS.len() - 1)]);
-    let (x, y0) = corners.place(at, size + pad * 2.0 + ox, size + pad * 2.0 + oy + info_h + if lines.is_empty() { 0.0 } else { 1.0 });
-    let left = matches!(at, Corner::TopLeft | Corner::BottomLeft);
-    let x = x + pad + if left { ox } else { 0.0 };
-    let y0 = y0 + if matches!(at, Corner::TopLeft | Corner::TopRight) { oy } else { 0.0 };
-    let top = matches!(at, Corner::TopLeft | Corner::TopRight);
+    let (x, y0, top) = if big {
+        let (w, h) = (batch.width, batch.height);
+        ((w - size) / 2.0, ((h - size - info_h) / 2.0 - pad).max(0.0), true)
+    } else {
+        let (x, y0) = corners.place(at, size + pad * 2.0 + ox, size + pad * 2.0 + oy + info_h + if lines.is_empty() { 0.0 } else { 1.0 });
+        let left = matches!(at, Corner::TopLeft | Corner::BottomLeft);
+        let x = x + pad + if left { ox } else { 0.0 };
+        let y0 = y0 + if matches!(at, Corner::TopLeft | Corner::TopRight) { oy } else { 0.0 };
+        (x, y0, matches!(at, Corner::TopLeft | Corner::TopRight))
+    };
     let (map_y, text_y) = if top { (y0 + pad, y0 + size + pad * 2.0 + 1.0) } else { (y0 + info_h + 1.0 + pad, y0) };
     let alpha = m::OPACITY[s.opacity];
     let (cx, cy) = (x + size / 2.0, map_y + size / 2.0);
@@ -1883,12 +2056,14 @@ fn draw_entities(
     radius: f32,
     to_map: &dyn Fn(f64, f64) -> (f32, f32),
 ) {
+    if !s.radar {
+        return;
+    }
     let size = m::ICON_SIZES[s.icon_size.min(m::ICON_SIZES.len() - 1)];
     let range = s.max_range();
+    let max_dots = m::DOT_LIMITS[s.dot_limit.min(m::DOT_LIMITS.len() - 1)];
     let t = game.clock.fraction();
     let near = |x: f64, z: f64| range.is_none_or(|r| (x - p[0]).powi(2) + (z - p[2]).powi(2) <= r * r);
-    // Above or below you by more than a few blocks: fainter.
-    let alpha = |y: f64| if (y - p[1]).abs() > 8.0 { 95u8 } else { 255 };
     // Dots, or (holding the player list key, or always) faces as faint badges: players with
     // their names, mobs without (unless "Show mob names").
     let details = s.always_details || (s.tab_details && keys::vanilla_held(game, "key.playerlist"));
@@ -1901,7 +2076,7 @@ fn draw_entities(
                 let at = e.previous.lerp(e.position, t);
                 (e.stack.item.to_string(), [at.x, at.y, at.z])
             })
-            .filter(|(_, at)| near(at[0], at[2]))
+            .filter(|(_, at)| near(at[0], at[2]) && s.depth_look(at[1] - p[1]).is_some())
             .take(100)
             .collect();
         for (item, at) in items {
@@ -1921,7 +2096,7 @@ fn draw_entities(
     // (kind, texture, model, place, name)
     let mut list: Vec<(m::DotKind, String, String, [f64; 3], Option<String>)> = Vec::new();
     for mob in game.mobs.iter() {
-        if list.len() >= MAX_DOTS {
+        if list.len() >= max_dots {
             break;
         }
         if mob.removed || mob.invisible {
@@ -1932,7 +2107,7 @@ fn draw_entities(
             continue;
         }
         let at = mob.previous.lerp(mob.position, t);
-        if !near(at.x, at.z) {
+        if !near(at.x, at.z) || s.depth_look(at.y - p[1]).is_none() {
             continue;
         }
         // Dots need no texture or name: those are only looked up for the detail view.
@@ -1958,11 +2133,14 @@ fn draw_entities(
             continue;
         }
         let pos = [c[0] + u, c[1] + v];
-        let a = alpha(at[1]);
+        let (a, mark) = s.depth_look(at[1] - p[1]).unwrap_or((255, None));
         let rgb = s.dot_rgb(kind);
         if !details {
             let r = if kind == m::DotKind::Player { 1.6 } else { 1.1 };
             draw_dot(game, batch, pos, r, u32::from(a) << 24 | rgb);
+            if let Some(up) = mark {
+                draw_depth_mark(game, batch, pos, r + 1.0, up, rgb);
+            }
             continue;
         }
         let icon = with(|st| st.icons.get(game, &texture, &model, &mut budget));
@@ -1977,7 +2155,13 @@ fn draw_entities(
             Some(icon) => draw_icon(game, batch, icon, pos, size, (u32::from(a) * 0xD8 / 255) as u8),
             None => draw_dot(game, batch, pos, half * 0.6, u32::from(a) << 24 | rgb),
         }
-        let text = name.unwrap_or_default();
+        if let Some(up) = mark {
+            draw_depth_mark(game, batch, pos, half + 2.5, up, rgb);
+        }
+        let mut text = name.unwrap_or_default();
+        if s.entity_y {
+            text = format!("{text} Y {}", at[1].floor() as i32).trim().to_owned();
+        }
         if !text.is_empty() {
             let w = game.native_text_width(&text) * label;
             let (tx, ty) = ((bx + size + 5.0).round(), (pos[1] - 4.0 * label).round());
@@ -1987,6 +2171,14 @@ fn draw_entities(
             batch.scale_since(start, tx, ty, label, label);
         }
     }
+}
+
+/// A small tick over (above you) or under (below you) an entity's dot or face.
+fn draw_depth_mark(game: &Game<'_>, batch: &mut HudBatch, at: [f32; 2], gap: f32, up: bool, rgb: u32) {
+    let (x, k) = (at[0], if up { -1.0 } else { 1.0 });
+    let y = at[1] + k * gap;
+    let tip = [x, y + k * 2.0];
+    game.native_quad(batch, [tip, [x + 2.0, y], [x, y], [x - 2.0, y]], 0xFF00_0000 | rgb);
 }
 
 /// The minimap's ground: its shadow, the unexplored background, the terrain cells turned and
@@ -2037,6 +2229,7 @@ fn draw_minimap_terrain(
         let source = if st.cave.is_some() && st.cave_view.is_some() { 1 } else { 0 };
         let shape = if round { m::Shape::Circle(c, half) } else { m::Shape::Rect([c[0] - half, c[1] - half, size, size]) };
         draw_cells(game, st, batch, source, lod, area, &to_screen, &shape, alpha);
+        draw_overlays(game, batch, st, settings, area, &to_screen, &shape);
     });
     // The frame: a dark rim with a faint light edge inside it.
     if settings.frame == 2 {
@@ -2676,6 +2869,41 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
             game.native_text(batch, &wp.name, [x - tw / 2.0, y - 16.0], wp.rgb(), true);
         }
     }
+    // Your recent path, as small dots (fewer when zoomed far out).
+    if settings.footsteps
+        && let Some(e) = s.explored.as_ref()
+    {
+        let every = (view.bpp() / 2.0).ceil().max(1.0) as usize;
+        for p in e.steps.points.iter().step_by(every) {
+            let [x, y] = view.screen_of(rect, f64::from(p[0]) + 0.5, f64::from(p[1]) + 0.5);
+            if inside(rect, [x, y]) {
+                game.native_fill(batch, [x - 1.0, y - 1.0, 2.0, 2.0], 0xB0E8_D890);
+            }
+        }
+    }
+    // Other players: dots in their colour, their names when pointed at or zoomed in.
+    if settings.map_players {
+        let t = game.clock.fraction();
+        let rgb = settings.dot_rgb(m::DotKind::Player);
+        for mob in game.mobs.iter() {
+            if mob.removed || m::dot_kind(&mob.kind.id, &mob.kind.category) != m::DotKind::Player {
+                continue;
+            }
+            let at = mob.previous.lerp(mob.position, t);
+            let [x, y] = view.screen_of(rect, at.x, at.z);
+            if !inside(rect, [x, y]) {
+                continue;
+            }
+            draw_dot(game, batch, [x, y], 2.5, 0xFF00_0000 | rgb);
+            let hover = (mouse[0] - x).abs() <= 5.0 && (mouse[1] - y).abs() <= 5.0;
+            if (hover || view.bpp() <= 1.0)
+                && let Some(name) = game.remote_player_name(mob.id)
+            {
+                let tw = game.native_text_width(name);
+                game.native_text(batch, name, [x - tw / 2.0, y - 13.0], rgb, true);
+            }
+        }
+    }
     // You: an arrow the way you face.
     if let Some(p) = player_pos(game) {
         let [x, y] = view.screen_of(rect, p[0], p[2]);
@@ -2698,7 +2926,7 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
         }
         button(game, batch, r, &tool_label(tool, s), mouse);
     }
-    let hint = "Drag or WASD to move, wheel to zoom, [ ] cave layers, click to add a waypoint";
+    let hint = "Drag or WASD to move, wheel to zoom, [ ] cave layers, click: waypoint, right-click: menu";
     let bottom = match &s.notice {
         Some((text, until)) if Instant::now() < *until => text.clone(),
         _ if inside(rect, mouse) && settings.map_cursor => {
@@ -2717,6 +2945,23 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
         _ => hint.to_owned(),
     };
     game.native_text(batch, &bottom, [6.0, h - BOTTOM + 3.0], 0xC0C0C0, false);
+    // The right-click menu, over everything.
+    if let Some(menu) = s.screen.menu.clone() {
+        let items = menu_items(game, s, &menu);
+        let rects = m::menu_rects(menu.at, items.len(), w, h);
+        if let (Some(first), Some(last)) = (rects.first(), rects.last()) {
+            game.native_fill(batch, [first[0] - 1.0, first[1] - 1.0, first[2] + 2.0, last[1] + last[3] - first[1] + 2.0], 0xFF60_6068);
+        }
+        for (item, r) in items.iter().zip(&rects) {
+            game.native_fill(batch, *r, if inside(*r, mouse) { 0xF040_4870 } else { 0xF018_181C });
+            game.native_text(batch, item.label(), [r[0] + 4.0, r[1] + 3.0], 0xFFFFFF, false);
+        }
+        let b = menu.block;
+        let head = format!("{} {} {}", b[0], b[1], b[2]);
+        if let Some(r) = rects.first() {
+            game.native_text(batch, &head, [r[0], r[1] - 10.0], 0xC0C0C0, true);
+        }
+    }
 }
 
 fn draw_list(game: &Game<'_>, batch: &mut HudBatch, s: &State, settings: &m::Settings, scroll: usize, mouse: [f32; 2]) {
@@ -2924,9 +3169,11 @@ fn settings_layout(w: f32, h: f32, n: usize) -> (Vec<[f32; 4]>, Vec<[f32; 4]>, [
     let pages = m::PAGES.len();
     let tw = (pw - (pages - 1) as f32 * 2.0) / pages as f32;
     let tabs = (0..pages).map(|i| [x + i as f32 * (tw + 2.0), 30.0, tw, 18.0]).collect();
-    let col = (pw - 4.0) / 2.0;
+    // Two columns, or three when two would run off the screen.
+    let cols = if 56.0 + n.div_ceil(2) as f32 * 22.0 > h - 30.0 { 3 } else { 2 };
+    let col = (pw - 4.0 * (cols - 1) as f32) / cols as f32;
     let rows = (0..n)
-        .map(|i| [x + (i % 2) as f32 * (col + 4.0), 56.0 + (i / 2) as f32 * 22.0, col, 20.0])
+        .map(|i| [x + (i % cols) as f32 * (col + 4.0), 56.0 + (i / cols) as f32 * 22.0, col, 20.0])
         .filter(|r| r[1] + r[3] < h - 30.0)
         .collect();
     (tabs, rows, [x + pw / 2.0 - 50.0, h - 26.0, 100.0, 20.0])
@@ -3034,7 +3281,29 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
     let dim = game.dim.id();
     let mut settings = settings(game);
     let mut settings_changed = false;
+    let fallback_y = here.map_or(64, |p| p[1]);
     with(|s| match s.screen.page.clone() {
+        // The right-click menu takes the next click, on a row or anywhere (closing it).
+        m::Page::Map if s.screen.menu.is_some() => {
+            let Some(menu) = s.screen.menu.take() else {
+                return;
+            };
+            if button == 0 {
+                let items = menu_items(game, s, &menu);
+                let rects = m::menu_rects(menu.at, items.len(), w, h);
+                if let Some(k) = rects.iter().position(|r| inside(*r, mouse)) {
+                    menu_pick(game, s, &menu, items[k], &settings);
+                }
+            }
+        }
+        m::Page::Map if button == 1 => {
+            let rect = map_rect(w, h);
+            if inside(rect, mouse) {
+                let waypoint = waypoint_at(s, dim, settings.convert, rect, mouse);
+                let block = spot_at(game, s, rect, mouse, fallback_y);
+                s.screen.menu = Some(m::Menu { at: mouse, block, waypoint });
+            }
+        }
         m::Page::Map if button == 0 => {
             let slime = game.native_world_seed().is_some();
             let hit = tools(w, s.subworlds.is_some(), slime).into_iter().find(|(_, r)| inside(*r, mouse));
@@ -3376,19 +3645,9 @@ pub(super) fn on_release(game: &Game<'_>, screen: &NativeScreenView<'_>, button:
         if s.screen.page != m::Page::Map || !s.screen.release() || !inside(rect, mouse) {
             return;
         }
-        let view = s.screen.view;
-        let hit = s.book.list.iter().position(|wp| {
-            let Some(c) = wp.place_in(dim, convert) else {
-                return false;
-            };
-            let [x, y] = view.screen_of(rect, c[0], c[2]);
-            on_map(s, wp) && (mouse[0] - x).abs() <= 6.0 && (mouse[1] - y).abs() <= 6.0
-        });
+        let hit = waypoint_at(s, dim, convert, rect, mouse);
         let index = hit.unwrap_or_else(|| {
-            let (x, z) = view.world_at(rect, mouse);
-            let (x, z) = (x.floor() as i32, z.floor() as i32);
-            let column = map_column(s, map_source(game, s), x, z).filter(|c| c.kind == m::FLOOR);
-            let y = column.map_or(fallback_y, |c| i32::from(c.height) + 1);
+            let [x, y, z] = spot_at(game, s, rect, mouse, fallback_y);
             let i = s.book.add([x, y, z], dim, now_secs());
             s.book.style_new(i, set.wp_colour, set.wp_symbol);
             save_book(s);
@@ -3396,6 +3655,58 @@ pub(super) fn on_release(game: &Game<'_>, screen: &NativeScreenView<'_>, button:
         });
         edit(s, index);
     });
+}
+
+/// The waypoint drawn under GUI point `mouse` of the world map.
+fn waypoint_at(s: &State, dim: &str, convert: bool, rect: [f32; 4], mouse: [f32; 2]) -> Option<usize> {
+    let view = s.screen.view;
+    s.book.list.iter().position(|wp| {
+        let Some(c) = wp.place_in(dim, convert) else {
+            return false;
+        };
+        let [x, y] = view.screen_of(rect, c[0], c[2]);
+        on_map(s, wp) && (mouse[0] - x).abs() <= 6.0 && (mouse[1] - y).abs() <= 6.0
+    })
+}
+
+/// The block to stand on at GUI point `mouse` of the world map: over the floor the map shows
+/// there, else at `fallback_y`.
+fn spot_at(game: &Game<'_>, s: &State, rect: [f32; 4], mouse: [f32; 2], fallback_y: i32) -> [i32; 3] {
+    let (x, z) = s.screen.view.world_at(rect, mouse);
+    let (x, z) = (x.floor() as i32, z.floor() as i32);
+    let column = map_column(s, map_source(game, s), x, z).filter(|c| c.kind == m::FLOOR);
+    [x, column.map_or(fallback_y, |c| i32::from(c.height) + 1), z]
+}
+
+/// The right-click menu's rows now.
+fn menu_items(game: &Game<'_>, s: &State, menu: &m::Menu) -> Vec<m::MenuItem> {
+    let here = menu.waypoint.and_then(|i| s.book.list.get(i)).is_some_and(|w| w.dim == game.dim.id());
+    m::menu_items(menu, may_teleport(game), here)
+}
+
+/// A row of the right-click menu chosen.
+fn menu_pick(game: &Game<'_>, s: &mut State, menu: &m::Menu, item: m::MenuItem, settings: &m::Settings) {
+    let dim = game.dim.id();
+    match (item, menu.waypoint) {
+        (m::MenuItem::WaypointHere, _) => {
+            let i = s.book.add(menu.block, dim, now_secs());
+            s.book.style_new(i, settings.wp_colour, settings.wp_symbol);
+            save_book(s);
+            edit(s, i);
+        }
+        (m::MenuItem::TeleportHere, _) => s.pending_command = Some(m::tp_command(menu.block)),
+        (m::MenuItem::Edit, Some(i)) if i < s.book.list.len() => edit(s, i),
+        (m::MenuItem::Hide, Some(i)) if i < s.book.list.len() => {
+            s.book.list[i].shown = false;
+            save_book(s);
+            notice(s, format!("Hid {} (the list shows it again)", s.book.list[i].name));
+        }
+        (m::MenuItem::Delete, Some(i)) if i < s.book.list.len() => s.screen.page = m::Page::Confirm { delete: vec![i] },
+        (m::MenuItem::TeleportTo, Some(i)) if i < s.book.list.len() => {
+            s.pending_command = Some(m::tp_command(s.book.list[i].pos));
+        }
+        _ => {}
+    }
 }
 
 /// `native_screen_mouse_dragged_pre_v2`: a drag on the map moves it.
@@ -3485,6 +3796,10 @@ pub(super) fn on_key_pressed(game: &Game<'_>, screen: &NativeScreenView<'_>, key
             }
             "key.keyboard.escape" if matches!(s.screen.page, m::Page::Edit { .. }) => {
                 finish_edit(s, m::Page::List { scroll: 0 });
+                *canceled = true;
+            }
+            "key.keyboard.escape" if s.screen.menu.is_some() => {
+                s.screen.menu = None;
                 *canceled = true;
             }
             "key.keyboard.escape" if matches!(s.screen.page, m::Page::Confirm { .. }) => {

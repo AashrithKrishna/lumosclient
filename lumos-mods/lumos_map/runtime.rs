@@ -24,7 +24,7 @@ pub const SCREEN: &str = "mod";
 // ---------------------------------------------------------------- settings
 
 /// The settings' pages, on the mod's page in Options > Mods and on the map's settings screen.
-pub const PAGES: [&str; 7] = ["General", "Minimap", "Caves", "World map", "Entities", "Waypoints", "Keys"];
+pub const PAGES: [&str; 8] = ["General", "Minimap", "Caves", "World map", "Entities", "Waypoints", "Extras", "Keys"];
 /// The page listing the keys (it has no settings of its own).
 pub const KEYS_PAGE: usize = PAGES.len() - 1;
 pub const CORNERS: [&str; 4] = ["Top left", "Top right", "Bottom left", "Bottom right"];
@@ -33,6 +33,10 @@ pub const SIZES: [f32; 8] = [64.0, 80.0, 96.0, 112.0, 128.0, 160.0, 192.0, 224.0
 /// The minimap's zoom: blocks per GUI pixel, in steps of a square root of two. The map's own
 /// texture is a block a texel, drawn with crisp (nearest) pixels at any of these.
 pub const ZOOMS: [f32; 9] = [0.25, 0.35, 0.5, 0.71, 1.0, 1.41, 2.0, 2.83, 4.0];
+/// How the enlarged minimap (held key) zooms: as the minimap, or out by 2 or 4.
+pub const ENLARGE_ZOOMS: [&str; 3] = ["Same", "Out x2", "Out x4"];
+/// The light overlay marks floors whose block light is at most this (mobs spawn at 0).
+pub const LIGHT_MAXES: [usize; 4] = [0, 3, 7, 11];
 pub const OPACITY: [u8; 5] = [255, 217, 178, 140, 102];
 pub const FRAMES: [&str; 3] = ["Rim and shadow", "Thin rim", "None"];
 /// The minimap's unexplored ground: name and 0xAARRGGBB.
@@ -68,6 +72,12 @@ pub const SORTS: [&str; 3] = ["Name", "Distance", "Newest"];
 pub const ICON_SIZES: [f32; 5] = [6.0, 8.0, 10.0, 12.0, 16.0];
 /// How far from you entities show on the minimap: to its edge, or within so many blocks.
 pub const RANGES: [&str; 6] = ["Map edge", "16", "32", "64", "128", "256"];
+/// Entities this far above or below you (blocks) fade; Auto is 8.
+pub const DEPTH_FADES: [&str; 5] = ["Auto", "4", "8", "16", "32"];
+/// Entities farther above or below you than this are left off.
+pub const HEIGHT_LIMITS: [&str; 4] = ["Off", "16", "32", "64"];
+/// The most entities drawn.
+pub const DOT_LIMITS: [usize; 4] = [100, 200, 400, 1000];
 /// When a waypoint marker shows its name.
 pub const WP_NAMES: [&str; 3] = ["Looked at", "Always", "Never"];
 pub const WP_SHAPES: [&str; 2] = ["Diamond", "Square"];
@@ -122,12 +132,26 @@ pub struct Settings {
     pub rotate: bool,
     /// Index in `OPACITY`.
     pub opacity: usize,
+    /// The enlarge key switches the big minimap on and off (else: big while held).
+    pub enlarge_toggle: bool,
+    /// Index in `ENLARGE_ZOOMS`.
+    pub enlarge_zoom: usize,
+    /// The big minimap turns with you as the small one does (off: north up).
+    pub enlarge_rotate: bool,
     /// Index in `FRAMES`.
     pub frame: usize,
     /// Index in `BACKGROUNDS`: the ground not explored yet.
     pub background: usize,
     /// Index in `COMPASS`.
     pub compass: usize,
+    /// The chunk grid on the minimap.
+    pub mini_grid: bool,
+    /// Slime chunks on the minimap (where the seed is known).
+    pub mini_slime: bool,
+    /// The light overlay on the minimap: dark floors near you marked.
+    pub light_overlay: bool,
+    /// Index in `LIGHT_MAXES`.
+    pub light_max: usize,
     /// Info line: X Y Z.
     pub coords: bool,
     /// Info line: the biome.
@@ -154,6 +178,10 @@ pub struct Settings {
     pub map_follow: bool,
     /// Explored ground outside the loaded chunks is dimmed.
     pub map_shade: bool,
+    /// Your recent path on the world map.
+    pub footsteps: bool,
+    /// Other players on the world map.
+    pub map_players: bool,
     /// Players on the minimap.
     pub players: bool,
     /// Players' names in the detail view (kept as `names`, as 3.0 stored it).
@@ -178,6 +206,18 @@ pub struct Settings {
     pub label_size: usize,
     /// Index in `RANGES`.
     pub range: usize,
+    /// Entities on the minimap at all (the radar key turns them off and on).
+    pub radar: bool,
+    /// Index in `DEPTH_FADES`.
+    pub depth_fade: usize,
+    /// Index in `HEIGHT_LIMITS`.
+    pub height_limit: usize,
+    /// A small up or down tick on entities above or below the fade distance.
+    pub show_depth: bool,
+    /// Entities' Y in their labels (the detail view).
+    pub entity_y: bool,
+    /// Index in `DOT_LIMITS`.
+    pub dot_limit: usize,
     /// Dot colour, index in `COLOURS`.
     pub player_colour: usize,
     /// Dot colour, index in `COLOURS`.
@@ -248,9 +288,16 @@ impl Default for Settings {
             round: false,
             rotate: true,
             opacity: 0,
+            enlarge_toggle: false,
+            enlarge_zoom: 1,
+            enlarge_rotate: true,
             frame: 0,
             background: 0,
             compass: 2,
+            mini_grid: false,
+            mini_slime: false,
+            light_overlay: false,
+            light_max: 2,
             coords: true,
             biome: true,
             facing: false,
@@ -264,6 +311,8 @@ impl Default for Settings {
             map_cursor: true,
             map_follow: false,
             map_shade: true,
+            footsteps: true,
+            map_players: true,
             players: true,
             names: true,
             mob_names: false,
@@ -276,6 +325,12 @@ impl Default for Settings {
             icon_size: 1,
             label_size: 1,
             range: 0,
+            radar: true,
+            depth_fade: 0,
+            height_limit: 0,
+            show_depth: true,
+            entity_y: false,
+            dot_limit: 2,
             player_colour: 8,
             hostile_colour: 0,
             passive_colour: 3,
@@ -432,9 +487,16 @@ settings_table! {
     round: flag, 1, "Round";
     rotate: flag, 1, "Turns with you";
     opacity: index(OPACITY), 1, "Opacity";
+    enlarge_toggle: flag, 6, "Enlarge key toggles";
+    enlarge_zoom: index(ENLARGE_ZOOMS), 6, "Enlarged zoom";
+    enlarge_rotate: flag, 6, "Enlarged turns with you";
     frame: index(FRAMES), 1, "Frame";
     background: index(BACKGROUNDS), 1, "Unexplored ground";
     compass: index(COMPASS), 1, "Compass letters";
+    mini_grid: flag, 6, "Chunk grid";
+    mini_slime: flag, 6, "Slime chunks";
+    light_overlay: flag, 6, "Light overlay (dark floors)";
+    light_max: index(LIGHT_MAXES), 6, "Light overlay: block light up to";
     coords: flag, 1, "Coordinates";
     biome: flag, 1, "Biome";
     facing: flag, 1, "Facing";
@@ -448,6 +510,8 @@ settings_table! {
     map_cursor: flag, 3, "Cursor coordinates";
     map_follow: flag, 3, "Follow you when opened";
     map_shade: flag, 3, "Dim ground not loaded now";
+    footsteps: flag, 3, "Footsteps (your recent path)";
+    map_players: flag, 3, "Other players";
     players: flag, 4, "Players";
     names: flag, 4, "Show player names";
     mob_names: flag, 4, "Show mob names";
@@ -460,6 +524,12 @@ settings_table! {
     icon_size: index(ICON_SIZES), 4, "Entity icon size";
     label_size: index(LABEL_SIZES), 4, "Name label size";
     range: index(RANGES), 4, "Entities within (blocks)";
+    radar: flag, 4, "Entities shown";
+    depth_fade: index(DEPTH_FADES), 4, "Fade above/below (blocks)";
+    height_limit: index(HEIGHT_LIMITS), 4, "Hide above/below (blocks)";
+    show_depth: flag, 4, "Above/below marks";
+    entity_y: flag, 4, "Y in labels";
+    dot_limit: index(DOT_LIMITS), 4, "Most entities drawn";
     player_colour: index(COLOURS), 4, "Player dots";
     hostile_colour: index(COLOURS), 4, "Hostile mob dots";
     passive_colour: index(COLOURS), 4, "Passive mob dots";
@@ -524,6 +594,21 @@ impl Settings {
         COLOURS[i.min(COLOURS.len() - 1)].1
     }
 
+    /// How an entity `dy` blocks above (or below) you is drawn: None when it is past the height
+    /// limit, else its opacity and its mark (Some(true) above, Some(false) below the fade
+    /// distance, None within it or with marks off).
+    pub fn depth_look(&self, dy: f64) -> Option<(u8, Option<bool>)> {
+        let limit: Option<f64> = HEIGHT_LIMITS.get(self.height_limit).and_then(|v| v.parse().ok());
+        if limit.is_some_and(|l| dy.abs() > l) {
+            return None;
+        }
+        let fade: f64 = DEPTH_FADES.get(self.depth_fade).and_then(|v| v.parse().ok()).unwrap_or(8.0);
+        if dy.abs() <= fade {
+            return Some((255, None));
+        }
+        Some((95, self.show_depth.then_some(dy > 0.0)))
+    }
+
     /// The farthest an entity shows, in blocks (None: the map's edge).
     pub fn max_range(&self) -> Option<f64> {
         RANGES.get(self.range).and_then(|r| r.parse().ok())
@@ -548,6 +633,13 @@ impl Settings {
     pub fn zoom_now(&self, cave: bool) -> usize {
         let z = self.zoom.min(ZOOMS.len() - 1);
         if cave { z.saturating_sub(self.cave_zoom.min(2)) } else { z }
+    }
+
+    /// The minimap's blocks per GUI pixel now: its zoom (stepped in in the cave view), times
+    /// the enlarged map's zoom out when it is big.
+    pub fn bpp_now(&self, cave: bool, big: bool) -> f32 {
+        let out = if big { [1.0, 2.0, 4.0][self.enlarge_zoom.min(2)] } else { 1.0 };
+        ZOOMS[self.zoom_now(cave)] * out
     }
 
     /// One zoom step in (`in_`) or out; whether it changed.
@@ -1682,6 +1774,33 @@ pub fn ring(c: [f32; 2], r0: f32, r1: f32) -> Vec<[[f32; 2]; 4]> {
 }
 
 // ---------------------------------------------------------------- the minimap
+
+/// The runs of set bits in a row of 16 columns (bit `x` set: column `x` marked), as (first,
+/// length): one quad each instead of one a block.
+pub fn runs(row: u16) -> Vec<(i32, i32)> {
+    let mut out = Vec::new();
+    let mut x = 0;
+    while x < 16 {
+        if row >> x & 1 == 1 {
+            let start = x;
+            while x < 16 && row >> x & 1 == 1 {
+                x += 1;
+            }
+            out.push((start, x - start));
+        } else {
+            x += 1;
+        }
+    }
+    out
+}
+
+/// A line from `a` to `b` as a quad `width` across.
+pub fn line_quad(a: [f32; 2], b: [f32; 2], width: f32) -> [[f32; 2]; 4] {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+    let (nx, ny) = (-dy / len * width / 2.0, dx / len * width / 2.0);
+    [[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]]
+}
 
 /// Where a world offset `dx, dz` (blocks from the player) is on the minimap, in pixels from its
 /// centre (x right, y down), turned with `yaw` or north up, at `bpp` blocks per pixel.
@@ -2923,6 +3042,121 @@ pub struct MapScreen {
     pub list_view: usize,
     /// Waypoints ticked in the list for the bulk buttons.
     pub selected: Vec<usize>,
+    /// The right-click menu, while it is open.
+    pub menu: Option<Menu>,
+}
+
+/// The world map's right-click menu: where it was opened (GUI), the block there and the
+/// waypoint under the pointer, if any.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Menu {
+    pub at: [f32; 2],
+    pub block: [i32; 3],
+    pub waypoint: Option<usize>,
+}
+
+/// A row of the right-click menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuItem {
+    WaypointHere,
+    TeleportHere,
+    Edit,
+    Hide,
+    Delete,
+    TeleportTo,
+    Close,
+}
+
+impl MenuItem {
+    pub fn label(self) -> &'static str {
+        match self {
+            MenuItem::WaypointHere => "Waypoint here",
+            MenuItem::TeleportHere => "Teleport here",
+            MenuItem::Edit => "Edit waypoint",
+            MenuItem::Hide => "Hide waypoint",
+            MenuItem::Delete => "Delete waypoint",
+            MenuItem::TeleportTo => "Teleport to it",
+            MenuItem::Close => "Close",
+        }
+    }
+}
+
+/// The rows of `menu`: on a waypoint its own, else the spot's; the teleports only where the
+/// player may use /tp (and a waypoint only in this dimension).
+pub fn menu_items(menu: &Menu, may_teleport: bool, waypoint_here: bool) -> Vec<MenuItem> {
+    let mut out = Vec::new();
+    if menu.waypoint.is_some() {
+        out.extend([MenuItem::Edit, MenuItem::Hide, MenuItem::Delete]);
+        if may_teleport && waypoint_here {
+            out.push(MenuItem::TeleportTo);
+        }
+    } else {
+        out.push(MenuItem::WaypointHere);
+        if may_teleport {
+            out.push(MenuItem::TeleportHere);
+        }
+    }
+    out.push(MenuItem::Close);
+    out
+}
+
+/// The menu's rows on screen: each `[x, y, w, h]`, kept inside a `w` x `h` screen.
+pub fn menu_rects(at: [f32; 2], rows: usize, w: f32, h: f32) -> Vec<[f32; 4]> {
+    let (rw, rh) = (110.0, 14.0);
+    let x = at[0].min(w - rw - 2.0).max(0.0);
+    let y = at[1].min(h - rh * rows as f32 - 2.0).max(0.0);
+    (0..rows).map(|i| [x, y + i as f32 * rh, rw, rh]).collect()
+}
+
+/// The teleport command to block `b`: onto its top, in its middle.
+pub fn tp_command(b: [i32; 3]) -> String {
+    format!("tp @s {} {} {}", f64::from(b[0]) + 0.5, b[1], f64::from(b[2]) + 0.5)
+}
+
+// ---------------------------------------------------------------- footsteps
+
+/// Your recent path in a dimension: a point every 2 blocks moved, the last `FOOTSTEPS` kept.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Footsteps {
+    pub points: std::collections::VecDeque<[i32; 2]>,
+}
+
+pub const FOOTSTEPS: usize = 1000;
+
+impl Footsteps {
+    /// You stand at `x, z`: a new point once 2 blocks from the last; whether one was added.
+    pub fn step(&mut self, x: f64, z: f64) -> bool {
+        let p = [x.floor() as i32, z.floor() as i32];
+        if let Some(last) = self.points.back()
+            && (p[0] - last[0]).pow(2) + (p[1] - last[1]).pow(2) < 4
+        {
+            return false;
+        }
+        self.points.push_back(p);
+        while self.points.len() > FOOTSTEPS {
+            self.points.pop_front();
+        }
+        true
+    }
+
+    /// The file: one `x z` a line, oldest first.
+    pub fn to_text(&self) -> String {
+        self.points.iter().map(|p| format!("{} {}\n", p[0], p[1])).collect()
+    }
+
+    pub fn from_text(text: &str) -> Self {
+        let mut out = Footsteps::default();
+        for l in text.lines() {
+            let mut it = l.split_whitespace().map(|v| v.parse::<i32>());
+            if let (Some(Ok(x)), Some(Ok(z))) = (it.next(), it.next()) {
+                out.points.push_back([x, z]);
+            }
+        }
+        while out.points.len() > FOOTSTEPS {
+            out.points.pop_front();
+        }
+        out
+    }
 }
 
 /// How far a press may move and still be a click, in GUI pixels.
@@ -3576,6 +3810,51 @@ mod tests {
     }
 
     #[test]
+    fn entities_fade_and_mark_by_height() {
+        let d = Settings::default();
+        assert_eq!(d.depth_look(3.0), Some((255, None)));
+        assert_eq!(d.depth_look(9.0), Some((95, Some(true))), "Auto fades past 8 blocks");
+        assert_eq!(d.depth_look(-40.0), Some((95, Some(false))));
+        let s = Settings { depth_fade: 1, height_limit: 1, show_depth: false, ..d };
+        assert_eq!(s.depth_look(5.0), Some((95, None)));
+        assert_eq!(s.depth_look(-17.0), None, "past the height limit: not drawn");
+        assert_eq!(DOT_LIMITS[d.dot_limit], 400);
+    }
+
+    #[test]
+    fn overlay_runs_and_lines() {
+        assert_eq!(runs(0), vec![]);
+        assert_eq!(runs(0xFFFF), vec![(0, 16)]);
+        assert_eq!(runs(0b1000_0000_0000_0110), vec![(1, 2), (15, 1)]);
+        let q = line_quad([0.0, 0.0], [10.0, 0.0], 2.0);
+        assert_eq!(q, [[0.0, 1.0], [10.0, 1.0], [10.0, -1.0], [0.0, -1.0]]);
+        assert_eq!(LIGHT_MAXES[Settings::default().light_max], 7);
+    }
+
+    #[test]
+    fn the_map_menu_and_footsteps() {
+        let spot = Menu { at: [5.0, 5.0], block: [10, 64, -3], waypoint: None };
+        assert_eq!(menu_items(&spot, false, false), vec![MenuItem::WaypointHere, MenuItem::Close]);
+        assert_eq!(menu_items(&spot, true, false), vec![MenuItem::WaypointHere, MenuItem::TeleportHere, MenuItem::Close]);
+        let wp = Menu { waypoint: Some(2), ..spot.clone() };
+        assert!(!menu_items(&wp, true, false).contains(&MenuItem::TeleportTo), "not across dimensions");
+        assert!(menu_items(&wp, true, true).contains(&MenuItem::TeleportTo));
+        assert!(!menu_items(&wp, false, true).contains(&MenuItem::TeleportTo), "no teleport without cheats");
+        let r = menu_rects([390.0, 290.0], 3, 400.0, 300.0);
+        assert!(r[0][0] + r[0][2] <= 400.0 && r[2][1] + r[2][3] <= 300.0, "kept on screen");
+        assert_eq!(tp_command([-3, 70, 8]), "tp @s -2.5 70 8.5");
+        let mut f = Footsteps::default();
+        assert!(f.step(0.5, 0.5));
+        assert!(!f.step(1.4, 0.9), "less than 2 blocks on");
+        assert!(f.step(2.5, 0.5));
+        for i in 0..2000 {
+            f.step(f64::from(i) * 3.0, 0.0);
+        }
+        assert_eq!(f.points.len(), FOOTSTEPS);
+        assert_eq!(Footsteps::from_text(&f.to_text()), f);
+    }
+
+    #[test]
     fn cave_layers_save_with_their_band_and_old_files_still_read() {
         assert_eq!((band_of(24), band_of(16), band_of(15), band_of(-1), band_of(-16), band_of(-17)), (1, 1, 0, -1, -1, -2));
         assert_eq!((cave_folder(Some(-2)).as_str(), cave_folder(None).as_str()), ("caves/-2", "caves/full"));
@@ -3643,6 +3922,10 @@ mod tests {
         let s = Settings { zoom: 4, cave_zoom: 2, ..Settings::default() };
         assert_eq!((s.zoom_now(false), s.zoom_now(true)), (4, 2));
         assert_eq!(Settings { zoom: 1, ..s }.zoom_now(true), 0);
+        // The enlarged minimap zooms out by its own setting on top.
+        assert_eq!(s.bpp_now(false, false), 1.0);
+        assert_eq!(s.bpp_now(true, true), 1.0, "x2 in the cave, x2 out enlarged");
+        assert_eq!(Settings { enlarge_zoom: 2, ..s }.bpp_now(false, true), 4.0);
     }
 
     #[test]

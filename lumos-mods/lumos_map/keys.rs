@@ -18,6 +18,14 @@ pub(super) const ZOOM_OUT: &str = "zoom_out";
 pub(super) const CAVE: &str = "cave";
 /// The cave view in Manual, starting where you are now.
 pub(super) const CAVE_HERE: &str = "cave_here";
+/// Enlarges the minimap while held (or on and off, with "Enlarge key toggles").
+pub(super) const ENLARGE: &str = "enlarge";
+/// The minimap's overlays on and off: chunk grid, slime chunks, light overlay.
+pub(super) const GRID: &str = "grid";
+pub(super) const SLIME: &str = "slime";
+pub(super) const LIGHT: &str = "light_overlay";
+/// Entities on the minimap on and off.
+pub(super) const RADAR: &str = "radar";
 /// Shows or hides the minimap.
 pub(super) const MINIMAP: &str = "minimap";
 /// Shows or hides every waypoint.
@@ -28,7 +36,7 @@ pub(super) const WAYPOINT_LIST: &str = "waypoint_list";
 pub(super) const SETTINGS: &str = "settings";
 
 /// Each key: its name, its label on the page, and its default (`key.keyboard.g`).
-const KEYS: [[&str; 3]; 10] = [
+const KEYS: [[&str; 3]; 15] = [
     [MAP, "World Map", "key.keyboard.m"],
     [WAYPOINT, "Add Waypoint", "key.keyboard.b"],
     [ZOOM_IN, "Minimap Zoom In", "key.keyboard.equal"],
@@ -36,6 +44,11 @@ const KEYS: [[&str; 3]; 10] = [
     [CAVE, "Cave View Auto/Manual/Off", "key.keyboard.k"],
     [CAVE_HERE, "Cave Start Y Here", "key.keyboard.unknown"],
     [MINIMAP, "Show/Hide Minimap", "key.keyboard.h"],
+    [ENLARGE, "Enlarge Minimap", "key.keyboard.z"],
+    [RADAR, "Show/Hide Entities", "key.keyboard.unknown"],
+    [GRID, "Minimap Chunk Grid", "key.keyboard.unknown"],
+    [SLIME, "Minimap Slime Chunks", "key.keyboard.unknown"],
+    [LIGHT, "Light Overlay", "key.keyboard.unknown"],
     [WAYPOINTS, "Show/Hide Waypoints", "key.keyboard.unknown"],
     [WAYPOINT_LIST, "Waypoint List", "key.keyboard.u"],
     [SETTINGS, "Map Settings", "key.keyboard.unknown"],
@@ -67,7 +80,6 @@ pub(super) fn pressed(game: &Game<'_>, name: &str, key: &str, down: bool) -> boo
 }
 
 /// Whether `name`'s key (or mouse button) is held down now.
-#[allow(dead_code)]
 pub(super) fn held(game: &Game<'_>, name: &str) -> bool {
     let key = bound(game, name);
     if let Some(code) = horizon_client::keybinds::key_code(&key) {
