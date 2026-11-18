@@ -1063,9 +1063,10 @@ fn draw_cells(
     lod: u8,
     area: [f64; 4],
     to_screen: &dyn Fn(f64, f64) -> [f32; 2],
-    clip: &[[f32; 2]],
+    shape: &m::Shape,
     alpha: u8,
 ) {
+    let clip = shape.polygon();
     let Some(r) = game.gui.atlas.sprites.get(MOD_IMAGE_SPRITE).copied() else {
         return;
     };
@@ -1096,7 +1097,7 @@ fn draw_cells(
                 [p[2][0], p[2][1], u1, v1],
                 [p[3][0], p[3][1], u0, v1],
             ];
-            for q in m::fan_quads(&m::clip_polygon(&poly, clip)) {
+            for q in shape.cut(&poly, &clip) {
                 batch.quad(q.map(|v| [v[0], v[1]]), q.map(|v| [v[2], v[3]]), colour);
             }
         }
@@ -1468,11 +1469,21 @@ fn draw_icon(game: &Game<'_>, batch: &mut HudBatch, icon: (usize, u32, u32), at:
     batch.rect_uv(x, y, w, h, src, rgba(255, 255, 255, alpha));
 }
 
-/// A round dot (an octagon) with a dark rim.
+/// A small round dot (an octagon, three quads) with a thin dark rim.
 fn draw_dot(game: &Game<'_>, batch: &mut HudBatch, at: [f32; 2], r: f32, argb: u32) {
-    let rim = m::outline(at, r + 1.0, true);
-    fill_polygon(game, batch, &rim, (argb & 0xFF00_0000) / 4 * 3 & 0xFF00_0000);
-    fill_polygon(game, batch, &m::outline(at, r, true), argb);
+    let rim = (argb >> 24) * 3 / 4 << 24;
+    let oct = |r: f32| -> [[f32; 2]; 8] {
+        std::array::from_fn(|i| {
+            let a = (i as f32 + 0.5) * std::f32::consts::FRAC_PI_4;
+            [at[0] + r * a.cos(), at[1] + r * a.sin()]
+        })
+    };
+    for (r, c) in [(r + 0.7, rim), (r, argb)] {
+        let o = oct(r);
+        game.native_quad(batch, [o[0], o[1], o[2], o[3]], c);
+        game.native_quad(batch, [o[0], o[3], o[4], o[7]], c);
+        game.native_quad(batch, [o[4], o[5], o[6], o[7]], c);
+    }
 }
 
 /// The entities on the minimap: dropped items, then mobs, then players on top; faces, or dots.
@@ -1491,7 +1502,7 @@ fn draw_entities(
     let t = game.clock.fraction();
     let near = |x: f64, z: f64| range.is_none_or(|r| (x - p[0]).powi(2) + (z - p[2]).powi(2) <= r * r);
     // Above or below you by more than a few blocks: fainter.
-    let alpha = |y: f64| if (y - p[1]).abs() > 8.0 { 150u8 } else { 255 };
+    let alpha = |y: f64| if (y - p[1]).abs() > 8.0 { 95u8 } else { 255 };
     // Dots, or (holding the player list key, or always) faces as faint badges with names.
     let details = s.always_details || (s.tab_details && keys::vanilla_held(game, "key.playerlist"));
     if s.items {
@@ -1537,6 +1548,11 @@ fn draw_entities(
         if !near(at.x, at.z) {
             continue;
         }
+        // Dots need no texture or name: those are only looked up for the detail view.
+        if !details {
+            list.push((kind, String::new(), String::new(), [at.x, at.y, at.z], None));
+            continue;
+        }
         let (model, texture) = horizon_client::mobs::render::body(mob);
         let name = if kind == m::DotKind::Player {
             s.names.then(|| game.remote_player_name(mob.id).map(str::to_owned)).flatten()
@@ -1557,7 +1573,7 @@ fn draw_entities(
         let a = alpha(at[1]);
         let rgb = s.dot_rgb(kind);
         if !details {
-            let r = if kind == m::DotKind::Player { 2.2 } else { 1.7 };
+            let r = if kind == m::DotKind::Player { 1.6 } else { 1.1 };
             draw_dot(game, batch, pos, r, u32::from(a) << 24 | rgb);
             continue;
         }
@@ -1631,7 +1647,8 @@ fn draw_minimap_terrain(
     };
     with(|st| {
         let source = if st.cave.is_some() && cave_height(game, settings).is_some() { 1 } else { 0 };
-        draw_cells(game, st, batch, source, lod, area, &to_screen, &outline, alpha);
+        let shape = if round { m::Shape::Circle(c, half) } else { m::Shape::Rect([c[0] - half, c[1] - half, size, size]) };
+        draw_cells(game, st, batch, source, lod, area, &to_screen, &shape, alpha);
     });
     // The frame: a dark rim with a faint light edge inside it.
     if settings.frame == 2 {
@@ -2152,14 +2169,8 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
             ((bw / span).ceil() as usize + 1) * ((bh / span).ceil() as usize + 1)
         });
         let source = if s.slice.is_some() { 2 } else { 0 };
-        let clip = [
-            [rect[0], rect[1]],
-            [rect[0] + rect[2], rect[1]],
-            [rect[0] + rect[2], rect[1] + rect[3]],
-            [rect[0], rect[1] + rect[3]],
-        ];
         let to_screen = |x: f64, z: f64| view.screen_of(rect, x, z);
-        draw_cells(game, s, batch, source, lod, [x0, z0, x1, z1], &to_screen, &clip, 255);
+        draw_cells(game, s, batch, source, lod, [x0, z0, x1, z1], &to_screen, &m::Shape::Rect(rect), 255);
     }
     // Explored ground outside the chunks loaded now, dimmed (the surface view only).
     if settings.map_shade && s.slice.is_none()

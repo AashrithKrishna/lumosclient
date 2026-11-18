@@ -14,9 +14,9 @@ use std::collections::{HashMap, HashSet};
 pub const ID: &str = "lumos_map";
 pub const NAME: &str = "Map";
 pub const VERSION: &str = "3.0.0";
-pub const DESCRIPTION: &str = "A minimap in the game's own colours with nearby players and \
-mobs, cave view and info lines; waypoints in sets, with death points, shown in the world and \
-on both maps; and a world map (M) of everywhere you have been, saved per world and server.";
+pub const DESCRIPTION: &str = "A crisp minimap and world map in the game's own colours, \
+entities as dots with faces and names while Tab is held, waypoints as on-screen markers with a \
+full manager, and a world map (M) of everywhere you have been, saved per world and server.";
 
 /// The mod's own screen id is the game's for every mod screen.
 pub const SCREEN: &str = "mod";
@@ -1212,26 +1212,82 @@ pub fn clip_polygon(poly: &[Vert], clip: &[[f32; 2]]) -> Vec<Vert> {
         .sum();
     let sign = if area >= 0.0 { 1.0 } else { -1.0 };
     let mut out = poly.to_vec();
+    let mut next: Vec<Vert> = Vec::with_capacity(poly.len() + 8);
     for i in 0..n {
         if out.is_empty() {
             break;
         }
         let (a, b) = (clip[i], clip[(i + 1) % n]);
         let side = |p: &Vert| sign * ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]));
-        let input = std::mem::take(&mut out);
-        for k in 0..input.len() {
-            let (p, q) = (input[k], input[(k + 1) % input.len()]);
+        // Most edges cut nothing: wholly inside them, the polygon stays as it is.
+        if out.iter().all(|p| side(p) >= 0.0) {
+            continue;
+        }
+        next.clear();
+        for k in 0..out.len() {
+            let (p, q) = (out[k], out[(k + 1) % out.len()]);
             let (sp, sq) = (side(&p), side(&q));
             if sp >= 0.0 {
-                out.push(p);
+                next.push(p);
             }
             if (sp >= 0.0) != (sq >= 0.0) {
                 let t = sp / (sp - sq);
-                out.push(std::array::from_fn(|c| p[c] + (q[c] - p[c]) * t));
+                next.push(std::array::from_fn(|c| p[c] + (q[c] - p[c]) * t));
             }
         }
+        std::mem::swap(&mut out, &mut next);
     }
     out
+}
+
+/// The outline the maps are cut to: a circle (centre, radius) or a rectangle.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Shape {
+    Circle([f32; 2], f32),
+    Rect([f32; 4]),
+}
+
+impl Shape {
+    /// Its outline as a convex polygon (a circle as 64 sides).
+    pub fn polygon(&self) -> Vec<[f32; 2]> {
+        match *self {
+            Shape::Circle(c, r) => outline(c, r, true),
+            Shape::Rect([x, y, w, h]) => vec![[x, y], [x + w, y], [x + w, y + h], [x, y + h]],
+        }
+    }
+
+    /// `poly` (a quad) cut to the shape, as quads: those wholly inside go through untouched,
+    /// those wholly outside give none, only the ones across the edge are clipped.
+    pub fn cut(&self, poly: &[Vert; 4], outline: &[[f32; 2]]) -> Vec<[Vert; 4]> {
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for v in poly {
+            x0 = x0.min(v[0]);
+            y0 = y0.min(v[1]);
+            x1 = x1.max(v[0]);
+            y1 = y1.max(v[1]);
+        }
+        let (inside, outside) = match *self {
+            Shape::Circle(c, r) => {
+                // Inside the 64-gon for sure; out of the circle's reach altogether.
+                let r_in = r * (std::f32::consts::PI / 64.0).cos();
+                let inside = poly.iter().all(|v| (v[0] - c[0]).powi(2) + (v[1] - c[1]).powi(2) <= r_in * r_in);
+                let nx = c[0].clamp(x0, x1) - c[0];
+                let ny = c[1].clamp(y0, y1) - c[1];
+                (inside, nx * nx + ny * ny > r * r)
+            }
+            Shape::Rect([x, y, w, h]) => (
+                x0 >= x && y0 >= y && x1 <= x + w && y1 <= y + h,
+                x1 <= x || y1 <= y || x0 >= x + w || y0 >= y + h,
+            ),
+        };
+        if outside {
+            Vec::new()
+        } else if inside {
+            vec![*poly]
+        } else {
+            fan_quads(&clip_polygon(poly, outline))
+        }
+    }
 }
 
 /// A convex polygon as quads (the last may repeat a corner): a fan from its first corner.
@@ -2816,6 +2872,17 @@ mod tests {
         let quads = fan_quads(&round);
         assert_eq!(quads.len(), (round.len() - 1) / 2);
         assert_eq!(ring([0.0, 0.0], 1.0, 2.0).len(), 64);
+        let circle = Shape::Circle([0.0, 0.0], 50.0);
+        let ol = circle.polygon();
+        let quad = |x: f32, y: f32| [[x, y, 0.0, 0.0], [x + 4.0, y, 1.0, 0.0], [x + 4.0, y + 4.0, 1.0, 1.0], [x, y + 4.0, 0.0, 1.0]];
+        assert_eq!(circle.cut(&quad(0.0, 0.0), &ol), vec![quad(0.0, 0.0)], "inside: as it is");
+        assert!(circle.cut(&quad(100.0, 0.0), &ol).is_empty(), "outside: nothing");
+        assert!(!circle.cut(&quad(48.0, 0.0), &ol).is_empty(), "across the rim: clipped");
+        let rect = Shape::Rect([0.0, 0.0, 10.0, 10.0]);
+        let rl = rect.polygon();
+        assert_eq!(rect.cut(&quad(2.0, 2.0), &rl).len(), 1);
+        assert!(rect.cut(&quad(20.0, 2.0), &rl).is_empty());
+        assert_eq!(rect.cut(&quad(8.0, 2.0), &rl)[0][1][0], 10.0);
     }
 
     #[test]
