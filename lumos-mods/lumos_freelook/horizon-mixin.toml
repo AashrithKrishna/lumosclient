@@ -1,0 +1,119 @@
+# Lumos Freelook: hold a key to look around while the player keeps facing and moving its way.
+[mod]
+id = "lumos_freelook"
+version = "1.0.0"
+priority = 100
+
+# Horizon Nightly 2026-11-13. Planned with horizon-mixins e59da9094f0c2fdda6c627fe9eff22dec6a906f0.
+[compatibility]
+horizon_revision = "9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0"
+
+# The rules (no game types; its tests run on their own).
+[[module]]
+id = "runtime"
+file = "crates/horizon-client/src/game.rs"
+name = "lumos_freelook"
+source = "runtime.rs"
+
+[[module]]
+id = "glue"
+file = "crates/horizon-client/src/game.rs"
+name = "lumos_freelook_glue"
+source = "glue.rs"
+
+# Every key the mod reads, in one place (the page in Options > Mods rebinds them).
+[[module]]
+id = "keys"
+file = "crates/horizon-client/src/game.rs"
+name = "lumos_freelook_keys"
+source = "keys.rs"
+
+# A look from the mouse or a pad (`Entity.turn` units), before it turns the player: while
+# freelook is on it turns the camera instead. (At 9f42064c `apply_mouse_look` hands every
+# look to this one function.)
+[[injection]]
+id = "turn"
+kind = "HEAD"
+cancellable = true
+target = "horizon_client::game::pointer_capture::Game<'_>::look_turn"
+helper = "hooks/turn.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "x", ty = "f64", value = "x" },
+  { name = "y", ty = "f64", value = "y" },
+]
+
+# The camera's pose this frame (API 402): turned to the free look and, in third person, backed
+# off from the eye along it. The player, where it aims and the first-person hand stay its own.
+[[injection]]
+id = "camera"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_camera_pose"
+helper = "hooks/camera.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "position", ty = "&mut [f64; 3]", value = "&mut *position" },
+  { name = "yaw", ty = "&mut f32", value = "&mut *yaw" },
+  { name = "pitch", ty = "&mut f32", value = "&mut *pitch" },
+]
+
+[[injection]]
+id = "key"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_key"
+helper = "hooks/key.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "key", ty = "&str", value = "key" },
+  { name = "pressed", ty = "bool", value = "pressed" },
+]
+
+# Once a frame: a look whose key went up behind a screen, or whose return finished, ends.
+[[injection]]
+id = "frame"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_frame"
+helper = "hooks/frame.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+[[injection]]
+id = "level-unload"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_client_level_unload"
+helper = "hooks/level_unload.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+[[injection]]
+id = "list"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_mods"
+helper = "hooks/list.rs"
+bindings = [
+  { name = "mods", ty = "&mut Vec<crate::game::native_hooks::NativeMod>", value = "&mut *mods" },
+]
+
+[[injection]]
+id = "settings"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_settings"
+helper = "hooks/settings.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "buttons", ty = "&mut Vec<String>", value = "&mut *buttons" },
+]
+
+[[injection]]
+id = "click"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_settings_click"
+helper = "hooks/click.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "button", ty = "usize", value = "button" },
+]

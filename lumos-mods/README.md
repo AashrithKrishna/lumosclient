@@ -12,6 +12,7 @@ with them.
 | `lumos_particle_rain` | Turns rain into falling drop particles with splashes on the ground and snow into drifting flakes. Heavy weather can add a mist. It replaces vanilla's rain sheets and limits its own particle count. |
 | `lumos_paginated_advancements` | Splits the Advancements screen's tabs into pages. Use the `<` `>` buttons, Page Up/Page Down or the mouse wheel over the tabs to reach every tab. |
 | `lumos_hud` | Lunar-style HUD modules (FPS, CPS, coordinates, keystrokes, armour, potion effects, ping, clock, server, day, speed, reach, combo, item counter, memory, sprint, direction, biome) in the Lunar or Minimal style. Right Shift opens the editor: drag modules, right-click to hide, switch them on and off and pick the style. The layout is saved to `horizon-mods/.horizon-mod-data/lumos_hud/layout`. Its hotkeys (editor, HUD toggle) are rebindable on its Options > Mods page; `keys.rs` is the only file that reads them. |
+| `lumos_freelook` | Hold a key (Left Alt by default) to look around freely while the player keeps facing, aiming and moving the way it did; letting go turns the camera back (eased or at once). From first person it shows third person while you look. Hold or toggle, invert, and first/third person on its page. |
 | `lumos_fullbright_key` | A key (G by default) that turns Horizon's own Fullbright (Video Settings > Quality) on and off, with a notice over the hotbar. On other people's servers, where Horizon holds Fullbright off, it says so instead. |
 
 ## Pin
