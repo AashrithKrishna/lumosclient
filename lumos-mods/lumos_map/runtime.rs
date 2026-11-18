@@ -1594,11 +1594,84 @@ pub struct Waypoint {
     pub created: u64,
     /// Its marker's text: a symbol, or empty for its initials.
     pub symbol: String,
+    /// A colour of its own (0xRRGGBB), over `colour`.
+    pub custom: Option<u32>,
+    /// Removed when you leave the world.
+    pub temporary: bool,
+    /// Kept for every world and server, not only this one.
+    pub global: bool,
+    /// Where it shows (each also needs the matching setting on).
+    pub on_screen: bool,
+    pub on_minimap: bool,
+    pub on_map: bool,
+    /// Its name on screen always, not only when looked at.
+    pub always_name: bool,
+}
+
+impl Default for Waypoint {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            pos: [0; 3],
+            dim: OVERWORLD.into(),
+            colour: 0,
+            death: false,
+            shown: true,
+            set: DEFAULT_SET.into(),
+            created: 0,
+            symbol: String::new(),
+            custom: None,
+            temporary: false,
+            global: false,
+            on_screen: true,
+            on_minimap: true,
+            on_map: true,
+            always_name: false,
+        }
+    }
+}
+
+/// A colour typed as hex (`#3fa`, `33FFAA`), as 0xRRGGBB.
+pub fn parse_hex(text: &str) -> Option<u32> {
+    let t = text.trim().trim_start_matches('#');
+    let full: String = match t.len() {
+        3 => t.chars().flat_map(|c| [c, c]).collect(),
+        6 => t.to_owned(),
+        _ => return None,
+    };
+    u32::from_str_radix(&full, 16).ok()
 }
 
 impl Waypoint {
     pub fn rgb(&self) -> u32 {
-        COLOURS[self.colour.min(COLOURS.len() - 1)].1
+        self.custom.unwrap_or(COLOURS[self.colour.min(COLOURS.len() - 1)].1)
+    }
+
+    /// Its flags as the file keeps them: a letter for each that isn't its default.
+    fn flags(&self) -> String {
+        let mut f = String::new();
+        for (on, c) in [
+            (self.temporary, 'T'),
+            (self.global, 'G'),
+            (!self.on_screen, 'S'),
+            (!self.on_minimap, 'M'),
+            (!self.on_map, 'W'),
+            (self.always_name, 'N'),
+        ] {
+            if on {
+                f.push(c);
+            }
+        }
+        if f.is_empty() { "-".into() } else { f }
+    }
+
+    fn read_flags(&mut self, f: &str) {
+        self.temporary = f.contains('T');
+        self.global = f.contains('G');
+        self.on_screen = !f.contains('S');
+        self.on_minimap = !f.contains('M');
+        self.on_map = !f.contains('W');
+        self.always_name = f.contains('N');
     }
     /// The block centre at its foot.
     pub fn centre(&self) -> [f64; 3] {
@@ -1705,7 +1778,7 @@ impl Book {
         }
         for w in &self.list {
             out.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 clean_name(&w.name),
                 w.pos[0],
                 w.pos[1],
@@ -1716,7 +1789,9 @@ impl Book {
                 w.shown,
                 clean_name(&w.set),
                 w.created,
-                clean_name(&w.symbol)
+                clean_name(&w.symbol),
+                w.custom.map_or_else(|| "-".to_owned(), |c| format!("{c:06X}")),
+                w.flags()
             ));
         }
         out
@@ -1749,7 +1824,7 @@ impl Book {
                 continue;
             };
             let set = f.get(8).map(|s| clean_name(s)).filter(|s| !s.is_empty());
-            book.list.push(Waypoint {
+            let mut w = Waypoint {
                 name: clean_name(f[0]),
                 pos: [x, y, z],
                 dim: f[4].trim().to_owned(),
@@ -1759,7 +1834,11 @@ impl Book {
                 set: set.unwrap_or_else(|| DEFAULT_SET.to_owned()),
                 created: f.get(9).and_then(|s| s.trim().parse().ok()).unwrap_or(0),
                 symbol: f.get(10).map(|s| clean_name(s).chars().take(2).collect()).unwrap_or_default(),
-            });
+                custom: f.get(11).and_then(|c| parse_hex(c)),
+                ..Waypoint::default()
+            };
+            w.read_flags(f.get(12).copied().unwrap_or(""));
+            book.list.push(w);
         }
         // Every waypoint's set is listed.
         for i in 0..book.list.len() {
@@ -1808,7 +1887,7 @@ impl Book {
             shown: true,
             set: self.current_set().to_owned(),
             created: now,
-            symbol: String::new(),
+            ..Waypoint::default()
         };
         self.list.push(w);
         self.list.len() - 1
@@ -1826,7 +1905,7 @@ impl Book {
             shown: true,
             set: self.current_set().to_owned(),
             created: now,
-            symbol: String::new(),
+            ..Waypoint::default()
         });
         let mut deaths: Vec<usize> = (0..self.list.len()).filter(|&i| self.list[i].death).collect();
         // Newest first.
@@ -1883,6 +1962,113 @@ impl Book {
         let name = self.sets.remove(self.current).name;
         self.list.retain(|w| w.set != name);
         self.current = self.current.min(self.sets.len() - 1);
+    }
+
+    /// The list as shown: in `sort` order, only those whose name, set or symbol has `query` in it
+    /// (any case), and only set `set` when given.
+    pub fn listed(&self, sort: usize, from: Option<[f64; 3]>, query: &str, set: Option<&str>) -> Vec<usize> {
+        let q = query.trim().to_lowercase();
+        self.order(sort, from)
+            .into_iter()
+            .filter(|&i| {
+                let w = &self.list[i];
+                set.is_none_or(|s| w.set == s)
+                    && (q.is_empty()
+                        || w.name.to_lowercase().contains(&q)
+                        || w.set.to_lowercase().contains(&q)
+                        || w.symbol.to_lowercase() == q)
+            })
+            .collect()
+    }
+
+    /// Waypoints `which` removed (indices into `list`).
+    pub fn remove(&mut self, which: &[usize]) {
+        let drop: HashSet<usize> = which.iter().copied().collect();
+        let mut i = 0;
+        self.list.retain(|_| {
+            let keep = !drop.contains(&i);
+            i += 1;
+            keep
+        });
+    }
+
+    /// Waypoints `which` moved into set `set`.
+    pub fn move_to_set(&mut self, which: &[usize], set: &str) {
+        for &i in which {
+            if let Some(w) = self.list.get_mut(i) {
+                w.set = set.to_owned();
+            }
+        }
+    }
+
+    /// A copy of waypoint `i` beside it, named "<name> copy"; its index.
+    pub fn duplicate(&mut self, i: usize, now: u64) -> Option<usize> {
+        let mut w = self.list.get(i)?.clone();
+        w.name = clean_name(&format!("{} copy", w.name));
+        w.created = now;
+        w.death = false;
+        self.list.push(w);
+        Some(self.list.len() - 1)
+    }
+
+    /// The current set renamed (its waypoints follow); false when the name is empty or taken.
+    pub fn rename_set(&mut self, name: &str) -> bool {
+        let name = clean_name(name);
+        if name.is_empty() || self.set_index(&name).is_some() {
+            return false;
+        }
+        let c = self.current.min(self.sets.len() - 1);
+        let old = std::mem::replace(&mut self.sets[c].name, name.clone());
+        for w in self.list.iter_mut().filter(|w| w.set == old) {
+            w.set = name.clone();
+        }
+        true
+    }
+
+    /// The world's own waypoints and the ones kept for every world, split for their files.
+    pub fn split_global(&self) -> (Book, Book) {
+        let mut own = self.clone();
+        own.list.retain(|w| !w.global);
+        let mut all = Book::default();
+        all.list = self.list.iter().filter(|w| w.global).cloned().collect();
+        for w in &all.list {
+            if all.set_index(&w.set).is_none() {
+                all.sets.push(WaySet { name: w.set.clone(), shown: true });
+            }
+        }
+        (own, all)
+    }
+
+    /// The waypoints kept for every world added to this world's (each marked global).
+    pub fn merge_global(&mut self, global: Book) {
+        for mut w in global.list {
+            w.global = true;
+            if self.set_index(&w.set).is_none() {
+                self.sets.push(WaySet { name: w.set.clone(), shown: true });
+            }
+            self.list.push(w);
+        }
+    }
+
+    /// Temporary waypoints dropped (leaving the world).
+    pub fn drop_temporary(&mut self) -> bool {
+        let n = self.list.len();
+        self.list.retain(|w| !w.temporary);
+        n != self.list.len()
+    }
+
+    /// Waypoints `which` shown (or hidden for now) at once; whether any changed.
+    pub fn set_shown(&mut self, which: &[usize], shown: bool) -> bool {
+        let mut any = false;
+        for &i in which {
+            if let Some(w) = self.list.get_mut(i)
+                && w.shown != shown
+            {
+                w.shown = shown;
+                any = true;
+            }
+        }
+        any
     }
 
     /// The list's order: by name, by distance from `from`, or newest first.
@@ -2154,9 +2340,17 @@ pub enum Page {
     List {
         scroll: usize,
     },
-    /// Editing waypoint `index`; `name` is the text box.
+    /// Editing waypoint `index` with its text boxes.
     Edit {
         index: usize,
+        form: Form,
+    },
+    /// Deleting these waypoints, once confirmed.
+    Confirm {
+        delete: Vec<usize>,
+    },
+    /// Renaming the current set.
+    RenameSet {
         name: String,
     },
     /// Naming a new set.
@@ -2172,9 +2366,80 @@ pub enum Page {
 impl Page {
     /// Keys type into a text box on this page.
     pub fn typing(&self) -> bool {
-        matches!(self, Page::Edit { .. } | Page::NewSet { .. })
+        match self {
+            Page::Edit { form, .. } => form.focus.is_some(),
+            Page::NewSet { .. } | Page::RenameSet { .. } => true,
+            _ => false,
+        }
     }
 }
+
+/// The waypoint editor's text boxes: name, symbol, x, y, z, colour (hex), and the one typed in.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Form {
+    pub fields: [String; 6],
+    pub focus: Option<usize>,
+}
+
+pub const F_NAME: usize = 0;
+pub const F_SYMBOL: usize = 1;
+pub const F_X: usize = 2;
+pub const F_HEX: usize = 5;
+
+impl Form {
+    pub fn of(w: &Waypoint) -> Self {
+        Self {
+            fields: [
+                w.name.clone(),
+                w.symbol.clone(),
+                w.pos[0].to_string(),
+                w.pos[1].to_string(),
+                w.pos[2].to_string(),
+                w.custom.map_or_else(String::new, |c| format!("{c:06X}")),
+            ],
+            focus: Some(F_NAME),
+        }
+    }
+
+    /// A character typed into the focused box, if that box takes it.
+    pub fn type_char(&mut self, c: char) {
+        let Some(f) = self.focus else { return };
+        let text = &mut self.fields[f];
+        let ok = match f {
+            F_NAME => !c.is_control() && text.chars().count() < NAME_MAX,
+            F_SYMBOL => !c.is_control() && !c.is_whitespace() && text.chars().count() < 2,
+            F_HEX => c.is_ascii_hexdigit() && text.len() < 6,
+            _ => (c.is_ascii_digit() || (c == '-' && text.is_empty())) && text.len() < 9,
+        };
+        if ok {
+            text.push(c);
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if let Some(f) = self.focus {
+            self.fields[f].pop();
+        }
+    }
+
+    /// The boxes put on `w`: what doesn't read (an empty name, a bad number) is left as it was.
+    pub fn apply(&self, w: &mut Waypoint) {
+        let name = clean_name(&self.fields[F_NAME]);
+        if !name.is_empty() {
+            w.name = name;
+        }
+        w.symbol = clean_name(&self.fields[F_SYMBOL]).chars().take(2).collect();
+        for k in 0..3 {
+            if let Ok(v) = self.fields[F_X + k].trim().parse::<i32>() {
+                w.pos[k] = v;
+            }
+        }
+        w.custom = parse_hex(&self.fields[F_HEX]);
+    }
+}
+
+/// What the waypoint list shows.
+pub const LIST_VIEWS: [&str; 3] = ["All sets", "This set", "Death points"];
 
 /// Which waypoints the world map shows.
 pub const MAP_FILTERS: [&str; 3] = ["All", "This set", "None"];
@@ -2194,12 +2459,24 @@ pub struct MapScreen {
     pub slime: bool,
     /// Index in `MAP_FILTERS`.
     pub filter: usize,
+    /// The waypoint list's search text, and whether keys type into it.
+    pub search: String,
+    pub searching: bool,
+    /// Index in `LIST_VIEWS`.
+    pub list_view: usize,
+    /// Waypoints ticked in the list for the bulk buttons.
+    pub selected: Vec<usize>,
 }
 
 /// How far a press may move and still be a click, in GUI pixels.
 pub const CLICK_SLOP: f32 = 3.0;
 
 impl MapScreen {
+    /// Keys type into a text box now.
+    pub fn typing(&self) -> bool {
+        self.page.typing() || (self.searching && matches!(self.page, Page::List { .. }))
+    }
+
     /// A drag of `delta` while pressed: pans once it is past the slop (and stops following).
     pub fn drag(&mut self, mouse: [f32; 2], delta: [f32; 2]) {
         let Some((at, dragged)) = &mut self.press else {
@@ -2230,7 +2507,7 @@ impl MapScreen {
 
 /// Rows of the waypoint list a page shows.
 pub fn list_rows(height: f32) -> usize {
-    (((height - 92.0) / 22.0).floor() as usize).max(1)
+    (((height - 114.0) / 22.0).floor() as usize).max(1)
 }
 
 // ---------------------------------------------------------------- per thread state
@@ -2602,6 +2879,37 @@ mod tests {
         assert_eq!((st.list[0].colour, st.list[0].mark().as_str()), (1, "*"));
         assert_eq!(Book::from_text(&st.to_text()).list[0].symbol, "*");
         assert_eq!(st.list[1].mark(), "BW");
+        // Every field of a waypoint survives the file.
+        let mut full = Book::default();
+        full.add([1, 2, 3], NETHER, 7);
+        {
+            let w = &mut full.list[0];
+            w.custom = Some(0x12AB34);
+            w.temporary = true;
+            w.on_minimap = false;
+            w.always_name = true;
+        }
+        assert_eq!(Book::from_text(&full.to_text()).list, full.list);
+        assert_eq!(full.list[0].rgb(), 0x12AB34);
+        assert_eq!(parse_hex("#3fa"), Some(0x33FFAA));
+        assert_eq!(parse_hex("zz"), None);
+        // Global ones go to their own file and come back marked.
+        full.add([9, 9, 9], OVERWORLD, 8);
+        full.list[1].global = true;
+        let (own, all) = full.split_global();
+        assert_eq!((own.list.len(), all.list.len()), (1, 1));
+        let mut merged = own.clone();
+        merged.merge_global(all);
+        assert!(merged.list[1].global);
+        assert!(merged.drop_temporary() && merged.list.len() == 1);
+        let d = merged.duplicate(0, 50).unwrap();
+        assert_eq!(merged.list[d].name, "Waypoint 2 copy");
+        merged.add_set("Base");
+        merged.move_to_set(&[0], "Base");
+        assert!(merged.rename_set("Home"));
+        assert_eq!(merged.list[0].set, "Home");
+        merged.remove(&[0, 1]);
+        assert!(merged.list.is_empty());
         assert!(!back.visible(&back.list[0]), "its set is hidden");
         assert!(back.visible(&back.list[1]));
         let old = Book::from_text(
@@ -2642,6 +2950,35 @@ mod tests {
         assert_eq!(b.order(1, Some([0.0, 0.0, 0.0])), vec![1, 0]);
         assert_eq!(b.order(2, None), vec![1, 0]);
         assert_eq!(b.list[1].initials(), "AB");
+        assert_eq!(b.listed(0, None, "ALPHA", None), vec![1]);
+        assert_eq!(b.listed(0, None, "", Some("Nope")), Vec::<usize>::new());
+        assert_eq!(b.listed(0, None, " ", Some(DEFAULT_SET)), vec![1, 0]);
+        assert!(b.set_shown(&[0, 1], false));
+        assert!(!b.set_shown(&[0, 1], false));
+        assert!(b.list.iter().all(|w| !w.shown));
+        let mut f = Form::of(&b.list[0]);
+        assert!(Page::Edit { index: 0, form: f.clone() }.typing());
+        f.focus = Some(F_X);
+        f.fields[F_X].clear();
+        for c in "-12a3".chars() {
+            f.type_char(c);
+        }
+        assert_eq!(f.fields[F_X], "-123");
+        f.focus = Some(F_SYMBOL);
+        for c in "ABC".chars() {
+            f.type_char(c);
+        }
+        f.focus = Some(F_HEX);
+        for c in "00ff00".chars() {
+            f.type_char(c);
+        }
+        let mut w = b.list[0].clone();
+        f.apply(&mut w);
+        assert_eq!((w.pos[0], w.symbol.as_str(), w.custom), (-123, "AB", Some(0x00FF00)));
+        let mut ms = MapScreen { page: Page::List { scroll: 0 }, searching: true, ..MapScreen::default() };
+        assert!(ms.typing());
+        ms.page = Page::Map;
+        assert!(!ms.typing());
         assert_eq!(converted([80, 64, -17], OVERWORLD, NETHER), Some([10, 64, -3]));
         assert_eq!(converted([10, 64, -3], NETHER, OVERWORLD), Some([80, 64, -24]));
         assert_eq!(converted([1, 2, 3], OVERWORLD, "minecraft:the_end"), None);
@@ -2701,6 +3038,6 @@ mod tests {
         assert_eq!(folder_name("mc.example.com:25565"), "mc.example.com_25565");
         assert_eq!(folder_name(".."), "_");
         assert_eq!(pretty_id("minecraft:dark_forest"), "Dark Forest");
-        assert_eq!(list_rows(240.0), 6);
+        assert_eq!(list_rows(240.0), 5);
     }
 }

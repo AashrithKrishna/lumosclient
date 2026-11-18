@@ -424,6 +424,12 @@ struct State {
     chat: VecDeque<(String, [i32; 3])>,
     /// Text to open the chat with once the map is closed (sharing a waypoint).
     pending_chat: Option<String>,
+    /// A command sent once the map is closed (teleporting to a waypoint).
+    pending_command: Option<String>,
+    /// Text put on the clipboard on the next frame (a waypoint's coordinates).
+    pending_clipboard: Option<String>,
+    /// `<instance>/lumos-map/global-waypoints.txt`: waypoints kept for every world.
+    global_path: Option<PathBuf>,
     /// The world map saved as a PNG on the next frame.
     pending_export: bool,
     /// A notice on the map's bar, until when.
@@ -474,7 +480,11 @@ fn save_book(s: &State) {
     let Some(dir) = &s.world_dir else {
         return;
     };
-    let _ = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(dir.join("waypoints.txt"), s.book.to_text()));
+    let (own, all) = s.book.split_global();
+    let _ = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(dir.join("waypoints.txt"), own.to_text()));
+    if let Some(g) = &s.global_path {
+        let _ = std::fs::write(g, all.to_text());
+    }
 }
 
 /// Writes `rgba` (`w` x `h`) into the mod image slot at `at`.
@@ -510,6 +520,7 @@ fn follow_world(game: &Game<'_>, s: &mut State) {
         return;
     };
     let dir = base(game).join(&world);
+    s.global_path = Some(base(game).join("global-waypoints.txt"));
     let dir = if world.starts_with("mp-") {
         // A server: one of its sub-worlds.
         let subs = match s.subworlds.take() {
@@ -602,6 +613,12 @@ fn open_world(s: &mut State, dir: PathBuf, dim: &'static str) {
         s.book = std::fs::read_to_string(dir.join("waypoints.txt"))
             .map(|t| m::Book::from_text(&t))
             .unwrap_or_default();
+        if let Some(g) = &s.global_path
+            && let Ok(t) = std::fs::read_to_string(g)
+        {
+            s.book.merge_global(m::Book::from_text(&t));
+        }
+        s.screen.selected.clear();
         s.world_dir = Some(dir.clone());
     }
     s.explored = Some(Explored::open(&dir, dim));
@@ -975,6 +992,16 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
         let _ = game.native_open_chat(&text);
         return;
     }
+    if let Some(text) = with(|s| s.pending_clipboard.take()) {
+        use horizon_client::clipboard::Clipboard;
+        game.clipboard.set(&text);
+        game.native_client_action_bar(Text::literal(format!("Copied {text}")), false);
+    }
+    if let Some(command) = with(|s| s.pending_command.take()) {
+        game.native_mod_screen_close(m::ID);
+        game.send_command(&command);
+        return;
+    }
     with(|s| {
         follow_colours(game, s);
         follow_world(game, s);
@@ -1005,6 +1032,10 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
 /// The client left its level: the explored map is saved and let go.
 pub(super) fn on_level_unload(game: &mut Game<'_>) {
     with(|s| {
+        // Temporary waypoints go with the world.
+        if s.book.drop_temporary() {
+            save_book(s);
+        }
         if let Some(mut e) = s.explored.take() {
             e.save();
         }
@@ -1086,7 +1117,7 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
         return;
     }
     if map_open(game) {
-        let typing = with(|s| s.screen.page.typing());
+        let typing = with(|s| s.screen.typing());
         if !typing && keys::pressed(game, keys::MAP, key, true) {
             game.native_mod_screen_close(m::ID);
         }
@@ -1287,7 +1318,7 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
         if !s.waypoints || !s.wp_minimap {
             return;
         }
-        for w in st.book.list.iter().filter(|w| st.book.visible(w)) {
+        for w in st.book.list.iter().filter(|w| w.on_minimap && st.book.visible(w)) {
             let Some(c) = w.place_in(dim, s.convert) else {
                 continue;
             };
@@ -1638,10 +1669,10 @@ fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings)
     let dim = game.dim.id();
     let range: Option<f64> = m::WP_RANGES.get(s.wp_range).and_then(|r| r.parse().ok());
     let eye = cam.position;
-    // (distance, screen point, pushed to the edge, edge angle, waypoint data)
-    let mut shown: Vec<(f64, [f32; 2], bool, f32, String, String, u32)> = Vec::new();
+    // (distance, screen point, pushed to the edge, edge angle, mark, name, colour, always named)
+    let mut shown: Vec<(f64, [f32; 2], bool, f32, String, String, u32, bool)> = Vec::new();
     with(|st| {
-        for wp in st.book.list.iter().filter(|w| st.book.visible(w)) {
+        for wp in st.book.list.iter().filter(|w| w.on_screen && st.book.visible(w)) {
             let Some(c) = wp.place_in(dim, s.convert) else {
                 continue;
             };
@@ -1656,7 +1687,7 @@ fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings)
             if (pushed || !front) && !s.wp_edge {
                 continue;
             }
-            shown.push((d, q, pushed || !front, angle, wp.mark(), wp.name.clone(), wp.rgb()));
+            shown.push((d, q, pushed || !front, angle, wp.mark(), wp.name.clone(), wp.rgb(), wp.always_name));
         }
     });
     // Far ones first, so near ones are on top.
@@ -1671,7 +1702,7 @@ fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings)
         .filter(|&(_, r)| r < 40.0)
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(i, _)| i);
-    for (i, (d, q, edge, angle, initials, name, rgb)) in shown.into_iter().enumerate() {
+    for (i, (d, q, edge, angle, initials, name, rgb, always_name)) in shown.into_iter().enumerate() {
         let alpha = if s.fade { u32::from(m::fade(d)).max(if edge { 120 } else { 0 }) } else { 255 };
         if alpha == 0 {
             continue;
@@ -1718,7 +1749,7 @@ fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings)
         let start = batch.vertices.len();
         game.native_text(batch, &dist, [x - dw / 2.0, y + r + 3.0], 0xE0E0E0, true);
         batch.scale_since(start, x, y + r + 3.0, 0.75, 0.75);
-        let show_name = match s.wp_names {
+        let show_name = always_name || match s.wp_names {
             1 => true,
             0 => looked == Some(i),
             _ => false,
@@ -1859,37 +1890,176 @@ fn layer_step(now: Option<i32>, feet: i32, down: bool, top: i32) -> Option<i32> 
 
 /// The list's panel, its header buttons (set, set shown, new set, delete set) and its bottom
 /// ones (back, order, from chat, add here).
-fn list_layout(w: f32, h: f32) -> ([f32; 4], usize, [[f32; 4]; 4], [[f32; 4]; 4]) {
-    let pw = 352.0f32.min(w - 12.0);
+/// The waypoint list's parts.
+struct ListLayout {
+    panel: [f32; 4],
+    rows: usize,
+    search: [f32; 4],
+    /// Set, set shown, new set, rename set, delete set.
+    head: [[f32; 4]; 5],
+    /// Delete, hide, show, move to set, view.
+    bulk: [[f32; 4]; 5],
+    /// Back, order, from chat, new.
+    foot: [[f32; 4]; 4],
+}
+
+fn list_layout(w: f32, h: f32) -> ListLayout {
+    let pw = 400.0f32.min(w - 12.0);
     let panel = [(w - pw) / 2.0, 10.0, pw, h - 20.0];
-    let rows = m::list_rows(h);
     let x = panel[0] + 6.0;
-    let unit = (pw - 12.0 - 6.0) / 11.0;
-    let head = panel[1] + 22.0;
-    let by = h - 34.0;
-    let r = |at: f32, y: f32, w: f32| [x + at * unit + (at.ceil()) * 2.0, y, w * unit, 18.0];
-    (
+    let inner = pw - 12.0;
+    // `n` buttons of the given widths (summing to 1) across a row at `y`.
+    let row = |y: f32, parts: &[f32]| -> Vec<[f32; 4]> {
+        let gap = 2.0;
+        let usable = inner - gap * (parts.len() as f32 - 1.0);
+        let mut at = x;
+        parts
+            .iter()
+            .map(|p| {
+                let r = [at, y, usable * p, 18.0];
+                at += usable * p + gap;
+                r
+            })
+            .collect()
+    };
+    let head = row(panel[1] + 22.0, &[0.3, 0.17, 0.15, 0.18, 0.2]);
+    let bulk = row(h - 56.0, &[0.18, 0.14, 0.14, 0.24, 0.3]);
+    let foot = row(h - 34.0, &[0.25, 0.25, 0.25, 0.25]);
+    ListLayout {
         panel,
-        rows,
-        [r(0.0, head, 4.0), r(4.0, head, 2.5), r(6.5, head, 2.0), r(8.5, head, 2.5)],
-        [r(0.0, by, 2.5), r(2.5, by, 3.0), r(5.5, by, 3.0), r(8.5, by, 2.5)],
-    )
+        rows: m::list_rows(h),
+        search: [panel[0] + pw - 6.0 - 140.0, panel[1] + 4.0, 140.0, 14.0],
+        head: [head[0], head[1], head[2], head[3], head[4]],
+        bulk: [bulk[0], bulk[1], bulk[2], bulk[3], bulk[4]],
+        foot: [foot[0], foot[1], foot[2], foot[3]],
+    }
 }
 
 fn list_row(panel: [f32; 4], i: usize) -> [f32; 4] {
     [panel[0] + 6.0, panel[1] + 44.0 + i as f32 * 22.0, panel[2] - 12.0, 20.0]
 }
 
-/// The editor's name box and buttons: colour, shown, set, move here, share, delete, done.
-fn edit_layout(w: f32, h: f32) -> ([f32; 4], [[f32; 4]; 7]) {
+/// A row's tick box.
+fn row_tick(r: [f32; 4]) -> [f32; 4] {
+    [r[0] + 3.0, r[1] + 5.0, 10.0, 10.0]
+}
+
+/// The waypoints the list shows now, in order.
+fn listed(s: &State, settings: &m::Settings, here: Option<[f64; 3]>) -> Vec<usize> {
+    let set = (s.screen.list_view == 1).then(|| s.book.current_set().to_owned());
+    let mut out = s.book.listed(settings.sort, here, &s.screen.search, set.as_deref());
+    if s.screen.list_view == 2 {
+        out.retain(|&i| s.book.list[i].death);
+    }
+    out
+}
+
+/// A waypoint's marker as the list draws it: a diamond in its colour with its mark.
+fn draw_mark(game: &Game<'_>, batch: &mut HudBatch, at: [f32; 2], wp: &m::Waypoint, faded: bool) {
+    let a: u32 = if faded { 0x80 } else { 0xFF };
+    let r = 6.5;
+    let [x, y] = at;
+    let dia = |r: f32| [[x, y - r], [x + r, y], [x, y + r], [x - r, y]];
+    game.native_quad(batch, dia(r + 1.0), (a * 200 / 255) << 24);
+    game.native_quad(batch, dia(r), a << 24 | wp.rgb());
+    let rgb = wp.rgb();
+    let lum = ((rgb >> 16) & 255) * 3 + ((rgb >> 8) & 255) * 6 + (rgb & 255);
+    let ink = if lum > 1300 { 0x000000 } else { 0xFFFFFF };
+    let text: String = wp.mark().chars().take(2).collect();
+    let tw = game.native_text_width(&text);
+    let start = batch.vertices.len();
+    game.native_text(batch, &text, [x - tw / 2.0, y - 3.5], ink, false);
+    batch.scale_since(start, x, y, 0.75, 0.75);
+}
+
+/// The waypoint editor's parts.
+struct EditLayout {
+    /// The text boxes: name, symbol, x, y, z, hex (`m::Form` order).
+    fields: [[f32; 4]; 6],
+    swatches: [[f32; 4]; 10],
+    use_pos: [f32; 4],
+    dim: [f32; 4],
+    set: [f32; 4],
+    visible: [f32; 4],
+    temporary: [f32; 4],
+    scope: [f32; 4],
+    always_name: [f32; 4],
+    on_screen: [f32; 4],
+    on_minimap: [f32; 4],
+    on_map: [f32; 4],
+    teleport: [f32; 4],
+    copy: [f32; 4],
+    share: [f32; 4],
+    duplicate: [f32; 4],
+    delete: [f32; 4],
+    done: [f32; 4],
+    panel: [f32; 4],
+}
+
+fn edit_layout(w: f32, h: f32) -> EditLayout {
+    let pw = 300.0f32.min(w - 16.0);
+    let x = (w - pw) / 2.0;
+    let y = (h / 2.0 - 112.0).max(4.0);
+    let half = |i: f32, k: usize| {
+        let cw = (pw - 2.0) / 2.0;
+        [x + k as f32 * (cw + 2.0), y + 76.0 + i * 20.0, cw, 18.0]
+    };
+    let third = |i: f32, k: usize| {
+        let cw = (pw - 4.0) / 3.0;
+        [x + k as f32 * (cw + 2.0), y + 76.0 + i * 20.0, cw, 18.0]
+    };
+    let fw = (pw - 110.0 - 6.0) / 3.0;
+    let xyz = |k: usize| [x + k as f32 * (fw + 2.0), y + 54.0, fw, 16.0];
+    EditLayout {
+        fields: [
+            [x, y + 14.0, pw, 16.0],
+            [x, y + 34.0, 30.0, 16.0],
+            xyz(0),
+            xyz(1),
+            xyz(2),
+            [x + 192.0, y + 34.0, pw - 192.0, 16.0],
+        ],
+        swatches: std::array::from_fn(|i| [x + 36.0 + i as f32 * 15.0, y + 35.0, 13.0, 14.0]),
+        use_pos: [x + pw - 110.0, y + 54.0, 110.0, 16.0],
+        dim: half(0.0, 0),
+        set: half(0.0, 1),
+        visible: half(1.0, 0),
+        temporary: half(1.0, 1),
+        scope: half(2.0, 0),
+        always_name: half(2.0, 1),
+        on_screen: third(3.0, 0),
+        on_minimap: third(3.0, 1),
+        on_map: third(3.0, 2),
+        teleport: third(4.0, 0),
+        copy: third(4.0, 1),
+        share: third(4.0, 2),
+        duplicate: third(5.0, 0),
+        delete: third(5.0, 1),
+        done: third(5.0, 2),
+        panel: [x - 8.0, y - 6.0, pw + 16.0, 76.0 + 6.0 * 20.0 + 10.0],
+    }
+}
+
+/// Whether the server lets this player use commands such as /tp (operator level 2 or more).
+fn may_teleport(game: &Game<'_>) -> bool {
+    game.ui.registries.permission >= 2
+}
+
+/// The dimensions a waypoint can be moved to: the three of the game and the one played now.
+fn dimensions(now: &str) -> Vec<String> {
+    let mut d: Vec<String> = ["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"].map(str::to_owned).to_vec();
+    if !d.iter().any(|x| x == now) {
+        d.push(now.to_owned());
+    }
+    d
+}
+
+/// A one-line box (a confirm or a name) centred, with two buttons under it.
+fn dialog_layout(w: f32, h: f32) -> ([f32; 4], [[f32; 4]; 2]) {
     let pw = 220.0;
     let x = (w - pw) / 2.0;
-    let y = (h / 2.0 - 110.0).max(4.0);
-    let b = |i: f32| [x, y + 52.0 + i * 21.0, pw, 19.0];
-    (
-        [x, y + 14.0, pw, 18.0],
-        [b(0.0), b(1.0), b(2.0), b(3.0), b(4.0), b(5.0), b(6.0)],
-    )
+    let y = h / 2.0 - 30.0;
+    ([x, y, pw, 18.0], [[x, y + 24.0, 109.0, 18.0], [x + 111.0, y + 24.0, 109.0, 18.0]])
 }
 
 /// The new set's name box and its buttons: create, cancel.
@@ -1927,6 +2097,7 @@ fn on_map(s: &State, w: &m::Waypoint) -> bool {
     let set = m::settings(|_| None);
     set.waypoints
         && set.wp_worldmap
+        && w.on_map
         && s.book.visible(w)
         && match s.screen.filter {
             0 => true,
@@ -1947,7 +2118,12 @@ pub(super) fn on_render(game: &Game<'_>, batch: &mut HudBatch, screen: &NativeSc
     with(|s| match s.screen.page.clone() {
         m::Page::Map => draw_map(game, batch, s, &settings, mouse),
         m::Page::List { scroll } => draw_list(game, batch, s, &settings, scroll, mouse),
-        m::Page::Edit { index, name } => draw_edit(game, batch, s, index, &name, mouse),
+        m::Page::Edit { index, form } => draw_edit(game, batch, s, index, &form, mouse),
+        m::Page::Confirm { delete } => {
+            let q = format!("Delete {} waypoint{}?", delete.len(), if delete.len() == 1 { "" } else { "s" });
+            draw_dialog(game, batch, &q, None, "Delete", mouse);
+        }
+        m::Page::RenameSet { name } => draw_dialog(game, batch, "The set's new name", Some(&name), "Rename", mouse),
         m::Page::Settings { tab } => draw_settings(game, batch, &settings, tab, mouse),
         m::Page::NewSet { name } => {
             let (field, [create, cancel]) = new_set_layout(w, h);
@@ -2108,41 +2284,83 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
 
 fn draw_list(game: &Game<'_>, batch: &mut HudBatch, s: &State, settings: &m::Settings, scroll: usize, mouse: [f32; 2]) {
     let (w, h) = (batch.width, batch.height);
-    let (panel, rows, [set, set_shown, new_set, del_set], [back, order, from_chat, add]) = list_layout(w, h);
+    let l = list_layout(w, h);
+    let [set, set_shown, new_set, rename_set, del_set] = l.head;
+    let [del, hide, show, to_set, view] = l.bulk;
+    let [back, order, from_chat, add] = l.foot;
+    let panel = l.panel;
     game.native_fill(batch, panel, 0xC000_0000);
-    let title = format!("Waypoints ({})  -  right-click a row to hide it", s.book.list.len());
-    game.native_text(batch, &title, [panel[0] + 6.0, panel[1] + 8.0], 0xFFFFFF, true);
+    let here = player_pos(game);
+    let shown = listed(s, settings, here);
+    let title = format!("Waypoints ({} of {})", shown.len(), s.book.list.len());
+    game.native_text(batch, &title, [panel[0] + 6.0, panel[1] + 7.0], 0xFFFFFF, true);
+    // The search box: click it and type.
+    let sb = l.search;
+    game.native_fill(batch, sb, if s.screen.searching { 0xFFC0_C0C0 } else { 0xFF60_6060 });
+    game.native_fill(batch, [sb[0] + 1.0, sb[1] + 1.0, sb[2] - 2.0, sb[3] - 2.0], 0xFF00_0000);
+    let caret = if s.screen.searching && (game.started.elapsed().as_millis() / 500) % 2 == 0 { "_" } else { "" };
+    let (text, colour) = if s.screen.search.is_empty() && !s.screen.searching {
+        ("Search...".to_owned(), 0x808080)
+    } else {
+        (format!("{}{caret}", s.screen.search), 0xFFFFFF)
+    };
+    game.native_text(batch, &text, [sb[0] + 3.0, sb[1] + 3.0], colour, false);
     let cur = &s.book.sets[s.book.current.min(s.book.sets.len() - 1)];
     button(game, batch, set, &format!("Set: {}", cur.name), mouse);
     button(game, batch, set_shown, &format!("Shown: {}", if cur.shown { "ON" } else { "OFF" }), mouse);
     button(game, batch, new_set, "New set", mouse);
+    button(game, batch, rename_set, "Rename set", mouse);
     button(game, batch, del_set, "Delete set", mouse);
-    let here = player_pos(game);
     let dim = game.dim.id();
-    let ordered = s.book.order(settings.sort, here);
-    for (i, &index) in ordered.iter().skip(scroll).take(rows).enumerate() {
+    for (i, &index) in shown.iter().skip(scroll).take(l.rows).enumerate() {
         let wp = &s.book.list[index];
         let r = list_row(panel, i);
         let hover = inside(r, mouse);
-        game.native_fill(batch, r, if hover { 0x6050_5070 } else { 0x4030_3040 });
-        game.native_fill(batch, [r[0] + 4.0, r[1] + 6.0, 8.0, 8.0], 0xFF00_0000 | wp.rgb());
-        let colour = if s.book.visible(wp) { 0xFFFFFF } else { 0x707070 };
-        let label = if wp.set == s.book.current_set() { wp.name.clone() } else { format!("{} ({})", wp.name, wp.set) };
-        game.native_text(batch, &label, [r[0] + 16.0, r[1] + 6.0], colour, false);
+        let picked = s.screen.selected.contains(&index);
+        game.native_fill(batch, r, if picked { 0x7040_6090 } else if hover { 0x6050_5070 } else { 0x4030_3040 });
+        let t = row_tick(r);
+        game.native_fill(batch, t, 0xFFA0_A0A0);
+        game.native_fill(batch, [t[0] + 1.0, t[1] + 1.0, t[2] - 2.0, t[3] - 2.0], if picked { 0xFF55_AAFF } else { 0xFF10_1010 });
+        let visible = s.book.visible(wp);
+        draw_mark(game, batch, [r[0] + 24.0, r[1] + 10.0], wp, !visible);
+        let colour = if visible { 0xFFFFFF } else { 0x707070 };
+        let mut label = if wp.set == s.book.current_set() { wp.name.clone() } else { format!("{} ({})", wp.name, wp.set) };
+        if !wp.shown {
+            label.push_str("  - hidden");
+        }
+        if wp.global {
+            label.push_str("  [all worlds]");
+        }
+        if wp.temporary {
+            label.push_str("  [temporary]");
+        }
+        game.native_text(batch, &label, [r[0] + 36.0, r[1] + 6.0], colour, false);
         let mut info = format!("{} {} {}", wp.pos[0], wp.pos[1], wp.pos[2]);
         if wp.dim != dim {
             info = format!("{info}  {}", m::pretty_id(&wp.dim));
         } else if let Some(p) = here {
-            info = format!("{info}  {}", m::format_distance(m::distance(p, wp.centre())));
+            info = format!("{info}  {}", m::distance_text(m::distance(p, wp.centre()), settings.units));
         }
         let iw = game.native_text_width(&info);
         game.native_text(batch, &info, [r[0] + r[2] - iw - 4.0, r[1] + 6.0], 0xA0A0A0, false);
     }
-    if s.book.list.is_empty() {
-        let t = "No waypoints yet: B in the world, a click on the map, or Add here";
+    if shown.is_empty() {
+        let t = if s.book.list.is_empty() {
+            "No waypoints yet: B in the world, a click on the map, or + New"
+        } else {
+            "No waypoint here matches"
+        };
         let tw = game.native_text_width(t);
         game.native_text(batch, t, [(w - tw) / 2.0, panel[1] + 60.0], 0xA0A0A0, false);
     }
+    let n = s.screen.selected.len();
+    let which = if n > 0 { format!(" ({n})") } else { String::new() };
+    let del_label = if s.screen.list_view == 2 && n == 0 { "Clear all".to_owned() } else { format!("Delete{which}") };
+    button(game, batch, del, &del_label, mouse);
+    button(game, batch, hide, &format!("Hide{which}"), mouse);
+    button(game, batch, show, &format!("Show{which}"), mouse);
+    button(game, batch, to_set, &format!("To set {}", s.book.current_set()), mouse);
+    button(game, batch, view, &format!("List: {}", m::LIST_VIEWS[s.screen.list_view.min(2)]), mouse);
     button(game, batch, back, "Back to map", mouse);
     button(game, batch, order, &format!("Order: {}", m::SORTS[settings.sort]), mouse);
     let chat = match s.chat.back() {
@@ -2150,44 +2368,103 @@ fn draw_list(game: &Game<'_>, batch: &mut HudBatch, s: &State, settings: &m::Set
         None => "From chat".to_owned(),
     };
     button(game, batch, from_chat, &chat, mouse);
-    button(game, batch, add, "Add here", mouse);
-    if inside(from_chat, mouse)
+    button(game, batch, add, "+ New", mouse);
+    let tip = if inside(from_chat, mouse)
         && let Some((line, at)) = s.chat.back()
     {
-        let tip = format!("{line} -> {} {} {}", at[0], at[1], at[2]);
-        let tw = game.native_text_width(&tip);
-        game.native_fill(batch, [from_chat[0] - 2.0, from_chat[1] - 14.0, tw + 6.0, 12.0], 0xF000_0000);
-        game.native_text(batch, &tip, [from_chat[0] + 1.0, from_chat[1] - 12.0], 0xFFFFA0, false);
-    }
+        format!("{line} -> {} {} {}", at[0], at[1], at[2])
+    } else if [del, hide, show, to_set].iter().any(|r| inside(*r, mouse)) {
+        if n > 0 { "On the ticked waypoints (Shift: delete without asking)".into() } else { "On every waypoint listed (tick some to choose)".into() }
+    } else {
+        "Click: edit. Right-click: hide or show. The box: tick for the buttons below.".into()
+    };
+    game.native_text(batch, &tip, [panel[0] + 6.0, h - 68.0], 0x909090, false);
 }
 
-fn draw_edit(game: &Game<'_>, batch: &mut HudBatch, s: &State, index: usize, name: &str, mouse: [f32; 2]) {
+fn draw_edit(game: &Game<'_>, batch: &mut HudBatch, s: &State, index: usize, form: &m::Form, mouse: [f32; 2]) {
     let (w, h) = (batch.width, batch.height);
     let Some(wp) = s.book.list.get(index) else {
         return;
     };
-    let (field, [colour, shown, set, here, share, delete, done]) = edit_layout(w, h);
-    game.native_fill(batch, [field[0] - 8.0, field[1] - 18.0, field[2] + 16.0, 214.0], 0xC000_0000);
-    let title = format!("Waypoint at {} {} {} ({})", wp.pos[0], wp.pos[1], wp.pos[2], m::pretty_id(&wp.dim));
-    game.native_text(batch, &title, [field[0], field[1] - 12.0], 0xFFFFFF, true);
-    text_box(game, batch, field, name);
+    let l = edit_layout(w, h);
+    game.native_fill(batch, l.panel, 0xD000_0000);
+    let kind = if wp.death { "Death point" } else { "Waypoint" };
+    let title = format!("{kind} in {}", m::pretty_id(&wp.dim));
+    game.native_text(batch, &title, [l.fields[0][0], l.fields[0][1] - 11.0], 0xFFFFFF, true);
+    draw_mark(game, batch, [l.fields[0][0] + l.fields[0][2] - 8.0, l.fields[0][1] - 7.0], wp, false);
+    let blink = (game.started.elapsed().as_millis() / 500) % 2 == 0;
+    for (i, r) in l.fields.iter().enumerate() {
+        let focused = form.focus == Some(i);
+        game.native_fill(batch, *r, if focused { 0xFFE0_E0E0 } else { 0xFF70_7070 });
+        game.native_fill(batch, [r[0] + 1.0, r[1] + 1.0, r[2] - 2.0, r[3] - 2.0], 0xFF00_0000);
+        let mut text = form.fields[i].clone();
+        if i == m::F_HEX {
+            text = format!("#{text}");
+        }
+        if focused && blink {
+            text.push('_');
+        }
+        let empty = form.fields[i].is_empty() && !focused;
+        let hint = match i {
+            m::F_SYMBOL => "Aa",
+            m::F_HEX => "#custom",
+            _ => "",
+        };
+        if empty && !hint.is_empty() {
+            game.native_text(batch, hint, [r[0] + 3.0, r[1] + 4.0], 0x606060, false);
+        } else {
+            game.native_text(batch, &text, [r[0] + 3.0, r[1] + 4.0], 0xFFFFFF, false);
+        }
+    }
+    for (k, label) in ["X", "Y", "Z"].iter().enumerate() {
+        let r = l.fields[m::F_X + k];
+        game.native_text(batch, label, [r[0] + r[2] - 8.0, r[1] + 4.0], 0x707070, false);
+    }
+    for (i, r) in l.swatches.iter().enumerate() {
+        let chosen = wp.custom.is_none() && wp.colour == i;
+        game.native_fill(batch, *r, if chosen { 0xFFFF_FFFF } else { 0xFF20_2020 });
+        game.native_fill(batch, [r[0] + 1.0, r[1] + 1.0, r[2] - 2.0, r[3] - 2.0], 0xFF00_0000 | m::COLOURS[i].1);
+    }
+    let on = |b: bool| if b { "ON" } else { "OFF" };
+    button(game, batch, l.use_pos, "Use my position", mouse);
+    button(game, batch, l.dim, &format!("Dim: {}", m::pretty_id(&wp.dim)), mouse);
+    button(game, batch, l.set, &format!("Set: {}", wp.set), mouse);
+    button(game, batch, l.visible, &format!("Visible: {}", on(wp.shown)), mouse);
+    button(game, batch, l.temporary, &format!("Temporary: {}", on(wp.temporary)), mouse);
+    button(game, batch, l.scope, if wp.global { "Kept for: all worlds" } else { "Kept for: this world" }, mouse);
+    button(game, batch, l.always_name, &format!("Always named: {}", on(wp.always_name)), mouse);
+    button(game, batch, l.on_screen, &format!("Screen: {}", on(wp.on_screen)), mouse);
+    button(game, batch, l.on_minimap, &format!("Minimap: {}", on(wp.on_minimap)), mouse);
+    button(game, batch, l.on_map, &format!("Map: {}", on(wp.on_map)), mouse);
+    if may_teleport(game) {
+        button(game, batch, l.teleport, "Teleport", mouse);
+    }
+    button(game, batch, l.copy, "Copy X Y Z", mouse);
+    button(game, batch, l.share, "Share in chat", mouse);
+    button(game, batch, l.duplicate, "Duplicate", mouse);
+    button(game, batch, l.delete, "Delete", mouse);
+    button(game, batch, l.done, "Done", mouse);
     let other = match wp.dim.as_str() {
         m::OVERWORLD => m::converted(wp.pos, m::OVERWORLD, m::NETHER).map(|p| format!("In the Nether: {} {} {}", p[0], p[1], p[2])),
         m::NETHER => m::converted(wp.pos, m::NETHER, m::OVERWORLD).map(|p| format!("In the Overworld: {} {} {}", p[0], p[1], p[2])),
         _ => None,
     };
     if let Some(t) = other {
-        game.native_text(batch, &t, [field[0], field[1] + 23.0], 0xA0A0A0, false);
+        game.native_text(batch, &t, [l.panel[0] + 8.0, l.panel[1] + l.panel[3] + 3.0], 0xA0A0A0, true);
     }
-    let on = |b: bool| if b { "ON" } else { "OFF (hidden for now)" };
-    button(game, batch, colour, &format!("Colour: {}", m::COLOURS[wp.colour.min(m::COLOURS.len() - 1)].0), mouse);
-    game.native_fill(batch, [colour[0] + 4.0, colour[1] + 5.0, 8.0, 8.0], 0xFF00_0000 | wp.rgb());
-    button(game, batch, shown, &format!("Shown: {}", on(wp.shown)), mouse);
-    button(game, batch, set, &format!("Set: {}", wp.set), mouse);
-    button(game, batch, here, "Move to where I stand", mouse);
-    button(game, batch, share, "Share in chat", mouse);
-    button(game, batch, delete, "Delete", mouse);
-    button(game, batch, done, "Done", mouse);
+}
+
+/// A question with two buttons (deleting), or a name box (a set's new name).
+fn draw_dialog(game: &Game<'_>, batch: &mut HudBatch, question: &str, field: Option<&str>, yes: &str, mouse: [f32; 2]) {
+    let (w, h) = (batch.width, batch.height);
+    let (r, [ok, cancel]) = dialog_layout(w, h);
+    game.native_fill(batch, [r[0] - 8.0, r[1] - 20.0, r[2] + 16.0, 70.0], 0xD000_0000);
+    game.native_text(batch, question, [r[0], r[1] - 12.0], 0xFFFFFF, true);
+    if let Some(text) = field {
+        text_box(game, batch, r, text);
+    }
+    button(game, batch, ok, yes, mouse);
+    button(game, batch, cancel, "Cancel", mouse);
 }
 
 /// The settings screen: its page tabs, the rows of settings (two columns) and the back button.
@@ -2241,23 +2518,28 @@ fn draw_settings(game: &Game<'_>, batch: &mut HudBatch, settings: &m::Settings, 
     button(game, batch, back, "Back to map", mouse);
 }
 
-/// Puts the edited name on its waypoint, saved; back to `to`.
+/// What the editor's boxes say put on its waypoint (not saved yet).
+fn apply_form(s: &mut State) {
+    if let m::Page::Edit { index, form } = &s.screen.page
+        && let Some(w) = s.book.list.get_mut(*index)
+    {
+        form.apply(w);
+    }
+}
+
+/// The editor's boxes put on its waypoint, saved; back to `to`.
 fn finish_edit(s: &mut State, to: m::Page) {
-    if let m::Page::Edit { index, name } = &s.screen.page {
-        let name = m::clean_name(name);
-        if let Some(w) = s.book.list.get_mut(*index)
-            && !name.is_empty()
-        {
-            w.name = name;
-        }
+    if matches!(s.screen.page, m::Page::Edit { .. }) {
+        apply_form(s);
         save_book(s);
     }
     s.screen.page = to;
 }
 
 fn edit(s: &mut State, index: usize) {
-    let name = s.book.list[index].name.clone();
-    s.screen.page = m::Page::Edit { index, name };
+    let form = m::Form::of(&s.book.list[index]);
+    s.screen.selected.clear();
+    s.screen.page = m::Page::Edit { index, form };
 }
 
 /// `native_screen_mouse_button_pressed_pre`: buttons, rows, tools, and a press on the map.
@@ -2304,9 +2586,14 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
         }
         m::Page::Map => {}
         m::Page::List { scroll } => {
-            let (panel, rows, [set, set_shown, new_set, del_set], [back, order, from_chat, add]) = list_layout(w, h);
-            let ordered = s.book.order(settings.sort, player_pos(game));
-            let row = (0..rows).find(|&i| inside(list_row(panel, i), mouse)).and_then(|i| ordered.get(scroll + i).copied());
+            let l = list_layout(w, h);
+            let [set, set_shown, new_set, rename_set, del_set] = l.head;
+            let [del, hide, show, to_set, view] = l.bulk;
+            let [back, order, from_chat, add] = l.foot;
+            let shown = listed(s, &settings, player_pos(game));
+            let hit = (0..l.rows).find(|&i| inside(list_row(l.panel, i), mouse));
+            let row = hit.and_then(|i| shown.get(scroll + i).copied());
+            s.screen.searching = button == 0 && inside(l.search, mouse);
             if button == 1 {
                 // Right-click: hidden for now, or shown again.
                 if let Some(i) = row {
@@ -2318,7 +2605,17 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
             if button != 0 {
                 return;
             }
-            if inside(set, mouse) {
+            // The bulk buttons act on the ticked waypoints, else on every one listed.
+            let targets = if s.screen.selected.is_empty() { shown.clone() } else { s.screen.selected.clone() };
+            if let (Some(i), Some(r)) = (row, hit.map(|k| list_row(l.panel, k)))
+                && inside(row_tick(r), mouse)
+            {
+                if let Some(at) = s.screen.selected.iter().position(|&x| x == i) {
+                    s.screen.selected.remove(at);
+                } else {
+                    s.screen.selected.push(i);
+                }
+            } else if inside(set, mouse) {
                 s.book.next_set();
                 save_book(s);
             } else if inside(set_shown, mouse) {
@@ -2327,9 +2624,36 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
                 save_book(s);
             } else if inside(new_set, mouse) {
                 s.screen.page = m::Page::NewSet { name: String::new() };
+            } else if inside(rename_set, mouse) {
+                s.screen.page = m::Page::RenameSet { name: s.book.current_set().to_owned() };
             } else if inside(del_set, mouse) {
                 s.book.remove_set();
+                s.screen.selected.clear();
                 save_book(s);
+            } else if inside(del, mouse) {
+                // Without ticks, only the death points' "Clear all" deletes the whole list.
+                let delete = if s.screen.selected.is_empty() && s.screen.list_view != 2 { Vec::new() } else { targets };
+                if delete.is_empty() {
+                    notice(s, "Tick the waypoints to delete first".into());
+                } else if game.native_has_shift_down() {
+                    s.book.remove(&delete);
+                    s.screen.selected.clear();
+                    save_book(s);
+                } else {
+                    s.screen.page = m::Page::Confirm { delete };
+                }
+            } else if inside(hide, mouse) || inside(show, mouse) {
+                if s.book.set_shown(&targets, inside(show, mouse)) {
+                    save_book(s);
+                }
+            } else if inside(to_set, mouse) {
+                let set = s.book.current_set().to_owned();
+                s.book.move_to_set(&targets, &set);
+                save_book(s);
+            } else if inside(view, mouse) {
+                s.screen.list_view = (s.screen.list_view + 1) % m::LIST_VIEWS.len();
+                s.screen.selected.clear();
+                s.screen.page = m::Page::List { scroll: 0 };
             } else if inside(back, mouse) {
                 s.screen.page = m::Page::Map;
             } else if inside(order, mouse) {
@@ -2354,40 +2678,110 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
             }
         }
         m::Page::Edit { index, .. } if button == 0 => {
-            let (_, [colour, shown, set, move_here, share, delete, done]) = edit_layout(w, h);
+            let l = edit_layout(w, h);
             if index >= s.book.list.len() {
                 s.screen.page = m::Page::List { scroll: 0 };
                 return;
             }
-            if inside(colour, mouse) {
-                let wp = &mut s.book.list[index];
-                wp.colour = (wp.colour + 1) % m::COLOURS.len();
-                save_book(s);
-            } else if inside(shown, mouse) {
-                s.book.list[index].shown = !s.book.list[index].shown;
-                save_book(s);
-            } else if inside(set, mouse) {
-                let at = s.book.set_index(&s.book.list[index].set).unwrap_or(0);
-                let next = s.book.sets[(at + 1) % s.book.sets.len()].name.clone();
-                s.book.list[index].set = next;
-                save_book(s);
-            } else if inside(move_here, mouse) {
+            // Text boxes take the focus; anything else puts what was typed on the waypoint.
+            if let Some(f) = l.fields.iter().position(|r| inside(*r, mouse)) {
+                if let m::Page::Edit { form, .. } = &mut s.screen.page {
+                    form.focus = Some(f);
+                }
+                return;
+            }
+            apply_form(s);
+            let mut to: Option<m::Page> = None;
+            if let Some(c) = l.swatches.iter().position(|r| inside(*r, mouse)) {
+                s.book.list[index].colour = c;
+                s.book.list[index].custom = None;
+            } else if inside(l.use_pos, mouse) {
                 if let Some(pos) = here {
                     s.book.list[index].pos = pos;
                     s.book.list[index].dim = dim.to_owned();
+                }
+            } else if inside(l.dim, mouse) {
+                let all = dimensions(dim);
+                let at = all.iter().position(|d| *d == s.book.list[index].dim).unwrap_or(0);
+                s.book.list[index].dim = all[(at + 1) % all.len()].clone();
+            } else if inside(l.set, mouse) {
+                let at = s.book.set_index(&s.book.list[index].set).unwrap_or(0);
+                s.book.list[index].set = s.book.sets[(at + 1) % s.book.sets.len()].name.clone();
+            } else if inside(l.visible, mouse) {
+                s.book.list[index].shown = !s.book.list[index].shown;
+            } else if inside(l.temporary, mouse) {
+                s.book.list[index].temporary = !s.book.list[index].temporary;
+            } else if inside(l.scope, mouse) {
+                s.book.list[index].global = !s.book.list[index].global;
+            } else if inside(l.always_name, mouse) {
+                s.book.list[index].always_name = !s.book.list[index].always_name;
+            } else if inside(l.on_screen, mouse) {
+                s.book.list[index].on_screen = !s.book.list[index].on_screen;
+            } else if inside(l.on_minimap, mouse) {
+                s.book.list[index].on_minimap = !s.book.list[index].on_minimap;
+            } else if inside(l.on_map, mouse) {
+                s.book.list[index].on_map = !s.book.list[index].on_map;
+            } else if inside(l.teleport, mouse) && may_teleport(game) {
+                if s.book.list[index].dim == dim {
+                    s.pending_command = Some(format!("tp @s {} {} {}", s.book.list[index].pos[0], s.book.list[index].pos[1], s.book.list[index].pos[2]));
+                    to = Some(m::Page::Map);
+                } else {
+                    notice(s, "That waypoint is in another dimension".into());
+                }
+            } else if inside(l.copy, mouse) {
+                s.pending_clipboard = Some(format!("{} {} {}", s.book.list[index].pos[0], s.book.list[index].pos[1], s.book.list[index].pos[2]));
+            } else if inside(l.share, mouse) {
+                s.pending_chat = Some(m::share_text(&s.book.list[index]));
+                to = Some(m::Page::Map);
+            } else if inside(l.duplicate, mouse) {
+                if let Some(i) = s.book.duplicate(index, now_secs()) {
                     save_book(s);
+                    edit(s, i);
+                    return;
                 }
-            } else if inside(share, mouse) {
-                finish_edit(s, m::Page::Map);
-                if let Some(wp) = s.book.list.get(index) {
-                    s.pending_chat = Some(m::share_text(wp));
+            } else if inside(l.delete, mouse) {
+                if game.native_has_shift_down() {
+                    s.book.remove(&[index]);
+                    s.screen.selected.clear();
+                    to = Some(m::Page::List { scroll: 0 });
+                } else {
+                    to = Some(m::Page::Confirm { delete: vec![index] });
                 }
-            } else if inside(delete, mouse) {
-                s.book.list.remove(index);
+            } else if inside(l.done, mouse) {
+                to = Some(m::Page::List { scroll: 0 });
+            }
+            save_book(s);
+            match to {
+                Some(page) => s.screen.page = page,
+                None => {
+                    if let m::Page::Edit { form, .. } = &mut s.screen.page {
+                        *form = m::Form::of(&s.book.list[index]);
+                        form.focus = None;
+                    }
+                }
+            }
+        }
+        m::Page::Confirm { delete } if button == 0 => {
+            let (_, [ok, cancel]) = dialog_layout(w, h);
+            if inside(ok, mouse) {
+                s.book.remove(&delete);
+                s.screen.selected.clear();
                 save_book(s);
                 s.screen.page = m::Page::List { scroll: 0 };
-            } else if inside(done, mouse) {
-                finish_edit(s, m::Page::List { scroll: 0 });
+            } else if inside(cancel, mouse) {
+                s.screen.page = m::Page::List { scroll: 0 };
+            }
+        }
+        m::Page::RenameSet { name } if button == 0 => {
+            let (_, [ok, cancel]) = dialog_layout(w, h);
+            if inside(ok, mouse) {
+                if !s.book.rename_set(&name) {
+                    notice(s, "That set name is empty or taken".into());
+                }
+                save_book(s);
+                s.screen.page = m::Page::List { scroll: 0 };
+            } else if inside(cancel, mouse) {
+                s.screen.page = m::Page::List { scroll: 0 };
             }
         }
         m::Page::Settings { tab } => {
@@ -2500,14 +2894,17 @@ pub(super) fn on_scroll(game: &mut Game<'_>, screen: &str, mouse: [f32; 2], scro
     let (w, h) = game.gui_size();
     let step = if scroll[1] > 0.0 { 1 } else { -1 };
     let (lo, hi) = settings(game).map_zooms();
-    with(|s| match &mut s.screen.page {
-        m::Page::Map => s.screen.view.zoom_at(map_rect(w, h), mouse, step, lo, hi),
-        m::Page::List { scroll } => {
-            let rows = m::list_rows(h);
-            let max = s.book.list.len().saturating_sub(rows);
-            *scroll = (*scroll as i64 - i64::from(step)).clamp(0, max as i64) as usize;
+    let set = settings(game);
+    let here = player_pos(game);
+    with(|s| {
+        let max = listed(s, &set, here).len().saturating_sub(m::list_rows(h));
+        match &mut s.screen.page {
+            m::Page::Map => s.screen.view.zoom_at(map_rect(w, h), mouse, step, lo, hi),
+            m::Page::List { scroll } => {
+                *scroll = (*scroll as i64 - i64::from(step)).clamp(0, max as i64) as usize;
+            }
+            _ => {}
         }
-        _ => {}
     });
 }
 
@@ -2521,18 +2918,49 @@ pub(super) fn on_key_pressed(game: &Game<'_>, screen: &NativeScreenView<'_>, key
     let feet = player_pos(game).map_or(64, |p| p[1].floor() as i32);
     let top = game.world.shape.max_y();
     with(|s| {
-        let typing = s.screen.page.typing();
+        let typing = s.screen.typing();
         match key {
-            "key.keyboard.escape" | "key.keyboard.enter" | "key.keyboard.keypad.enter" if typing => {
-                if let m::Page::NewSet { name } = s.screen.page.clone() {
-                    if key != "key.keyboard.escape" {
-                        s.book.add_set(&name);
-                        save_book(s);
+            "key.keyboard.escape" | "key.keyboard.enter" | "key.keyboard.keypad.enter" | "key.keyboard.tab" if typing => {
+                let escape = key == "key.keyboard.escape";
+                match s.screen.page.clone() {
+                    m::Page::NewSet { name } => {
+                        if !escape {
+                            s.book.add_set(&name);
+                            save_book(s);
+                        }
+                        s.screen.page = m::Page::List { scroll: 0 };
                     }
-                    s.screen.page = m::Page::List { scroll: 0 };
-                } else {
-                    finish_edit(s, m::Page::List { scroll: 0 });
+                    m::Page::RenameSet { name } => {
+                        if !escape {
+                            s.book.rename_set(&name);
+                            save_book(s);
+                        }
+                        s.screen.page = m::Page::List { scroll: 0 };
+                    }
+                    m::Page::Edit { .. } if key == "key.keyboard.tab" => {
+                        if let m::Page::Edit { form, .. } = &mut s.screen.page {
+                            form.focus = Some(form.focus.map_or(0, |f| (f + 1) % 6));
+                        }
+                    }
+                    m::Page::Edit { .. } if escape => finish_edit(s, m::Page::List { scroll: 0 }),
+                    m::Page::Edit { index, .. } => {
+                        apply_form(s);
+                        save_book(s);
+                        if let (m::Page::Edit { form, .. }, Some(w)) = (&mut s.screen.page, s.book.list.get(index)) {
+                            *form = m::Form::of(w);
+                            form.focus = None;
+                        }
+                    }
+                    _ => s.screen.searching = false,
                 }
+                *canceled = true;
+            }
+            "key.keyboard.escape" if matches!(s.screen.page, m::Page::Edit { .. }) => {
+                finish_edit(s, m::Page::List { scroll: 0 });
+                *canceled = true;
+            }
+            "key.keyboard.escape" if matches!(s.screen.page, m::Page::Confirm { .. }) => {
+                s.screen.page = m::Page::List { scroll: 0 };
                 *canceled = true;
             }
             "key.keyboard.escape" if matches!(s.screen.page, m::Page::List { .. } | m::Page::Settings { .. }) => {
@@ -2541,10 +2969,13 @@ pub(super) fn on_key_pressed(game: &Game<'_>, screen: &NativeScreenView<'_>, key
             }
             "key.keyboard.backspace" if typing => {
                 match &mut s.screen.page {
-                    m::Page::Edit { name, .. } | m::Page::NewSet { name } => {
+                    m::Page::Edit { form, .. } => form.backspace(),
+                    m::Page::NewSet { name } | m::Page::RenameSet { name } => {
                         name.pop();
                     }
-                    _ => {}
+                    _ => {
+                        s.screen.search.pop();
+                    }
                 }
                 *canceled = true;
             }
@@ -2581,11 +3012,25 @@ pub(super) fn on_char(game: &Game<'_>, screen: &NativeScreenView<'_>, c: char, c
         return;
     }
     with(|s| {
-        if let m::Page::Edit { name, .. } | m::Page::NewSet { name } = &mut s.screen.page {
-            if !c.is_control() && name.chars().count() < m::NAME_MAX {
-                name.push(c);
+        let searching = s.screen.searching && matches!(s.screen.page, m::Page::List { .. });
+        match &mut s.screen.page {
+            m::Page::Edit { form, .. } if form.focus.is_some() => {
+                form.type_char(c);
+                *canceled = true;
             }
-            *canceled = true;
+            m::Page::NewSet { name } | m::Page::RenameSet { name } => {
+                if !c.is_control() && name.chars().count() < m::NAME_MAX {
+                    name.push(c);
+                }
+                *canceled = true;
+            }
+            m::Page::List { .. } if searching => {
+                if !c.is_control() && s.screen.search.chars().count() < 24 {
+                    s.screen.search.push(c);
+                }
+                *canceled = true;
+            }
+            _ => {}
         }
     });
 }
