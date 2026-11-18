@@ -1,0 +1,107 @@
+# Lumos Controls: every native mod's keys in Options > Controls > Key Binds, a section per mod.
+[mod]
+id = "lumos_controls"
+version = "1.0.0"
+priority = 100
+
+# Horizon Nightly 2026-11-13. Planned with horizon-mixins e59da9094f0c2fdda6c627fe9eff22dec6a906f0.
+[compatibility]
+horizon_revision = "9f42064c11efe7ef3e5ed2baad7ddc2a3b36eea0"
+
+# The rules (no game types; its tests run on their own). The options screens are in
+# horizon-client-render, so the mod's modules are too; `pub` lets the game's Options > Mods
+# entry (hooks/list.rs) read its name.
+[[module]]
+id = "runtime"
+file = "crates/horizon-client-render/src/options_ui.rs"
+name = "lumos_controls"
+source = "runtime.rs"
+visibility = "pub"
+
+[[module]]
+id = "glue"
+file = "crates/horizon-client-render/src/options_ui.rs"
+name = "lumos_controls_glue"
+source = "glue.rs"
+
+# Key Binds is laid out: first the mods' rows' height (for the scroll limit) ...
+[[injection]]
+id = "layout-start"
+kind = "HEAD"
+target = "horizon_client_render::options_ui::OptionsUi::layout"
+helper = "hooks/layout_start.rs"
+bindings = [
+  { name = "ui", ty = "&mut crate::options_ui::OptionsUi", value = "&mut *self" },
+  { name = "s", ty = "&crate::settings::Settings", value = "s" },
+]
+
+# ... the scroll limit `layout` sets counts them ...
+[[injection]]
+id = "clamp"
+kind = "HEAD"
+cancellable = true
+target = "horizon_client_render::options_ui::OptionsUi::clamp_scroll"
+helper = "hooks/clamp.rs"
+bindings = [
+  { name = "ui", ty = "&mut crate::options_ui::OptionsUi", value = "&mut *self" },
+  { name = "top", ty = "f32", value = "top" },
+  { name = "bottom", ty = "f32", value = "bottom" },
+  { name = "content", ty = "f32", value = "content" },
+]
+
+# ... and the mods' sections join the list after vanilla's categories.
+[[injection]]
+id = "layout-end"
+kind = "RETURN"
+target = "horizon_client_render::options_ui::OptionsUi::layout"
+helper = "hooks/layout_end.rs"
+bindings = [
+  { name = "value", ty = "(Vec<Widget>, f32, f32, f32)", value = "$value" },
+  { name = "ui", ty = "&mut crate::options_ui::OptionsUi", value = "&mut *self" },
+  { name = "s", ty = "&crate::settings::Settings", value = "s" },
+  { name = "w", ty = "f32", value = "w" },
+]
+
+# A key's button waits for a key as on the mod's page; a Reset button notes its key instead.
+[[injection]]
+id = "wait"
+kind = "HEAD"
+cancellable = true
+target = "horizon_client_render::options_ui::pages::OptionsUi::wait_native_key"
+helper = "hooks/wait.rs"
+bindings = [
+  { name = "i", ty = "usize", value = "i" },
+  { name = "k", ty = "usize", value = "k" },
+]
+
+# After the click or key (Enter, the controller) that pressed a Reset: the key goes back to its
+# default and the settings are saved.
+[[injection]]
+id = "click"
+kind = "RETURN"
+target = "horizon_client_render::options_ui::OptionsUi::click"
+helper = "hooks/click.rs"
+bindings = [
+  { name = "value", ty = "Vec<Event>", value = "$value" },
+  { name = "s", ty = "&mut crate::settings::Settings", value = "&mut *s" },
+]
+
+[[injection]]
+id = "key"
+kind = "RETURN"
+target = "horizon_client_render::options_ui::OptionsUi::key_modifiers"
+helper = "hooks/key.rs"
+bindings = [
+  { name = "value", ty = "Vec<Event>", value = "$value" },
+  { name = "s", ty = "&mut crate::settings::Settings", value = "&mut *s" },
+]
+
+# Its entry in Options > Mods, to switch it off.
+[[injection]]
+id = "list"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_mods"
+helper = "hooks/list.rs"
+bindings = [
+  { name = "mods", ty = "&mut Vec<crate::game::native_hooks::NativeMod>", value = "&mut *mods" },
+]

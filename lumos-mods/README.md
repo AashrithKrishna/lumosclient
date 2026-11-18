@@ -15,6 +15,7 @@ with them.
 | `lumos_freelook` | Hold a key (Left Alt by default) to look around freely while the player keeps facing, aiming and moving the way it did; letting go turns the camera back (eased or at once). From first person it shows third person while you look. Hold or toggle, invert, and first/third person on its page. |
 | `lumos_map` | Minimap and world map in the game's own colours: each block's top texture averaged once and tinted with its biome's grass, foliage and water colours, slopes shaded and water darkened with depth (or the flat map palette). Minimap: square or round, size, opacity, zoom keys (= and -), turning or north-up with N/E/S/W, cave view (K) under your head underground and in the Nether, show/hide (H), arrows for players (with names) and hostile/passive mobs, and coordinate, biome, light and time lines. Waypoints: B adds one, sets with their own visibility, hidden-for-now, sorting by name/distance/newest, sharing to chat, coordinates picked up from chat, the last N deaths, initials, fading with distance and Overworld/Nether conversion. World map (M): explored chunks saved per world or server (sub-worlds told apart by spawn, or by hand), unloaded ground dimmed, Y-layer view, chunk grid, slime chunks where the seed is known, follow, a waypoint filter, WASD/arrow panning and export to PNG (`<instance>/lumos-map/exports/`). |
 | `lumos_fullbright_key` | A key (G by default) that turns Horizon's own Fullbright (Video Settings > Quality) on and off, with a notice over the hotbar. On other people's servers, where Horizon holds Fullbright off, it says so instead. |
+| `lumos_controls` | Every enabled native mod's keys (Lumos's and registry mods') in Options > Controls > Key Binds, after vanilla's categories, under each mod's name as Java shows mod keys. Click a key to rebind it, Escape unbinds, Reset goes back to the mod's default; a key another binding (vanilla's, Horizon's or a mod's) also uses shows in red. It writes the same `key.<id>.<name>` lines as the mod's own page, which the mods read at once. |
 
 ## Pin
 
@@ -37,6 +38,9 @@ lumos-mods/<id>/
 
 `runtime.rs` and `glue.rs` become modules of `crates/horizon-client/src/game.rs`, named `<id>` and
 `<id>_glue`.
+`lumos_controls` is the exception: Key Binds is drawn by `horizon-client-render`, so its `runtime.rs`
+and `glue.rs` go into `crates/horizon-client-render/src/options_ui.rs` (`lumos_controls` is `pub`, for its
+Options > Mods entry).
 
 ## On, off and settings
 
@@ -55,6 +59,9 @@ them as Key Binds rows and rebinds them there, kept as `key.<id>.<name>` in `hor
 key handling goes through the mod's `keys.rs` (`listed`, `bound`, `pressed`, `held`), so moving to
 `Registrar::register_key_mapping` later changes that one file. A key pressed with F3 held is left
 to the debug keys.
+
+With `lumos_controls` on, every one of these keys is also in Options > Controls > Key Binds, a
+section per mod, rebound there through the same `key.<id>.<name>` lines.
 
 ## Tests
 
