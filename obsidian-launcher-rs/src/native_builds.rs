@@ -208,7 +208,33 @@ pub fn launch_parts(base_dir: &Path, game_dir: &Path) -> Option<(PathBuf, PathBu
     let st = read_state(game_dir)?;
     let dir = build_dir(base_dir, &st.build);
     let (client, prepare, root) = (exe(&dir, "horizon-client"), exe(&dir, "horizon-prepare"), dir.join("horizon-root"));
-    (client.is_file() && prepare.is_file() && root.join("research-lock.json").is_file()).then_some((client, prepare, root, st.build))
+    if !(client.is_file() && prepare.is_file() && root.join("research-lock.json").is_file()) {
+        return None;
+    }
+    pin_manifest(&root);
+    Some((client, prepare, root, st.build))
+}
+
+/// An older build's preparer only accepts the Minecraft version file it was made with, and
+/// Mojang has republished 26.3's since. Saves that exact file (checked by its SHA-1) where the
+/// preparer looks first, so it never trips over the launcher's newer copy.
+fn pin_manifest(root: &Path) {
+    let Ok(lock) = fs::read_to_string(root.join("research-lock.json")) else { return };
+    let Ok(lock) = serde_json::from_str::<Value>(&lock) else { return };
+    let (Some(ver), Some(sha1)) = (lock["minecraft"]["version"].as_str(), lock["minecraft"]["manifest_sha1"].as_str()) else { return };
+    let safe = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_');
+    if !safe(ver) || sha1.len() != 40 || !sha1.chars().all(|c| c.is_ascii_hexdigit()) {
+        return;
+    }
+    let dest = root.join(".local").join("minecraft").join(ver).join("manifest.json");
+    if net::sha1_file(&dest).is_some_and(|s| s.eq_ignore_ascii_case(sha1)) {
+        return;
+    }
+    if let Some(dir) = dest.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    let url = format!("https://piston-meta.mojang.com/v1/packages/{sha1}/{ver}.json");
+    let _ = net::download_verified(&url, &dest, Some(sha1), None);
 }
 
 /// Writes the switches: the player's native mods on, the build's others off.
