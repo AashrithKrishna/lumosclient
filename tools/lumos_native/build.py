@@ -153,7 +153,10 @@ def main():
     excluded = {}
     tried_without_crates = False
     # Mods earlier builds already found broken: leave them out up front instead of re-learning it.
-    known = json.load(open(os.path.join(here, "known-bad.json"))) if os.path.exists(os.path.join(here, "known-bad.json")) else {}
+    # (Only in the combined game: they broke when retargeted, and may build fine at their own commit.)
+    combined = os.path.exists(os.path.join(work, "src", ".horizon-revision")) and any(
+        g.get("combined") for g in json.load(open("plan.json")).get("groups", [])) if os.path.exists("plan.json") else False
+    known = json.load(open(os.path.join(here, "known-bad.json"))) if combined and os.path.exists(os.path.join(here, "known-bad.json")) else {}
     applied0 = json.load(open(os.path.join(work, "applied.json")))["applied"]
     excluded.update({i: why for i, why in known.items() if i in applied0})
     if excluded:
