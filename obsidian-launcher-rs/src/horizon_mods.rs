@@ -42,9 +42,48 @@ fn index() -> Result<Arc<Value>, String> {
         Some(_) => return Err("Horizon's mod list uses a newer format. Update Lumos to browse it.".into()),
         None => return Err("Horizon's mod list couldn't be read.".into()),
     }
-    let idx = Arc::new(idx);
+    let idx = Arc::new(with_frozen_native(idx));
     *INDEX.lock().unwrap() = Some((Instant::now(), idx.clone()));
     Ok(idx)
+}
+
+/// Horizon's registry moved its native-v1 mods into an archive on 2026-11-18 (their downloads are
+/// unchanged). Lumos publishes a frozen copy of those listings beside its native builds; merge it
+/// in for any id the live index no longer lists, so Discover and installs keep working.
+const FROZEN_NATIVE_URL: &str = "https://github.com/AashrithKrishna/lumosclient/releases/download/native-builds/native-v1-index.json";
+
+fn with_frozen_native(mut idx: Value) -> Value {
+    let Ok(frozen) = net::get_json(FROZEN_NATIVE_URL) else { return idx };
+    merge_frozen(&mut idx, &frozen);
+    idx
+}
+
+fn merge_frozen(idx: &mut Value, frozen: &Value) {
+    let live: std::collections::HashSet<String> = idx.get("projects").and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|p| p.get("id").and_then(Value::as_str).map(str::to_owned)).collect()).unwrap_or_default();
+    let extra: Vec<Value> = frozen.get("projects").and_then(Value::as_array).map(|a| a.iter()
+        .filter(|p| p.get("kind").and_then(Value::as_str) == Some("native-mod"))
+        .filter(|p| p.get("id").and_then(Value::as_str).is_some_and(|i| !live.contains(i))).cloned().collect()).unwrap_or_default();
+    if let Some(arr) = idx.get_mut("projects").and_then(Value::as_array_mut) {
+        arr.extend(extra);
+    }
+    if let (Some(rv), Some(frv)) = (idx.get_mut("revoked").and_then(Value::as_array_mut), frozen.get("revoked").and_then(Value::as_array)) {
+        rv.extend(frv.iter().cloned());
+    }
+}
+
+#[cfg(test)]
+mod frozen_tests {
+    use super::*;
+    #[test]
+    fn frozen_native_fills_in_only_missing_ids() {
+        let mut idx = json!({"schema": 1, "projects": [{"id": "zoom", "kind": "mod"}], "revoked": []});
+        let frozen = json!({"projects": [{"id": "zoom", "kind": "native-mod"}, {"id": "minimap", "kind": "native-mod"}, {"id": "x", "kind": "shader"}], "revoked": [{"id": "bad"}]});
+        merge_frozen(&mut idx, &frozen);
+        let ids: Vec<&str> = idx["projects"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["zoom", "minimap"]);
+        assert_eq!(idx["revoked"].as_array().unwrap().len(), 1);
+    }
 }
 
 fn s<'a>(v: &'a Value, k: &str) -> &'a str {

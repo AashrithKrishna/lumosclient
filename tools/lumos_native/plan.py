@@ -49,6 +49,14 @@ def main():
     a = ap.parse_args()
     token = os.environ.get("GITHUB_TOKEN")
     idx = get_json(INDEX)
+    # Horizon's registry moved its native-v1 mods to an archive (2026-11-18); keep building them
+    # from Lumos's frozen copy of those listings, for ids the live index no longer has.
+    frozen = os.path.join(os.path.dirname(os.path.abspath(__file__)), "native-v1-index.json")
+    if os.path.exists(frozen):
+        live = {p.get("id") for p in idx.get("projects", [])}
+        f = json.load(open(frozen, encoding="utf-8"))
+        idx.setdefault("projects", []).extend(p for p in f.get("projects", []) if p.get("id") not in live)
+        idx.setdefault("revoked", []).extend(f.get("revoked", []))
     if idx.get("schema") != 1:
         sys.exit(f"unknown registry schema {idx.get('schema')}")
     revoked = {(r.get("id"), r.get("sha256") or None) for r in idx.get("revoked", [])}
@@ -90,11 +98,26 @@ def main():
             print(json.dumps({"commit": [a.combined]}))
         return
     only = [o.strip() for o in a.only.split(",") if o.strip()]
+    # Lumos's own mods (lumos-mods/<id>/) pin a commit too: that commit always gets a group, even
+    # when no registry mod pins it any more (stage.py adds them; the registry list may be empty).
+    own = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lumos-mods")
+    if os.path.isdir(own):
+        for i in sorted(os.listdir(own)):
+            m = os.path.join(own, i, "horizon-mixin.toml")
+            if not (i.startswith("lumos_") and os.path.isfile(m)):
+                continue
+            text = open(m, encoding="utf-8").read()
+            rev = re.search(r'horizon_revision\s*=\s*"([0-9a-f]{40})"', text)
+            mix = re.search(r"horizon-mixins ([0-9a-f]{40})", text)
+            if rev and rev.group(1) not in groups:
+                groups[rev.group(1)] = {"commit": rev.group(1), "short": rev.group(1)[:8], "mixins_revs": set(), "mods": []}
+            if rev and mix:
+                groups[rev.group(1)]["mixins_revs"].add(mix.group(1))
     out = []
     for g in sorted(groups.values(), key=lambda g: -len(g["mods"])):
         if only and not any(g["commit"].startswith(o) for o in only):
             continue
-        revs = sorted(g.pop("mixins_revs"), key=lambda r: commit_date(r, token))
+        revs = sorted(g.pop("mixins_revs"), key=lambda r: commit_date(r, token)) or ["e59da9094f0c2fdda6c627fe9eff22dec6a906f0"]
         g["mixins"] = revs[-1]
         g["mods"].sort(key=lambda m: m["id"])
         out.append(g)
