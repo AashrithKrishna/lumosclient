@@ -10,6 +10,7 @@ them one at a time if together they conflict). Writes work/applied.json:
 """
 import argparse
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -62,6 +63,7 @@ def apply(tool, src, mod_ids, mods_root, out):
         r = subprocess.run([tool, "apply", "--workspace", src, "--mods", sel, "--out", out],
                            capture_output=True, text=True)
         ok = r.returncode == 0
+        apply.last_output = (r.stderr or "") + (r.stdout or "")
         reason = (r.stderr or r.stdout).strip().splitlines()
         return ok, " ".join(reason[-3:])[:600]
 
@@ -71,6 +73,7 @@ def main():
     ap.add_argument("--tool", required=True)
     ap.add_argument("--work", required=True)
     ap.add_argument("--exclude", default="", help="comma-separated mod ids to leave out (the reason file says why)")
+    ap.add_argument("--fingerprint-only", action="store_true", help="record each mod's added lines for build.py, apply nothing")
     ap.add_argument("--without-crates", action="store_true",
                     help="leave out mods that bring their own Rust crates ([[crate]]): used when the full build failed")
     a = ap.parse_args()
@@ -97,14 +100,52 @@ def main():
                 print(f"skip {i}: brings its own crate", file=sys.stderr)
     fp_path = os.path.join(a.work, "fingerprints.json")
     prints = json.load(open(fp_path)) if os.path.exists(fp_path) else {}
+    if a.fingerprint_only:
+        # Only record what each mod adds (build.py traces compile errors with it); applies nothing.
+        for i in ids:
+            if i not in prints:
+                ok, _ = apply(a.tool, src, [i], mods, scratch)
+                if ok:
+                    prints[i] = fingerprint(src, scratch)
+        rmtree(scratch)
+        with open(fp_path, "w") as fh:
+            json.dump(prints, fh)
+        print(f"fingerprinted {len(prints)} mods", file=sys.stderr)
+        return
+    # Fast path: all of them at once. Trying each mod on its own first costs one full apply per
+    # mod (over an hour for ~150 mods), so that only happens when applying them together fails.
+    together = list(ids)
+    for _ in range(80):
+        if not together:
+            break
+        ok, why = apply(a.tool, src, together, mods, stage)
+        if ok:
+            with open(os.path.join(a.work, "applied.json"), "w") as fh:
+                json.dump({"applied": together, "failed": failed}, fh, indent=1)
+            print(f"applied {len(together)}/{len(ids)} together", file=sys.stderr)
+            return
+        # horizon-mixins names the mod an error belongs to: drop it and try the rest together again.
+        named = [m for m in re.findall(r'"mod_id"\s*:\s*"([a-z0-9_]+)"', apply.last_output) if m in together]
+        if not named:
+            for m in re.findall(r"\bmods[/\\]([a-z0-9_]+)[/\\]", apply.last_output):
+                if m in together:
+                    named = [m]
+                    break
+        if not named:
+            print(f"applying together failed and no mod is named ({why}); trying each on its own", file=sys.stderr)
+            break
+        bad = named[0]
+        together.remove(bad)
+        failed[bad] = why
+        print(f"FAIL {bad}: {why}", file=sys.stderr)
     for i in ids:
         ok, why = apply(a.tool, src, [i], mods, scratch)
         (good.append(i) if ok else failed.__setitem__(i, why))
         if ok and i not in prints:
             prints[i] = fingerprint(src, scratch)
+        print(f"{'ok  ' if ok else 'FAIL'} {i}" + ("" if ok else f": {why}"), file=sys.stderr)
     with open(fp_path, "w") as fh:
         json.dump(prints, fh)
-        print(f"{'ok  ' if ok else 'FAIL'} {i}" + ("" if ok else f": {why}"), file=sys.stderr)
     rmtree(scratch)
     applied = []
     if good:

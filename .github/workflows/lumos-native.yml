@@ -130,6 +130,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-11
         with:
           toolchain: stable
+      # Horizon's dependencies (wgpu, naga, winit…) don't change between builds of one commit:
+      # keep them compiled, so a build mostly recompiles the game crate with the mods in it.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "work/stage -> ../target"
+          key: ${{ matrix.commit }}
+          cache-on-failure: true
       - name: Stage source and mods
         id: stage
         run: |

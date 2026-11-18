@@ -182,6 +182,11 @@ def main():
             print(f"built in round {rnd}; left out for compile errors: {sorted(excluded) or 'none'}")
             return
         applied = json.load(open(os.path.join(work, "applied.json")))["applied"]
+        # Fingerprints are only made when a compile fails (the fast apply path skips them).
+        fp = os.path.join(work, "fingerprints.json")
+        have = json.load(open(fp)) if os.path.exists(fp) else {}
+        if any(i not in have for i in applied):
+            subprocess.run([sys.executable, os.path.join(here, "apply.py"), "--tool", a.tool, "--work", work, "--fingerprint-only"], check=False)
         blame = {i: why for i, why in culprits(log, stage, mods_root, applied).items() if i not in excluded}
         if not blame:
             if tried_without_crates:
