@@ -104,7 +104,7 @@ fn builds() -> Vec<Build> {
 }
 
 /// A build that has every one of `ids` (the combined one when it does).
-fn build_with_all(ids: &[String]) -> Option<Build> {
+pub fn build_with_all(ids: &[String]) -> Option<Build> {
     builds().into_iter().find(|b| ids.iter().all(|i| b.mods.iter().any(|(id, _, _)| id == i)))
 }
 
@@ -259,6 +259,13 @@ pub fn install(base_dir: &Path, game_dir: &Path, mod_id: &str, report: &dyn Fn(&
         .ok_or("This native mod hasn't been built for Lumos yet. Try again later.")?;
     if !st.mods.is_empty() && st.build != b.short && !st.mods.iter().all(|m| b.mods.iter().any(|(id, _, _)| id == m)) {
         let names: Vec<String> = st.mods.iter().map(|m| st.known.iter().find(|k| &k.0 == m).map_or(m.clone(), |k| k.1.clone())).collect();
+        // Name the mods whose removal would let this one in (they're the ones no build shares with it).
+        let blockers: Vec<String> = st.mods.iter().filter(|m| build_with_all(&[(*m).clone(), mod_id.to_owned()]).is_none())
+            .map(|m| st.known.iter().find(|k| &k.0 == m).map_or(m.clone(), |k| k.1.clone())).collect();
+        if !blockers.is_empty() && blockers.len() < st.mods.len() {
+            return Err(format!("This mod can't share a game with {} in this instance. Remove {} first, or put this mod in a new Horizon instance.",
+                blockers.join(", "), if blockers.len() == 1 { "it" } else { "them" }));
+        }
         return Err(format!(
             "This mod is in a different native build than {} in this instance, so they can't be mixed yet. {}",
             names.join(", "),

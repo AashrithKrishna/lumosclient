@@ -193,6 +193,10 @@ pub fn search(game_dir: &Path, query: &str, tab: &str, sort: &str, offset: usize
                 "native": kind == "native-mod",
                 // A native mod installs when Lumos's cloud builds have it for this computer.
                 "native_ready": kind == "native-mod" && crate::native_builds::build_for_mod(s(p, "id")).is_some(),
+                // Built, but no build has it together with the native mods this instance already has.
+                "native_blocked": kind == "native-mod" && !native_installed.is_empty() && !native_installed.iter().any(|i| i == s(p, "id"))
+                    && crate::native_builds::build_for_mod(s(p, "id")).is_some()
+                    && crate::native_builds::build_with_all(&native_installed.iter().cloned().chain([s(p, "id").to_owned()]).collect::<Vec<_>>()).is_none(),
                 "installed": installed.iter().any(|f| f == file) || native_installed.iter().any(|i| i == s(p, "id")),
                 "view_url": if s(p, "id").starts_with("lumos_") { format!("https://github.com/AashrithKrishna/lumosclient/tree/main/lumos-mods/{}", s(p, "id")) } else { format!("{SITE}/{}", s(p, "id")) },
             })
