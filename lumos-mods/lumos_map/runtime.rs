@@ -23,12 +23,29 @@ pub const SCREEN: &str = "mod";
 
 // ---------------------------------------------------------------- settings
 
+/// The settings' pages, on the mod's page in Options > Mods and on the map's settings screen.
+pub const PAGES: [&str; 6] = ["General", "Minimap", "World map", "Entities", "Waypoints", "Keys"];
 pub const CORNERS: [&str; 4] = ["Top left", "Top right", "Bottom left", "Bottom right"];
-pub const SIZES: [f32; 6] = [64.0, 80.0, 96.0, 112.0, 128.0, 160.0];
+pub const OFFSETS: [f32; 7] = [0.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0];
+pub const SIZES: [f32; 8] = [64.0, 80.0, 96.0, 112.0, 128.0, 160.0, 192.0, 224.0];
 /// The minimap's zoom: blocks per GUI pixel, in steps of a square root of two. The map's own
 /// texture is a block a texel, drawn with crisp (nearest) pixels at any of these.
 pub const ZOOMS: [f32; 9] = [0.25, 0.35, 0.5, 0.71, 1.0, 1.41, 2.0, 2.83, 4.0];
 pub const OPACITY: [u8; 5] = [255, 217, 178, 140, 102];
+pub const FRAMES: [&str; 3] = ["Rim and shadow", "Thin rim", "None"];
+/// The minimap's unexplored ground: name and 0xAARRGGBB.
+pub const BACKGROUNDS: [(&str, u32); 4] = [
+    ("Dark", 0xFF1A_1C20),
+    ("Black", 0xFF00_0000),
+    ("Grey", 0xFF45_474C),
+    ("See-through", 0x5010_1014),
+];
+pub const COMPASS: [&str; 3] = ["Off", "N only", "N E S W"];
+pub const CAVE_MODES: [&str; 3] = ["Auto (underground)", "Always", "Off"];
+/// The info lines' orders: C coordinates, B biome, F facing, L light, T time, D dimension.
+pub const INFO_ORDERS: [&str; 4] = ["C B F L T D", "B C F L T D", "D C B F L T", "T C B F L D"];
+pub const MAP_MINS: [&str; 4] = ["1/8", "1/4", "1/2", "1"];
+pub const MAP_MAXES: [&str; 4] = ["4", "8", "16", "32"];
 pub const DEATHS: [usize; 4] = [1, 3, 5, 10];
 pub const SORTS: [&str; 3] = ["Name", "Distance", "Newest"];
 /// Entity icons' side on the minimap, GUI pixels.
@@ -38,133 +55,210 @@ pub const RANGES: [&str; 6] = ["Map edge", "16", "32", "64", "128", "256"];
 /// When a waypoint marker shows its name.
 pub const WP_NAMES: [&str; 3] = ["Looked at", "Always", "Never"];
 pub const WP_SHAPES: [&str; 2] = ["Diamond", "Square"];
+pub const WP_LABELS: [f32; 3] = [0.75, 1.0, 1.25];
 pub const WP_RANGES: [&str; 6] = ["Any distance", "100", "250", "500", "1000", "5000"];
 pub const UNITS: [&str; 2] = ["Metres", "Blocks"];
+/// A new waypoint's colour: the next in turn, or one of `COLOURS`.
+pub const NEW_COLOURS: [&str; 11] =
+    ["Next in turn", "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Pink", "White", "Grey"];
+/// A waypoint's marker text: its initials, or a symbol.
+pub const SYMBOLS: [&str; 8] = ["Initials", "*", "+", "!", "#", "X", "$", "@"];
 /// Name labels' size in the detail view.
 pub const LABEL_SIZES: [f32; 3] = [0.5, 0.75, 1.0];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
+    /// The minimap shows.
     pub minimap: bool,
-    /// Index in `CORNERS`.
-    pub corner: usize,
-    /// Index in `SIZES`.
-    pub size: usize,
-    /// Index in `ZOOMS`.
-    pub zoom: usize,
-    /// Index in `OPACITY`.
-    pub opacity: usize,
-    pub round: bool,
-    /// Turns with the player (forward is up), or north is up.
-    pub rotate: bool,
-    /// N, E, S, W on the rim.
-    pub compass: bool,
     /// The game's colours (textures and biome tints), or the flat map palette.
     pub textured: bool,
     /// Slopes lit and shaded.
     pub shading: bool,
-    /// Underground, in the Nether and under a roof: the floor around you.
-    pub cave: bool,
+    /// Index in `CAVE_MODES`: underground, the floor around you.
+    pub cave: usize,
+    /// Overworld waypoints shown in the Nether at their Nether place, and the other way.
+    pub convert: bool,
+    /// Index in `CORNERS`.
+    pub corner: usize,
+    /// Index in `OFFSETS`, GUI pixels from the screen's side.
+    pub offset_x: usize,
+    /// Index in `OFFSETS`, GUI pixels from the top or bottom.
+    pub offset_y: usize,
+    /// Index in `SIZES`.
+    pub size: usize,
+    /// Index in `ZOOMS`.
+    pub zoom: usize,
+    /// Round, or square.
+    pub round: bool,
+    /// Turns with the player (forward is up), or north is up.
+    pub rotate: bool,
+    /// Index in `OPACITY`.
+    pub opacity: usize,
+    /// Index in `FRAMES`.
+    pub frame: usize,
+    /// Index in `BACKGROUNDS`: the ground not explored yet.
+    pub background: usize,
+    /// Index in `COMPASS`.
+    pub compass: usize,
+    /// Info line: X Y Z.
     pub coords: bool,
+    /// Info line: the biome.
     pub biome: bool,
+    /// Info line: the way you face.
+    pub facing: bool,
+    /// Info line: the light level.
     pub light: bool,
+    /// Info line: the clock.
     pub time: bool,
+    /// Info line: the dimension.
+    pub dimension: bool,
+    /// Index in `INFO_ORDERS`.
+    pub info_order: usize,
+    /// Index in `MAP_MINS`.
+    pub map_min: usize,
+    /// Index in `MAP_MAXES`.
+    pub map_max: usize,
+    /// The chunk grid is on when the map opens.
+    pub map_grid: bool,
+    /// The bottom bar shows the coordinates under the pointer.
+    pub map_cursor: bool,
+    /// The map follows you when it opens.
+    pub map_follow: bool,
+    /// Explored ground outside the loaded chunks is dimmed.
+    pub map_shade: bool,
+    /// Players on the minimap.
     pub players: bool,
+    /// Players' names in the detail view.
     pub names: bool,
+    /// Hostile mobs on the minimap.
     pub hostile: bool,
+    /// Passive mobs on the minimap.
     pub passive: bool,
-    /// Dropped items.
+    /// Dropped items on the minimap.
     pub items: bool,
-    /// Entities that are neither players nor mobs that attack or graze (armour stands, golems...).
+    /// Entities that are neither players nor hostile or passive mobs.
     pub others: bool,
-    /// Index in `ICON_SIZES`.
-    pub icon_size: usize,
-    /// Index in `RANGES`.
-    pub range: usize,
     /// Faces and names while the player list key is held (else dots).
     pub tab_details: bool,
     /// Faces and names all the time.
     pub always_details: bool,
+    /// Index in `ICON_SIZES`.
+    pub icon_size: usize,
     /// Index in `LABEL_SIZES`.
     pub label_size: usize,
-    /// Dot colours, indices in `COLOURS`.
+    /// Index in `RANGES`.
+    pub range: usize,
+    /// Dot colour, index in `COLOURS`.
     pub player_colour: usize,
+    /// Dot colour, index in `COLOURS`.
     pub hostile_colour: usize,
+    /// Dot colour, index in `COLOURS`.
     pub passive_colour: usize,
+    /// Dot colour, index in `COLOURS`.
     pub other_colour: usize,
+    /// Every waypoint shown (the key turns them all off and on).
+    pub waypoints: bool,
     /// Waypoint markers on screen, where each waypoint is.
     pub markers: bool,
+    /// Waypoints on the minimap.
+    pub wp_minimap: bool,
+    /// Waypoints on the world map.
+    pub wp_worldmap: bool,
     /// Index in `WP_NAMES`: when a marker shows its name.
     pub wp_names: usize,
+    /// Index in `WP_LABELS`.
+    pub wp_label: usize,
     /// Index in `WP_SHAPES`.
     pub wp_shape: usize,
     /// Markers off screen kept at its edge with an arrow.
     pub wp_edge: bool,
     /// Markers smaller the farther away.
     pub wp_scale: bool,
+    /// Markers fade right beside you and far away.
+    pub fade: bool,
     /// Index in `WP_RANGES`: how far markers show.
     pub wp_range: usize,
     /// Index in `UNITS`.
     pub units: usize,
-    /// A beam over each waypoint in the world (an older style).
-    pub beams: bool,
-    /// Markers fade right beside you and far away.
-    pub fade: bool,
-    /// Overworld waypoints shown in the Nether at their Nether place, and the other way.
-    pub convert: bool,
+    /// Index in `NEW_COLOURS`.
+    pub wp_colour: usize,
+    /// Index in `SYMBOLS`.
+    pub wp_symbol: usize,
+    /// A waypoint where you die.
     pub death: bool,
-    /// Index in `DEATHS`, how many death points are kept.
+    /// Index in `DEATHS`.
     pub deaths: usize,
     /// Index in `SORTS`, the waypoint list's order.
     pub sort: usize,
+    /// A beam over each waypoint in the world.
+    pub beams: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             minimap: true,
-            corner: 1,
-            size: 2,
-            zoom: 4,
-            opacity: 0,
-            round: false,
-            rotate: true,
-            compass: true,
             textured: true,
             shading: true,
-            cave: true,
+            cave: 0,
+            convert: true,
+            corner: 1,
+            offset_x: 0,
+            offset_y: 0,
+            size: 2,
+            zoom: 4,
+            round: false,
+            rotate: true,
+            opacity: 0,
+            frame: 0,
+            background: 0,
+            compass: 2,
             coords: true,
             biome: true,
+            facing: false,
             light: false,
             time: false,
+            dimension: false,
+            info_order: 0,
+            map_min: 0,
+            map_max: 3,
+            map_grid: false,
+            map_cursor: true,
+            map_follow: false,
+            map_shade: true,
             players: true,
             names: true,
             hostile: true,
             passive: true,
             items: false,
             others: false,
-            icon_size: 1,
-            range: 0,
             tab_details: true,
             always_details: false,
+            icon_size: 1,
             label_size: 1,
+            range: 0,
             player_colour: 8,
             hostile_colour: 0,
             passive_colour: 3,
             other_colour: 9,
+            waypoints: true,
             markers: true,
+            wp_minimap: true,
+            wp_worldmap: true,
             wp_names: 0,
+            wp_label: 1,
             wp_shape: 0,
             wp_edge: true,
             wp_scale: false,
+            fade: true,
             wp_range: 0,
             units: 0,
-            beams: false,
-            fade: true,
-            convert: true,
+            wp_colour: 0,
+            wp_symbol: 0,
             death: true,
             deaths: 1,
             sort: 1,
+            beams: false,
         }
     }
 }
@@ -200,11 +294,15 @@ impl ShowEntry for usize {
 }
 
 macro_rules! settings_table {
-    ($( $field:ident: $kind:ident $(($table:ident))?, $label:expr; )*) => {
+    ($( $field:ident: $kind:ident $(($table:ident))?, $page:expr, $label:expr; )*) => {
         impl Settings {
             pub fn read(get: impl Fn(&str) -> Option<String>) -> Self {
                 let d = Self::default();
-                let flag = |key: &str, default: bool| get(key).map_or(default, |v| v.trim() == "true");
+                let flag = |key: &str, default: bool| match get(key).as_deref().map(str::trim) {
+                    Some("true") => true,
+                    Some("false") => false,
+                    _ => default,
+                };
                 let index = |key: &str, default: usize, len: usize| {
                     get(key)
                         .and_then(|v| v.trim().parse::<usize>().ok())
@@ -217,19 +315,26 @@ macro_rules! settings_table {
             pub fn stored(&self) -> Vec<(&'static str, String)> {
                 vec![ $( (stringify!($field), self.$field.to_string()), )* ]
             }
+            /// Every setting's page.
+            pub const PAGE_OF: [usize; Self::COUNT] = [$($page),*];
+            /// Every setting's button text.
             pub fn labels(&self) -> Vec<String> {
                 let on = |b: bool| if b { "ON".to_owned() } else { "OFF".to_owned() };
                 let _ = &on;
                 vec![ $( format!("{}: {}", $label, settings_table!(@show $kind, on, self.$field $(, $table)?)), )* ]
             }
-            pub fn click(&mut self, button: usize) {
+            /// Setting `button` one step on (`back`: one step back).
+            pub fn click_dir(&mut self, button: usize, back: bool) {
                 let names = [$(stringify!($field)),*];
                 let Some(name) = names.get(button) else { return };
                 $(
                     if *name == stringify!($field) {
-                        settings_table!(@click $kind, self.$field $(, $table)?);
+                        settings_table!(@click $kind, self.$field, back $(, $table)?);
                     }
                 )*
+            }
+            pub fn click(&mut self, button: usize) {
+                self.click_dir(button, false);
             }
             pub const COUNT: usize = [$(stringify!($field)),*].len();
         }
@@ -238,57 +343,96 @@ macro_rules! settings_table {
     (@read index, $flag:ident, $index:ident, $key:expr, $d:expr, $table:ident) => { $index($key, $d, $table.len()) };
     (@show flag, $on:ident, $v:expr) => { $on($v) };
     (@show index, $on:ident, $v:expr, $table:ident) => { ShowEntry::show(&$table[$v]) };
-    (@click flag, $v:expr) => { $v = !$v };
-    (@click index, $v:expr, $table:ident) => { $v = ($v + 1) % $table.len() };
+    (@click flag, $v:expr, $back:expr) => { $v = !$v };
+    (@click index, $v:expr, $back:expr, $table:ident) => {
+        $v = if $back { ($v + $table.len() - 1) % $table.len() } else { ($v + 1) % $table.len() }
+    };
 }
 
 settings_table! {
-    minimap: flag, "Minimap";
-    corner: index(CORNERS), "Corner";
-    size: index(SIZES), "Size";
-    zoom: index(ZOOMS), "Zoom (blocks per pixel)";
-    opacity: index(OPACITY), "Opacity";
-    round: flag, "Round";
-    rotate: flag, "Turns with you";
-    compass: flag, "N E S W on the rim";
-    textured: flag, "Game colours (off: map palette)";
-    shading: flag, "Terrain shading";
-    cave: flag, "Cave view underground";
-    coords: flag, "Coordinates";
-    biome: flag, "Biome";
-    light: flag, "Light level";
-    time: flag, "Time of day";
-    players: flag, "Players";
-    names: flag, "Player names";
-    hostile: flag, "Hostile mobs";
-    passive: flag, "Passive mobs";
-    items: flag, "Dropped items";
-    others: flag, "Other entities";
-    icon_size: index(ICON_SIZES), "Entity icon size";
-    range: index(RANGES), "Entities within (blocks)";
-    tab_details: flag, "Faces and names while the player list key is held";
-    always_details: flag, "Faces and names always";
-    label_size: index(LABEL_SIZES), "Name label size";
-    player_colour: index(COLOURS), "Player dots";
-    hostile_colour: index(COLOURS), "Hostile mob dots";
-    passive_colour: index(COLOURS), "Passive mob dots";
-    other_colour: index(COLOURS), "Other entity dots";
-    markers: flag, "Waypoint markers on screen";
-    wp_names: index(WP_NAMES), "Waypoint names";
-    wp_shape: index(WP_SHAPES), "Waypoint marker";
-    wp_edge: flag, "Off-screen waypoints at the edge";
-    wp_scale: flag, "Waypoint markers shrink with distance";
-    wp_range: index(WP_RANGES), "Waypoints within (blocks)";
-    units: index(UNITS), "Distances in";
-    beams: flag, "Waypoint beams (old style)";
-    fade: flag, "Waypoints fade near and far";
-    convert: flag, "Overworld/Nether waypoints converted";
-    death: flag, "Death waypoints";
-    deaths: index(DEATHS), "Deaths kept";
-    sort: index(SORTS), "Waypoint list order";
+    minimap: flag, 0, "Minimap";
+    textured: flag, 0, "Game colours (off: map palette)";
+    shading: flag, 0, "Terrain shading";
+    cave: index(CAVE_MODES), 0, "Cave view";
+    convert: flag, 0, "Overworld/Nether waypoints converted";
+    corner: index(CORNERS), 1, "Corner";
+    offset_x: index(OFFSETS), 1, "Offset from the side";
+    offset_y: index(OFFSETS), 1, "Offset from the top/bottom";
+    size: index(SIZES), 1, "Size";
+    zoom: index(ZOOMS), 1, "Zoom (blocks per pixel)";
+    round: flag, 1, "Round";
+    rotate: flag, 1, "Turns with you";
+    opacity: index(OPACITY), 1, "Opacity";
+    frame: index(FRAMES), 1, "Frame";
+    background: index(BACKGROUNDS), 1, "Unexplored ground";
+    compass: index(COMPASS), 1, "Compass letters";
+    coords: flag, 1, "Coordinates";
+    biome: flag, 1, "Biome";
+    facing: flag, 1, "Facing";
+    light: flag, 1, "Light level";
+    time: flag, 1, "Time of day";
+    dimension: flag, 1, "Dimension";
+    info_order: index(INFO_ORDERS), 1, "Info line order";
+    map_min: index(MAP_MINS), 2, "Closest zoom (blocks per pixel)";
+    map_max: index(MAP_MAXES), 2, "Farthest zoom (blocks per pixel)";
+    map_grid: flag, 2, "Chunk grid when opened";
+    map_cursor: flag, 2, "Cursor coordinates";
+    map_follow: flag, 2, "Follow you when opened";
+    map_shade: flag, 2, "Dim ground not loaded now";
+    players: flag, 3, "Players";
+    names: flag, 3, "Player names";
+    hostile: flag, 3, "Hostile mobs";
+    passive: flag, 3, "Passive mobs";
+    items: flag, 3, "Dropped items";
+    others: flag, 3, "Other entities";
+    tab_details: flag, 3, "Faces and names while the player list key is held";
+    always_details: flag, 3, "Faces and names always";
+    icon_size: index(ICON_SIZES), 3, "Entity icon size";
+    label_size: index(LABEL_SIZES), 3, "Name label size";
+    range: index(RANGES), 3, "Entities within (blocks)";
+    player_colour: index(COLOURS), 3, "Player dots";
+    hostile_colour: index(COLOURS), 3, "Hostile mob dots";
+    passive_colour: index(COLOURS), 3, "Passive mob dots";
+    other_colour: index(COLOURS), 3, "Other entity dots";
+    waypoints: flag, 4, "Waypoints shown";
+    markers: flag, 4, "On screen";
+    wp_minimap: flag, 4, "On the minimap";
+    wp_worldmap: flag, 4, "On the world map";
+    wp_names: index(WP_NAMES), 4, "Names on screen";
+    wp_label: index(WP_LABELS), 4, "Name size";
+    wp_shape: index(WP_SHAPES), 4, "Marker";
+    wp_edge: flag, 4, "Off-screen ones at the edge";
+    wp_scale: flag, 4, "Shrink with distance";
+    fade: flag, 4, "Fade near and far";
+    wp_range: index(WP_RANGES), 4, "Shown within (blocks)";
+    units: index(UNITS), 4, "Distances in";
+    wp_colour: index(NEW_COLOURS), 4, "New waypoints' colour";
+    wp_symbol: index(SYMBOLS), 4, "New waypoints' symbol";
+    death: flag, 4, "Death points";
+    deaths: index(DEATHS), 4, "Death points kept";
+    sort: index(SORTS), 4, "List order";
+    beams: flag, 4, "Beams (old style)";
 }
 
 impl Settings {
+    /// The settings on page `page`: (setting, button text).
+    pub fn page(&self, page: usize) -> Vec<(usize, String)> {
+        self.labels()
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| Self::PAGE_OF[*i] == page)
+            .collect()
+    }
+
+    /// The world map's closest and farthest zoom steps (`map_zoom`).
+    pub fn map_zooms(&self) -> (usize, usize) {
+        (self.map_min.min(3) * 2, MAP_ZOOM_ONE + 4 + self.map_max.min(3) * 2)
+    }
+
+    /// The info lines' order, as letters (`INFO_ORDERS`).
+    pub fn info_letters(&self) -> Vec<char> {
+        INFO_ORDERS[self.info_order.min(INFO_ORDERS.len() - 1)].chars().filter(|c| c.is_alphabetic()).collect()
+    }
     pub fn shows(&self, kind: DotKind) -> bool {
         match kind {
             DotKind::Player => self.players,
@@ -1184,6 +1328,15 @@ pub fn compass(yaw: f32, rotate: bool) -> [(char, f32, f32); 4] {
     [('N', n.0, n.1), ('E', e.0, e.1), ('S', -n.0, -n.1), ('W', -e.0, -e.1)]
 }
 
+/// The way `yaw` faces as text: "Facing North (-Z)", eight ways.
+pub fn facing(yaw: f32) -> String {
+    const WAYS: [&str; 8] = [
+        "South (+Z)", "South-west", "West (-X)", "North-west", "North (-Z)", "North-east", "East (+X)", "South-east",
+    ];
+    let i = ((yaw.rem_euclid(360.0) + 22.5) / 45.0) as usize % 8;
+    format!("Facing {}", WAYS[i])
+}
+
 /// The game's time of day (`day_time`, ticks) as "hh:mm".
 pub fn clock(day_time: i64) -> String {
     let t = (day_time + 6000).rem_euclid(24000);
@@ -1439,6 +1592,8 @@ pub struct Waypoint {
     pub set: String,
     /// When it was made, seconds since 1970.
     pub created: u64,
+    /// Its marker's text: a symbol, or empty for its initials.
+    pub symbol: String,
 }
 
 impl Waypoint {
@@ -1453,6 +1608,11 @@ impl Waypoint {
             f64::from(self.pos[2]) + 0.5,
         ]
     }
+    /// Its marker's text: its symbol, else its initials.
+    pub fn mark(&self) -> String {
+        if self.symbol.is_empty() { self.initials() } else { self.symbol.clone() }
+    }
+
     /// One or two letters for its marker: its words' first letters.
     pub fn initials(&self) -> String {
         let mut s: String = self
@@ -1545,7 +1705,7 @@ impl Book {
         }
         for w in &self.list {
             out.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 clean_name(&w.name),
                 w.pos[0],
                 w.pos[1],
@@ -1555,7 +1715,8 @@ impl Book {
                 w.death,
                 w.shown,
                 clean_name(&w.set),
-                w.created
+                w.created,
+                clean_name(&w.symbol)
             ));
         }
         out
@@ -1597,6 +1758,7 @@ impl Book {
                 shown: f[7].trim() != "false",
                 set: set.unwrap_or_else(|| DEFAULT_SET.to_owned()),
                 created: f.get(9).and_then(|s| s.trim().parse().ok()).unwrap_or(0),
+                symbol: f.get(10).map(|s| clean_name(s).chars().take(2).collect()).unwrap_or_default(),
             });
         }
         // Every waypoint's set is listed.
@@ -1646,6 +1808,7 @@ impl Book {
             shown: true,
             set: self.current_set().to_owned(),
             created: now,
+            symbol: String::new(),
         };
         self.list.push(w);
         self.list.len() - 1
@@ -1663,6 +1826,7 @@ impl Book {
             shown: true,
             set: self.current_set().to_owned(),
             created: now,
+            symbol: String::new(),
         });
         let mut deaths: Vec<usize> = (0..self.list.len()).filter(|&i| self.list[i].death).collect();
         // Newest first.
@@ -1681,6 +1845,18 @@ impl Book {
             i += 1;
             keep
         });
+    }
+
+    /// Waypoint `i` given the colour and symbol new waypoints take (`NEW_COLOURS`, `SYMBOLS`).
+    pub fn style_new(&mut self, i: usize, colour: usize, symbol: usize) {
+        if let Some(w) = self.list.get_mut(i) {
+            if colour > 0 {
+                w.colour = (colour - 1).min(COLOURS.len() - 1);
+            }
+            if symbol > 0 {
+                w.symbol = SYMBOLS.get(symbol).map_or_else(String::new, |s| (*s).to_owned());
+            }
+        }
     }
 
     /// A new set, made current; false when the name is empty or taken.
@@ -1987,6 +2163,17 @@ pub enum Page {
     NewSet {
         name: String,
     },
+    /// The settings, page `tab` of `PAGES`.
+    Settings {
+        tab: usize,
+    },
+}
+
+impl Page {
+    /// Keys type into a text box on this page.
+    pub fn typing(&self) -> bool {
+        matches!(self, Page::Edit { .. } | Page::NewSet { .. })
+    }
 }
 
 /// Which waypoints the world map shows.
@@ -2077,7 +2264,20 @@ mod tests {
         assert_eq!(read, s);
         assert!(!s.minimap && s.corner == 2 && s.size == 3 && s.zoom == 5 && s.round && !s.textured);
         assert_eq!(Settings::read(|k| (k == "corner").then(|| "9".into())).corner, 1);
-        assert_eq!(Settings::default().labels()[4], "Opacity: 100%");
+        assert!(Settings::default().labels().contains(&"Opacity: 100%".to_owned()));
+        // Pages: every setting on one of the first five, the keys' page has none.
+        let d = Settings::default();
+        let total: usize = (0..PAGES.len()).map(|p| d.page(p).len()).sum();
+        assert_eq!(total, Settings::COUNT);
+        assert!(d.page(5).is_empty() && !d.page(4).is_empty());
+        let mut b = Settings::default();
+        let opacity = b.labels().iter().position(|l| l.starts_with("Opacity")).unwrap();
+        b.click_dir(opacity, true);
+        assert_eq!(b.opacity, OPACITY.len() - 1, "back wraps round");
+        assert_eq!(d.map_zooms(), (0, MAP_ZOOM_STEPS - 1));
+        assert_eq!(d.info_letters(), vec!['C', 'B', 'F', 'L', 'T', 'D']);
+        // 2.0's settings: an old flag kept as an index falls back to the default.
+        assert_eq!(Settings::read(|k| (k == "cave").then(|| "true".into())).cave, 0);
         let mut z = Settings::default();
         assert!(z.zoom_step(true));
         assert_eq!(z.zoom, 3);
@@ -2167,6 +2367,8 @@ mod tests {
         assert!((c[1].1 - 1.0).abs() < 1e-5, "east is right");
         let t = compass(0.0, true);
         assert!((t[0].2 - 1.0).abs() < 1e-5, "facing south, north is down");
+        assert_eq!(facing(180.0), "Facing North (-Z)");
+        assert_eq!(facing(-90.0), "Facing East (+X)");
         assert_eq!(clock(0), "06:00");
         assert_eq!(clock(18000), "00:00");
         assert_eq!(clock(6500), "12:30");
@@ -2395,6 +2597,11 @@ mod tests {
         assert_eq!(back.current, 1);
         assert_eq!(back.list[1].set, "Mining");
         assert_eq!(back.list[1].name, "Base with tabs");
+        let mut st = back.clone();
+        st.style_new(0, 2, 1);
+        assert_eq!((st.list[0].colour, st.list[0].mark().as_str()), (1, "*"));
+        assert_eq!(Book::from_text(&st.to_text()).list[0].symbol, "*");
+        assert_eq!(st.list[1].mark(), "BW");
         assert!(!back.visible(&back.list[0]), "its set is hidden");
         assert!(back.visible(&back.list[1]));
         let old = Book::from_text(

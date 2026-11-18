@@ -411,6 +411,8 @@ struct State {
     cave: Option<Layer>,
     /// Entity faces in the slot's icon row.
     icons: Icons,
+    /// The page shown on the mod's page in Options > Mods.
+    options_page: usize,
     /// The biome at the player's block, by block.
     biome: Option<([i32; 3], String)>,
     /// The world map's layer (`MapScreen::slice`), scanned live.
@@ -712,11 +714,14 @@ fn explore(game: &Game<'_>, s: &mut State, budget: Duration) {
 /// Whether the minimap shows the floor under the player's head: in a level with a ceiling, or
 /// where no sky light reaches the head.
 fn cave_height(game: &Game<'_>, settings: &m::Settings) -> Option<i32> {
-    if !settings.cave {
+    if settings.cave == 2 {
         return None;
     }
     let p = game.player.as_ref()?;
     let head = (p.position.y + f64::from(p.dimensions.eye_height)).floor() as i32;
+    if settings.cave == 1 {
+        return Some(head);
+    }
     let (bx, bz) = (p.position.x.floor() as i32, p.position.z.floor() as i32);
     let covered = game.world.light(bx, head, bz) >> 4 == 0;
     (game.world.shape.has_ceiling || covered).then_some(head)
@@ -1081,7 +1086,7 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
         return;
     }
     if map_open(game) {
-        let typing = with(|s| matches!(s.screen.page, m::Page::Edit { .. } | m::Page::NewSet { .. }));
+        let typing = with(|s| s.screen.page.typing());
         if !typing && keys::pressed(game, keys::MAP, key, true) {
             game.native_mod_screen_close(m::ID);
         }
@@ -1090,16 +1095,30 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
     if !game.native_playing() {
         return;
     }
-    if keys::pressed(game, keys::MAP, key, true) {
+    let page = if keys::pressed(game, keys::MAP, key, true) {
+        Some(m::Page::Map)
+    } else if keys::pressed(game, keys::WAYPOINT_LIST, key, true) {
+        Some(m::Page::List { scroll: 0 })
+    } else if keys::pressed(game, keys::SETTINGS, key, true) {
+        Some(m::Page::Settings { tab: 0 })
+    } else {
+        None
+    };
+    if let Some(page) = page {
         let Some(p) = player_pos(game) else {
             return;
         };
+        let set = settings(game);
         if game.native_mod_screen_open(m::ID) {
             with(|s| {
                 s.screen.view.x = p[0];
                 s.screen.view.z = p[2];
-                s.screen.page = m::Page::Map;
+                s.screen.page = page;
                 s.screen.press = None;
+                s.screen.follow = set.map_follow;
+                s.screen.grid = set.map_grid;
+                let (lo, hi) = set.map_zooms();
+                s.screen.view.zoom = s.screen.view.zoom.clamp(lo, hi);
             });
         }
     } else if keys::pressed(game, keys::WAYPOINT, key, true) {
@@ -1107,9 +1126,11 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
             return;
         };
         let dim = game.dim.id();
+        let set = settings(game);
         let added = with(|s| {
             s.world_dir.as_ref()?;
             let i = s.book.add(block_of(p), dim, now_secs());
+            s.book.style_new(i, set.wp_colour, set.wp_symbol);
             save_book(s);
             let w = &s.book.list[i];
             Some((w.name.clone(), w.pos, w.rgb()))
@@ -1126,8 +1147,11 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
         } else if keys::pressed(game, keys::ZOOM_OUT, key, true) {
             s.zoom_step(false).then(|| format!("Minimap zoom: {} block(s) a pixel", m::ZOOMS[s.zoom]))
         } else if keys::pressed(game, keys::CAVE, key, true) {
-            s.cave = !s.cave;
-            Some(format!("Cave view: {}", if s.cave { "On" } else { "Off" }))
+            s.cave = (s.cave + 1) % m::CAVE_MODES.len();
+            Some(format!("Cave view: {}", m::CAVE_MODES[s.cave]))
+        } else if keys::pressed(game, keys::WAYPOINTS, key, true) {
+            s.waypoints = !s.waypoints;
+            Some(format!("Waypoints: {}", if s.waypoints { "Shown" } else { "Hidden" }))
         } else if keys::pressed(game, keys::MINIMAP, key, true) {
             s.minimap = !s.minimap;
             Some(format!("Minimap: {}", if s.minimap { "Shown" } else { "Hidden" }))
@@ -1193,35 +1217,41 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
     let bpp = mini_bpp(&s);
     let block = block_of(p);
     let mut lines: Vec<String> = Vec::new();
-    if s.coords {
-        lines.push(format!("{} {} {}", block[0], block[1], block[2]));
-    }
-    if s.biome {
-        let biome = with(|st| match &st.biome {
-            Some((b, name)) if *b == block => Some(name.clone()),
-            _ => None,
-        })
-        .or_else(|| {
-            let name = m::pretty_id(&game.native_biome(block)?);
-            with(|st| st.biome = Some((block, name.clone())));
-            Some(name)
-        });
-        if let Some(b) = biome {
-            lines.push(b);
+    for letter in s.info_letters() {
+        match letter {
+            'C' if s.coords => lines.push(format!("{} {} {}", block[0], block[1], block[2])),
+            'B' if s.biome => {
+                let biome = with(|st| match &st.biome {
+                    Some((b, name)) if *b == block => Some(name.clone()),
+                    _ => None,
+                })
+                .or_else(|| {
+                    let name = m::pretty_id(&game.native_biome(block)?);
+                    with(|st| st.biome = Some((block, name.clone())));
+                    Some(name)
+                });
+                if let Some(b) = biome {
+                    lines.push(b);
+                }
+            }
+            'F' if s.facing => lines.push(m::facing(game.yaw)),
+            'L' if s.light => {
+                let l = game.world.light(block[0], block[1], block[2]);
+                lines.push(format!("Light {} (sky {})", l & 15, l >> 4));
+            }
+            'T' if s.time => lines.push(m::clock(game.world.day_time)),
+            'D' if s.dimension => lines.push(m::pretty_id(game.dim.id())),
+            _ => {}
         }
-    }
-    if s.light {
-        let l = game.world.light(block[0], block[1], block[2]);
-        lines.push(format!("Light {} (sky {})", l & 15, l >> 4));
-    }
-    if s.time {
-        lines.push(m::clock(game.world.day_time));
     }
     // Room for the frame round the map.
     let pad = 3.0;
     let info_h = lines.len() as f32 * 10.0;
-    let (x, y0) = corners.place(at, size + pad * 2.0, size + pad * 2.0 + info_h + if lines.is_empty() { 0.0 } else { 1.0 });
-    let x = x + pad;
+    let (ox, oy) = (m::OFFSETS[s.offset_x.min(m::OFFSETS.len() - 1)], m::OFFSETS[s.offset_y.min(m::OFFSETS.len() - 1)]);
+    let (x, y0) = corners.place(at, size + pad * 2.0 + ox, size + pad * 2.0 + oy + info_h + if lines.is_empty() { 0.0 } else { 1.0 });
+    let left = matches!(at, Corner::TopLeft | Corner::BottomLeft);
+    let x = x + pad + if left { ox } else { 0.0 };
+    let y0 = y0 + if matches!(at, Corner::TopLeft | Corner::TopRight) { oy } else { 0.0 };
     let top = matches!(at, Corner::TopLeft | Corner::TopRight);
     let (map_y, text_y) = if top { (y0 + pad, y0 + size + pad * 2.0 + 1.0) } else { (y0 + info_h + 1.0 + pad, y0) };
     let alpha = m::OPACITY[s.opacity];
@@ -1254,19 +1284,27 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
     // Waypoints: on the rim when they are farther than the map reaches.
     let dim = game.dim.id();
     with(|st| {
+        if !s.waypoints || !s.wp_minimap {
+            return;
+        }
         for w in st.book.list.iter().filter(|w| st.book.visible(w)) {
             let Some(c) = w.place_in(dim, s.convert) else {
                 continue;
             };
-            let ((u, v), _) = m::clamp_to_map(to_map(c[0], c[2]), radius - 1.0, s.round);
+            let ((u, v), rim) = m::clamp_to_map(to_map(c[0], c[2]), radius - 3.0, s.round);
             let (wx, wy) = ((cx + u).round(), (cy + v).round());
-            game.native_fill(batch, [wx - 2.5, wy - 2.5, 5.0, 5.0], 0xFF00_0000);
-            game.native_fill(batch, [wx - 1.5, wy - 1.5, 3.0, 3.0], 0xFF00_0000 | w.rgb());
+            let r = if rim { 2.5 } else { 3.5 };
+            let dia = |r: f32| [[wx, wy - r], [wx + r, wy], [wx, wy + r], [wx - r, wy]];
+            game.native_quad(batch, dia(r + 1.2), 0xE000_0000);
+            game.native_quad(batch, dia(r), 0xFF00_0000 | w.rgb());
         }
     });
-    if s.compass {
+    if s.compass > 0 {
         let reach = radius - 3.0;
         for (letter, dx, dy) in m::compass(game.yaw, s.rotate) {
+            if s.compass == 1 && letter != 'N' {
+                continue;
+            }
             let t = letter.to_string();
             let w = game.native_text_width(&t);
             let (tx, ty) = (cx + dx * reach - w / 2.0, cy + dy * reach - 4.0);
@@ -1532,7 +1570,8 @@ fn draw_minimap_terrain(
     let round = settings.round;
     let shade = |a: u32| (a * u32::from(alpha) / 255) << 24;
     // A soft shadow under it.
-    if round {
+    if settings.frame != 0 {
+    } else if round {
         for (r0, r1, a) in [(half, half + 3.0, 0x30u32), (half, half + 1.5, 0x40)] {
             for q in m::ring(c, r0, r1) {
                 game.native_quad(batch, q, shade(a));
@@ -1543,7 +1582,8 @@ fn draw_minimap_terrain(
         game.native_fill(batch, [c[0] - half - 1.0, c[1] - half, size + 2.0, size + 2.0], shade(0x40));
     }
     let outline = m::outline(c, half, round);
-    fill_polygon(game, batch, &outline, shade(0xFF) | 0x00_1A1C_20);
+    let bg = m::BACKGROUNDS[settings.background.min(m::BACKGROUNDS.len() - 1)].1;
+    fill_polygon(game, batch, &outline, shade(bg >> 24) | (bg & 0xFF_FFFF));
     let bpp = f64::from(mini_bpp(settings));
     let reach = f64::from(half) * bpp * if settings.rotate { std::f64::consts::SQRT_2 } else { 1.0 } + 1.0;
     let area = [p[0] - reach, p[2] - reach, p[0] + reach, p[2] + reach];
@@ -1563,7 +1603,8 @@ fn draw_minimap_terrain(
         draw_cells(game, st, batch, source, lod, area, &to_screen, &outline, alpha);
     });
     // The frame: a dark rim with a faint light edge inside it.
-    if round {
+    if settings.frame == 2 {
+    } else if round {
         for q in m::ring(c, half - 0.5, half + 1.0) {
             game.native_quad(batch, q, shade(0xFF) | 0x00_0C0C_0E);
         }
@@ -1587,7 +1628,7 @@ fn draw_minimap_terrain(
 /// waypoint is, its distance under it and its name over it when looked at (or always); kept at
 /// the screen's edge with an arrow when it is off screen. No beams.
 fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings) {
-    if !s.markers {
+    if !s.markers || !s.waypoints {
         return;
     }
     let Some(cam) = game.native_camera() else {
@@ -1615,7 +1656,7 @@ fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings)
             if (pushed || !front) && !s.wp_edge {
                 continue;
             }
-            shown.push((d, q, pushed || !front, angle, wp.initials(), wp.name.clone(), wp.rgb()));
+            shown.push((d, q, pushed || !front, angle, wp.mark(), wp.name.clone(), wp.rgb()));
         }
     });
     // Far ones first, so near ones are on top.
@@ -1653,7 +1694,7 @@ fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings)
         // Initials, dark on a light colour and light on a dark one.
         let lum = ((rgb >> 16) & 255) * 3 + ((rgb >> 8) & 255) * 6 + (rgb & 255);
         let ink = if lum > 1300 { 0x000000 } else { 0xFFFFFF };
-        let text: String = initials.chars().take(if s.wp_shape == 0 { 1 } else { 2 }).collect();
+        let text: String = initials.chars().take(2).collect();
         let tw = game.native_text_width(&text);
         let start = batch.vertices.len();
         game.native_text(batch, &text, [x - tw / 2.0, y - 3.5], ink, false);
@@ -1683,10 +1724,13 @@ fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings)
             _ => false,
         };
         if show_name && !name.is_empty() {
-            let nw = game.native_text_width(&name);
-            let (nx, ny) = ((x - nw / 2.0).round(), (y - r - 12.0).round());
-            game.native_fill(batch, [nx - 2.0, ny - 1.0, nw + 4.0, 10.0], (alpha * 0x90 / 255) << 24);
+            let ls = m::WP_LABELS[s.wp_label.min(m::WP_LABELS.len() - 1)];
+            let nw = game.native_text_width(&name) * ls;
+            let (nx, ny) = ((x - nw / 2.0).round(), (y - r - 3.0 - 10.0 * ls).round());
+            game.native_fill(batch, [nx - 2.0, ny - 1.0, nw + 4.0, 9.0 * ls + 2.0], (alpha * 0x90 / 255) << 24);
+            let start = batch.vertices.len();
             game.native_text(batch, &name, [nx, ny], rgb, false);
+            batch.scale_since(start, nx, ny, ls, ls);
         }
     }
 }
@@ -1736,6 +1780,7 @@ const LAYER_STEP: i32 = 8;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tool {
     Waypoints,
+    Settings,
     OnMe,
     Follow,
     Grid,
@@ -1755,7 +1800,7 @@ fn tools(w: f32, mp: bool, slime: bool) -> Vec<(Tool, [f32; 4])> {
     let full = TOOL_W - 6.0;
     let half = (full - 2.0) / 2.0;
     let mut y = TOP + 4.0;
-    let mut out = vec![(Tool::Waypoints, [x, y, full, 16.0])];
+    let mut out = vec![(Tool::Waypoints, [x, y, half, 16.0]), (Tool::Settings, [x + half + 2.0, y, half, 16.0])];
     y += 18.0;
     out.push((Tool::OnMe, [x, y, half, 16.0]));
     out.push((Tool::Follow, [x + half + 2.0, y, half, 16.0]));
@@ -1784,6 +1829,7 @@ fn tool_label(t: Tool, s: &State) -> String {
     let on = |b: bool| if b { "ON" } else { "OFF" };
     match t {
         Tool::Waypoints => "Waypoints".into(),
+        Tool::Settings => "Settings".into(),
         Tool::OnMe => "On me".into(),
         Tool::Follow => format!("Follow {}", on(s.screen.follow)),
         Tool::Grid => format!("Grid {}", on(s.screen.grid)),
@@ -1878,7 +1924,10 @@ fn text_box(game: &Game<'_>, batch: &mut HudBatch, field: [f32; 4], text: &str) 
 
 /// Whether a waypoint shows on the world map with its filter.
 fn on_map(s: &State, w: &m::Waypoint) -> bool {
-    s.book.visible(w)
+    let set = m::settings(|_| None);
+    set.waypoints
+        && set.wp_worldmap
+        && s.book.visible(w)
         && match s.screen.filter {
             0 => true,
             1 => w.set == s.book.current_set(),
@@ -1899,6 +1948,7 @@ pub(super) fn on_render(game: &Game<'_>, batch: &mut HudBatch, screen: &NativeSc
         m::Page::Map => draw_map(game, batch, s, &settings, mouse),
         m::Page::List { scroll } => draw_list(game, batch, s, &settings, scroll, mouse),
         m::Page::Edit { index, name } => draw_edit(game, batch, s, index, &name, mouse),
+        m::Page::Settings { tab } => draw_settings(game, batch, &settings, tab, mouse),
         m::Page::NewSet { name } => {
             let (field, [create, cancel]) = new_set_layout(w, h);
             game.native_fill(batch, [field[0] - 8.0, field[1] - 20.0, field[2] + 16.0, 70.0], 0xC000_0000);
@@ -1934,6 +1984,22 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
         ];
         let to_screen = |x: f64, z: f64| view.screen_of(rect, x, z);
         draw_cells(game, s, batch, source, lod, [x0, z0, x1, z1], &to_screen, &clip, 255);
+    }
+    // Explored ground outside the chunks loaded now, dimmed (the surface view only).
+    if settings.map_shade && s.slice.is_none()
+        && let Some(p) = player_pos(game)
+    {
+        let rd = f64::from(game.settings.render_distance.max(2));
+        let (pcx, pcz) = ((p[0] / 16.0).floor(), (p[2] / 16.0).floor());
+        let a = view.screen_of(rect, (pcx - rd) * 16.0, (pcz - rd) * 16.0);
+        let b = view.screen_of(rect, (pcx + rd + 1.0) * 16.0, (pcz + rd + 1.0) * 16.0);
+        let (l, t) = (a[0].clamp(rect[0], rect[0] + rect[2]), a[1].clamp(rect[1], rect[1] + rect[3]));
+        let (r, bt) = (b[0].clamp(rect[0], rect[0] + rect[2]), b[1].clamp(rect[1], rect[1] + rect[3]));
+        let dim = 0x5000_0000;
+        game.native_fill(batch, [rect[0], rect[1], rect[2], t - rect[1]], dim);
+        game.native_fill(batch, [rect[0], bt, rect[2], rect[1] + rect[3] - bt], dim);
+        game.native_fill(batch, [rect[0], t, l - rect[0], bt - t], dim);
+        game.native_fill(batch, [r, t, rect[0] + rect[2] - r, bt - t], dim);
     }
     // The chunk grid, when chunks are at least 4 pixels across.
     if s.screen.grid && view.bpp() <= 4.0 {
@@ -1983,7 +2049,7 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
         if !inside(rect, [x, y]) {
             continue;
         }
-        let initials = wp.initials();
+        let initials = wp.mark();
         let iw = game.native_text_width(&initials).max(6.0);
         game.native_fill(batch, [x - iw / 2.0 - 2.0, y - 6.0, iw + 4.0, 11.0], 0xFF00_0000);
         game.native_fill(batch, [x - iw / 2.0 - 1.0, y - 5.0, iw + 2.0, 9.0], 0xFF00_0000 | wp.rgb());
@@ -2019,7 +2085,7 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
     let hint = "Drag or WASD to move, wheel to zoom, [ ] layers, click to add a waypoint";
     let bottom = match &s.notice {
         Some((text, until)) if Instant::now() < *until => text.clone(),
-        _ if inside(rect, mouse) => {
+        _ if inside(rect, mouse) && settings.map_cursor => {
             let (x, z) = view.world_at(rect, mouse);
             let (bx, bz) = (x.floor() as i32, z.floor() as i32);
             let y = match (&s.slice, &s.explored) {
@@ -2124,6 +2190,57 @@ fn draw_edit(game: &Game<'_>, batch: &mut HudBatch, s: &State, index: usize, nam
     button(game, batch, done, "Done", mouse);
 }
 
+/// The settings screen: its page tabs, the rows of settings (two columns) and the back button.
+fn settings_layout(w: f32, h: f32, n: usize) -> (Vec<[f32; 4]>, Vec<[f32; 4]>, [f32; 4]) {
+    let pw = 420.0f32.min(w - 12.0);
+    let x = (w - pw) / 2.0;
+    let tw = (pw - 5.0 * 2.0) / 6.0;
+    let tabs = (0..6).map(|i| [x + i as f32 * (tw + 2.0), 30.0, tw, 18.0]).collect();
+    let col = (pw - 4.0) / 2.0;
+    let rows = (0..n)
+        .map(|i| [x + (i % 2) as f32 * (col + 4.0), 56.0 + (i / 2) as f32 * 22.0, col, 20.0])
+        .filter(|r| r[1] + r[3] < h - 30.0)
+        .collect();
+    (tabs, rows, [x + pw / 2.0 - 50.0, h - 26.0, 100.0, 20.0])
+}
+
+/// The map's settings screen: a tab per page, the page's settings as buttons (click for the next
+/// choice, right-click for the one before), and the keys on the Keys page.
+fn draw_settings(game: &Game<'_>, batch: &mut HudBatch, settings: &m::Settings, tab: usize, mouse: [f32; 2]) {
+    let (w, h) = (batch.width, batch.height);
+    let entries = settings.page(tab);
+    let (tabs, rows, back) = settings_layout(w, h, entries.len());
+    let title = format!("{} {} settings", m::NAME, m::VERSION);
+    let tw = game.native_text_width(&title);
+    game.native_text(batch, &title, [(w - tw) / 2.0, 12.0], 0xFFFFFF, true);
+    for (i, r) in tabs.iter().enumerate() {
+        if i == tab {
+            game.native_fill(batch, [r[0] - 1.0, r[1] - 1.0, r[2] + 2.0, r[3] + 2.0], 0xFFE0_E0E0);
+        }
+        button(game, batch, *r, m::PAGES[i], mouse);
+    }
+    for (r, (_, label)) in rows.iter().zip(&entries) {
+        button(game, batch, *r, label, mouse);
+    }
+    if tab == 5 {
+        let x = tabs[0][0];
+        let mut y = 58.0;
+        game.native_text(batch, "Rebind these in Options > Controls > Key Binds, or on this mod's", [x, y], 0xC0C0C0, false);
+        y += 10.0;
+        game.native_text(batch, "page in Options > Mods. The player list key (Tab) shows faces.", [x, y], 0xC0C0C0, false);
+        y += 16.0;
+        for (name, label) in keys::labels() {
+            let bound = keys::bound(game, name);
+            let shown = horizon_client::keybinds::display_name(&bound).plain();
+            game.native_text(batch, &format!("{label}: {shown}"), [x, y], 0xFFFFFF, false);
+            y += 11.0;
+        }
+    } else {
+        game.native_text(batch, "Click: next choice. Right-click: the one before.", [tabs[0][0], h - 40.0], 0x909090, false);
+    }
+    button(game, batch, back, "Back to map", mouse);
+}
+
 /// Puts the edited name on its waypoint, saved; back to `to`.
 fn finish_edit(s: &mut State, to: m::Page) {
     if let m::Page::Edit { index, name } = &s.screen.page {
@@ -2164,6 +2281,7 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
                 let top = game.world.shape.max_y();
                 match tool {
                     Tool::Waypoints => s.screen.page = m::Page::List { scroll: 0 },
+                    Tool::Settings => s.screen.page = m::Page::Settings { tab: 0 },
                     Tool::OnMe => {
                         if let Some(p) = player_pos(game) {
                             s.screen.view.x = p[0];
@@ -2220,12 +2338,14 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
             } else if inside(from_chat, mouse) {
                 if let Some((_, at)) = s.chat.pop_back() {
                     let i = s.book.add(at, dim, now_secs());
+                    s.book.style_new(i, settings.wp_colour, settings.wp_symbol);
                     save_book(s);
                     edit(s, i);
                 }
             } else if inside(add, mouse) {
                 if let Some(pos) = here {
                     let i = s.book.add(pos, dim, now_secs());
+                    s.book.style_new(i, settings.wp_colour, settings.wp_symbol);
                     save_book(s);
                     edit(s, i);
                 }
@@ -2270,6 +2390,29 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
                 finish_edit(s, m::Page::List { scroll: 0 });
             }
         }
+        m::Page::Settings { tab } => {
+            let (tabs, rows, back) = settings_layout(w, h, settings.page(tab).len());
+            if button == 0 {
+                if let Some(t) = tabs.iter().position(|r| inside(*r, mouse)) {
+                    s.screen.page = m::Page::Settings { tab: t };
+                    return;
+                }
+                if inside(back, mouse) {
+                    s.screen.page = m::Page::Map;
+                    return;
+                }
+            }
+            if button > 1 {
+                return;
+            }
+            let entries = settings.page(tab);
+            if let Some(i) = rows.iter().position(|r| inside(*r, mouse))
+                && let Some(&(field, _)) = entries.get(i)
+            {
+                settings.click_dir(field, button == 1);
+                settings_changed = true;
+            }
+        }
         m::Page::NewSet { name } if button == 0 => {
             let (_, [create, cancel]) = new_set_layout(w, h);
             if inside(create, mouse) {
@@ -2301,7 +2444,8 @@ pub(super) fn on_release(game: &Game<'_>, screen: &NativeScreenView<'_>, button:
     let rect = map_rect(w, h);
     let mouse = screen.mouse;
     let dim = game.dim.id();
-    let convert = settings(game).convert;
+    let set = settings(game);
+    let convert = set.convert;
     let fallback_y = player_pos(game).map_or(64, |p| p[1].floor() as i32);
     with(|s| {
         if s.screen.page != m::Page::Map || !s.screen.release() || !inside(rect, mouse) {
@@ -2325,6 +2469,7 @@ pub(super) fn on_release(game: &Game<'_>, screen: &NativeScreenView<'_>, button:
             };
             let y = column.map_or(fallback_y, |c| i32::from(c.height) + 1);
             let i = s.book.add([x, y, z], dim, now_secs());
+            s.book.style_new(i, set.wp_colour, set.wp_symbol);
             save_book(s);
             i
         });
@@ -2354,8 +2499,9 @@ pub(super) fn on_scroll(game: &mut Game<'_>, screen: &str, mouse: [f32; 2], scro
     *canceled = true;
     let (w, h) = game.gui_size();
     let step = if scroll[1] > 0.0 { 1 } else { -1 };
+    let (lo, hi) = settings(game).map_zooms();
     with(|s| match &mut s.screen.page {
-        m::Page::Map => s.screen.view.zoom_at(map_rect(w, h), mouse, step, 0, m::MAP_ZOOM_STEPS - 1),
+        m::Page::Map => s.screen.view.zoom_at(map_rect(w, h), mouse, step, lo, hi),
         m::Page::List { scroll } => {
             let rows = m::list_rows(h);
             let max = s.book.list.len().saturating_sub(rows);
@@ -2375,7 +2521,7 @@ pub(super) fn on_key_pressed(game: &Game<'_>, screen: &NativeScreenView<'_>, key
     let feet = player_pos(game).map_or(64, |p| p[1].floor() as i32);
     let top = game.world.shape.max_y();
     with(|s| {
-        let typing = matches!(s.screen.page, m::Page::Edit { .. } | m::Page::NewSet { .. });
+        let typing = s.screen.page.typing();
         match key {
             "key.keyboard.escape" | "key.keyboard.enter" | "key.keyboard.keypad.enter" if typing => {
                 if let m::Page::NewSet { name } = s.screen.page.clone() {
@@ -2389,7 +2535,7 @@ pub(super) fn on_key_pressed(game: &Game<'_>, screen: &NativeScreenView<'_>, key
                 }
                 *canceled = true;
             }
-            "key.keyboard.escape" if matches!(s.screen.page, m::Page::List { .. }) => {
+            "key.keyboard.escape" if matches!(s.screen.page, m::Page::List { .. } | m::Page::Settings { .. }) => {
                 s.screen.page = m::Page::Map;
                 *canceled = true;
             }
@@ -2457,15 +2603,33 @@ pub(super) fn on_settings(game: &mut Game<'_>, mod_id: &str, buttons: &mut Vec<S
     if mod_id != m::ID {
         return;
     }
-    buttons.extend(settings(game).labels());
+    let page = with(|st| st.options_page);
+    buttons.push(format!("Page: {} (click for the next)", m::PAGES[page]));
+    let s = settings(game);
+    if page == 5 {
+        for (name, label) in keys::labels() {
+            let bound = keys::bound(game, name);
+            buttons.push(format!("{label}: {}", horizon_client::keybinds::display_name(&bound).plain()));
+        }
+    } else {
+        buttons.extend(s.page(page).into_iter().map(|(_, l)| l));
+    }
 }
 
 pub(super) fn on_click(game: &mut Game<'_>, mod_id: &str, button: usize) {
-    if mod_id != m::ID || button >= m::Settings::COUNT {
+    if mod_id != m::ID {
         return;
     }
+    if button == 0 {
+        with(|st| st.options_page = (st.options_page + 1) % m::PAGES.len());
+        return;
+    }
+    let page = with(|st| st.options_page);
     let mut s = settings(game);
-    s.click(button);
+    let Some(&(field, _)) = s.page(page).get(button - 1) else {
+        return;
+    };
+    s.click(field);
     m::set_settings(s);
     for (key, value) in s.stored() {
         game.native_set_setting(m::ID, key, &value);

@@ -18,16 +18,30 @@ pub(super) const ZOOM_OUT: &str = "zoom_out";
 pub(super) const CAVE: &str = "cave";
 /// Shows or hides the minimap.
 pub(super) const MINIMAP: &str = "minimap";
+/// Shows or hides every waypoint.
+pub(super) const WAYPOINTS: &str = "waypoints";
+/// Opens the waypoint list.
+pub(super) const WAYPOINT_LIST: &str = "waypoint_list";
+/// Opens the map's settings.
+pub(super) const SETTINGS: &str = "settings";
 
 /// Each key: its name, its label on the page, and its default (`key.keyboard.g`).
-const KEYS: [[&str; 3]; 6] = [
+const KEYS: [[&str; 3]; 9] = [
     [MAP, "World Map", "key.keyboard.m"],
     [WAYPOINT, "Add Waypoint", "key.keyboard.b"],
     [ZOOM_IN, "Minimap Zoom In", "key.keyboard.equal"],
     [ZOOM_OUT, "Minimap Zoom Out", "key.keyboard.minus"],
     [CAVE, "Cave View On/Off", "key.keyboard.k"],
     [MINIMAP, "Show/Hide Minimap", "key.keyboard.h"],
+    [WAYPOINTS, "Show/Hide Waypoints", "key.keyboard.unknown"],
+    [WAYPOINT_LIST, "Waypoint List", "key.keyboard.u"],
+    [SETTINGS, "Map Settings", "key.keyboard.unknown"],
 ];
+
+/// Every key's name and label, for the settings' Keys page.
+pub(super) fn labels() -> Vec<(&'static str, &'static str)> {
+    KEYS.iter().map(|k| (k[0], k[1])).collect()
+}
 
 /// The keys for `NativeMod::keys`.
 pub(super) fn listed() -> Vec<[String; 3]> {
