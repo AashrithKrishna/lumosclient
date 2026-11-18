@@ -58,6 +58,8 @@ struct Palette {
     color: Vec<u8>,
     flags: Vec<u8>,
     look: Vec<m::BlockColour>,
+    /// Biome colours blended across borders (the setting, kept here for the scans).
+    blend: bool,
 }
 
 impl Palette {
@@ -79,7 +81,7 @@ impl Palette {
             }
             flags.push(b);
         }
-        Self { color, flags, look }
+        Self { color, flags, look, blend: true }
     }
 
     #[inline]
@@ -359,7 +361,7 @@ fn scan(
                 tile.kind[i] = m::DEEP;
                 continue;
             }
-            let t = m::blend_tints(&grid, x, z);
+            let t = if palette.blend { m::blend_tints(&grid, x, z) } else { grid[((z / 4 + 1) * 6 + x / 4 + 1) as usize] };
             let mut rgb = colour(h.id, &t).unwrap_or(0);
             if let Some((gid, gc)) = h.ground
                 && rgb != 0
@@ -395,7 +397,11 @@ struct Explored {
     /// The near chunks' last rescan, and the world's revision then.
     near: (Option<Instant>, u64),
     saved: Instant,
-    loading: Option<Receiver<Vec<((i32, i32), m::Tile)>>>,
+    /// Region files being read (which, and their tiles to come), and the regions read or
+    /// being read: the region cache keeps those near you and the map's view.
+    loading: Vec<(HashSet<(i32, i32)>, Receiver<Vec<((i32, i32), m::Tile)>>)>,
+    cached: HashSet<(i32, i32)>,
+    cache_at: Option<Instant>,
     /// Saved cave layers by band (None: the full cave map), under `<dim>/caves/`.
     caves: HashMap<Option<i32>, Saved>,
     /// Your recent path here (`<dim>/footsteps.txt`), and whether it changed since saved.
@@ -406,7 +412,6 @@ struct Explored {
 impl Explored {
     fn open(world: &Path, dim: &'static str) -> Self {
         let dir = world.join(m::folder_name(dim));
-        let loading = Some(load_regions(dir.clone(), None));
         let steps = m::Footsteps::from_text(&std::fs::read_to_string(dir.join("footsteps.txt")).unwrap_or_default());
         Self {
             dim,
@@ -417,7 +422,9 @@ impl Explored {
             refilled: None,
             near: (None, 0),
             saved: Instant::now(),
-            loading,
+            loading: Vec::new(),
+            cached: HashSet::new(),
+            cache_at: None,
             caves: HashMap::new(),
             steps,
             steps_dirty: false,
@@ -427,7 +434,15 @@ impl Explored {
     /// Writes the regions changed since the last save (its cave layers' too), off the frame.
     fn save(&mut self) {
         self.saved = Instant::now();
+        // A region still being read is written once its saved tiles are in (else the file
+        // would lose them).
+        let reading: HashSet<(i32, i32)> = self.loading.iter().flat_map(|(r, _)| r.iter().copied()).collect();
+        let later: Vec<(i32, i32)> = self.store.dirty.iter().filter(|r| reading.contains(r)).copied().collect();
+        for r in &later {
+            self.store.dirty.remove(r);
+        }
         write_regions(&mut self.store, &self.dir);
+        self.store.dirty.extend(later);
         for c in self.caves.values_mut() {
             write_regions(&mut c.store, &c.dir);
         }
@@ -445,18 +460,22 @@ impl Explored {
         let dir = self.dir.join(m::cave_folder(band));
         self.caves.entry(band).or_insert_with(|| Saved {
             store: m::Store { band, ..m::Store::default() },
-            loading: Some(load_regions(dir.clone(), band)),
+            loading: Some(load_regions(dir.clone(), band, None)),
             dir,
         })
     }
 
     /// Takes in regions that finished loading.
     fn follow_loading(&mut self) {
-        if let Some(rx) = &self.loading
-            && let Ok(tiles) = rx.try_recv()
-        {
+        let mut done = Vec::new();
+        for (i, (_, rx)) in self.loading.iter().enumerate() {
+            if let Ok(tiles) = rx.try_recv() {
+                done.push((i, tiles));
+            }
+        }
+        for (i, tiles) in done.into_iter().rev() {
             self.store.merge_loaded(tiles);
-            self.loading = None;
+            self.loading.remove(i);
         }
         for c in self.caves.values_mut() {
             if let Some(rx) = &c.loading
@@ -469,6 +488,40 @@ impl Explored {
     }
 }
 
+impl Explored {
+    /// The region cache, once a second: the saved regions within `radius` of you and of the
+    /// map's view (`view`, with its own reach) read, the ones past a region more let go once
+    /// saved.
+    fn follow_cache(&mut self, you: (f64, f64), view: Option<((f64, f64), i32)>, radius: i32) {
+        if self.cache_at.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+            return;
+        }
+        self.cache_at = Some(Instant::now());
+        let mut want = m::regions_near(&[you], radius);
+        let mut keep = m::regions_near(&[you], radius + 1);
+        if let Some((centre, reach)) = view {
+            want.extend(m::regions_near(&[centre], reach));
+            keep.extend(m::regions_near(&[centre], reach + 1));
+        }
+        let new: HashSet<(i32, i32)> = want.difference(&self.cached).copied().collect();
+        if !new.is_empty() {
+            self.cached.extend(new.iter().copied());
+            self.loading.push((new.clone(), load_regions(self.dir.clone(), None, Some(new))));
+        }
+        let reading: HashSet<(i32, i32)> = self.loading.iter().flat_map(|(r, _)| r.iter().copied()).collect();
+        self.store.let_go(|r| keep.contains(&r) || reading.contains(&r));
+        let dirty = &self.store.dirty;
+        self.cached.retain(|r| keep.contains(r) || reading.contains(r) || dirty.contains(r));
+    }
+}
+
+/// Another dimension's saved surface map, read for the world map (not scanned: you aren't there).
+struct Viewed {
+    dim: String,
+    store: m::Store,
+    loading: Option<Receiver<Vec<((i32, i32), m::Tile)>>>,
+}
+
 /// A saved cave layer: a band's tiles (or the full cave map's), kept as the surface's are.
 struct Saved {
     store: m::Store,
@@ -476,14 +529,24 @@ struct Saved {
     loading: Option<Receiver<Vec<((i32, i32), m::Tile)>>>,
 }
 
-/// The region files of `dir` (of cave layer `band`, None for the surface), read off the frame.
-fn load_regions(dir: PathBuf, band: Option<i32>) -> Receiver<Vec<((i32, i32), m::Tile)>> {
+/// The region files of `dir` (of cave layer `band`, None for the surface), read off the frame:
+/// all of them, or `only` these regions.
+fn load_regions(dir: PathBuf, band: Option<i32>, only: Option<HashSet<(i32, i32)>>) -> Receiver<Vec<((i32, i32), m::Tile)>> {
     let (tx, rx) = mpsc::channel();
     let _ = std::thread::Builder::new()
         .name("lumos-map-load".into())
         .spawn(move || {
             let mut all = Vec::new();
-            if let Ok(entries) = std::fs::read_dir(&dir) {
+            if let Some(only) = only {
+                for region in only {
+                    if let Ok(bytes) = std::fs::read(dir.join(m::region_file(region)))
+                        && m::region_band(&bytes) == band
+                        && let Some(tiles) = m::decode_region(region, &bytes)
+                    {
+                        all.extend(tiles);
+                    }
+                }
+            } else if let Ok(entries) = std::fs::read_dir(&dir) {
                 for e in entries.flatten() {
                     let name = e.file_name();
                     let Some(region) = name.to_str().and_then(m::region_from_file) else {
@@ -593,6 +656,10 @@ struct State {
     cave_switch: m::CaveSwitch,
     roof_checked: Option<Instant>,
     clock: Option<Instant>,
+    /// When reached waypoints were last looked for.
+    reached_at: Option<Instant>,
+    /// Another dimension's saved map, shown on the world map instead of this one's.
+    viewed: Option<Viewed>,
     /// The light overlay: per chunk near you, a bit per column of each row marked dark; when it
     /// was last made.
     light_mask: HashMap<(i32, i32), [u16; 16]>,
@@ -767,6 +834,10 @@ fn follow_spawn(game: &Game<'_>, s: &mut State) {
         return;
     }
     s.spawn_checked = Some(Instant::now());
+    // "Server maps: Single": one map, whatever the spawn.
+    if settings(game).map_mode == 1 {
+        return;
+    }
     let Some(spawn) = game.spawn else {
         return;
     };
@@ -883,11 +954,21 @@ fn explore(game: &Game<'_>, s: &mut State, budget: Duration) {
         return;
     };
     let full = roof_top(game).is_none() && cave_type(game, s) == m::CaveType::Full;
-    let footsteps = settings(game).footsteps;
+    // The map's view and how many regions it reaches across (at most twice the cache's).
+    let view = map_open(game).then(|| {
+        let (w, h) = game.gui_size();
+        let r = map_rect(w, h);
+        let v = s.screen.view;
+        ((v.x, v.z), ((f64::from(r[2].max(r[3])) / 2.0 * v.bpp() / 512.0).ceil() as i32).max(1))
+    });
+    let set = settings(game);
+    let (footsteps, update, new) = (set.footsteps, set.map_update, set.map_new);
     let State { explored, palette, tints, .. } = s;
     let (Some(e), Some(palette)) = (explored.as_mut(), palette.as_ref()) else {
         return;
     };
+    let radius = m::CACHE_RADII[set.map_cache.min(m::CACHE_RADII.len() - 1)] as i32;
+    e.follow_cache((p[0], p[2]), view.map(|(c, reach)| (c, reach.min(radius * 2))), radius);
     e.follow_loading();
     if footsteps && e.steps.step(p[0], p[2]) {
         e.steps_dirty = true;
@@ -901,9 +982,12 @@ fn explore(game: &Game<'_>, s: &mut State, budget: Duration) {
             .chunks
             .keys()
             .filter(|k| !e.seen.contains(*k))
+            // "Map new chunks" off: only ones already on the map; "Update changed chunks" off:
+            // only ones not on it yet.
+            .filter(|k| if e.store.tiles.contains_key(*k) { update } else { new })
             .copied()
             .collect();
-        if world.revision != e.near.1 && e.near.0.is_none_or(|t| t.elapsed() >= NEAR_RESCAN) {
+        if update && world.revision != e.near.1 && e.near.0.is_none_or(|t| t.elapsed() >= NEAR_RESCAN) {
             e.near = (Some(Instant::now()), world.revision);
             for dz in -2..=2 {
                 for dx in -2..=2 {
@@ -978,11 +1062,37 @@ fn set_cave_type(game: &Game<'_>, s: &mut State, t: m::CaveType) {
     }
 }
 
+/// The world map shows the next dimension's saved map (the three of the game, then back to
+/// the one you are in).
+fn view_next_dimension(game: &Game<'_>, s: &mut State) {
+    let here = game.dim.id();
+    let all = dimensions(here);
+    let now = s.viewed.as_ref().map_or(here, |v| v.dim.as_str());
+    let at = all.iter().position(|d| d == now).unwrap_or(0);
+    let next = all[(at + 1) % all.len()].clone();
+    s.screen.menu = None;
+    if next == here {
+        s.viewed = None;
+    } else if let Some(world) = &s.world_dir {
+        let dir = world.join(m::folder_name(&next));
+        s.viewed = Some(Viewed { loading: Some(load_regions(dir, None, None)), dim: next, store: m::Store::default() });
+    }
+    // The cells of the old view go (they show another place).
+    s.cells.clear();
+    s.cells_gen += 1;
+}
+
 /// What the world map draws from: the surface (0), its live slice over the band's saved layer
 /// (2: a layered view, or a roof's top) or the full cave map (3; a roofed dimension's surface
 /// map is its full one).
 fn map_source(game: &Game<'_>, s: &State) -> u8 {
+    if s.viewed.is_some() {
+        return 4;
+    }
     let roofed = roof_top(game).is_some();
+    if m::settings(|_| None).fair_play {
+        return 0;
+    }
     match cave_type(game, s) {
         m::CaveType::Layered if s.screen.slice.is_some() => 2,
         m::CaveType::Off if roofed => 2,
@@ -994,6 +1104,7 @@ fn map_source(game: &Game<'_>, s: &State) -> u8 {
 /// The column the world map shows at `x, z`.
 fn map_column(s: &State, source: u8, x: i32, z: i32) -> Option<m::Col> {
     match source {
+        4 => s.viewed.as_ref()?.store.column(x, z),
         2 => s.slice.as_ref().and_then(|l| {
             l.column(x, z).or_else(|| saved(s, Some(l.band()?))?.store.column(x, z))
         }),
@@ -1136,6 +1247,13 @@ fn look(settings: &m::Settings) -> m::Look {
 
 /// The world map follows the player (when set) and keeps its layer scanned.
 fn follow_map(game: &Game<'_>, s: &mut State, settings: &m::Settings) {
+    if let Some(v) = s.viewed.as_mut()
+        && let Some(rx) = &v.loading
+        && let Ok(tiles) = rx.try_recv()
+    {
+        v.store.merge_loaded(tiles);
+        v.loading = None;
+    }
     if s.map_dim != game.dim.id() {
         s.map_dim = game.dim.id().to_owned();
     }
@@ -1373,6 +1491,7 @@ fn epoch_of(s: &State, source: u8) -> u64 {
         0 => s.explored.as_ref().map_or(0, |e| e.store.epoch),
         1 => s.cave.as_ref().map_or(0, layer),
         2 => s.slice.as_ref().map_or(0, layer),
+        4 => s.viewed.as_ref().map_or(0, |v| v.store.epoch),
         _ => saved(s, None).map_or(0, |c| c.store.epoch),
     };
     s.cells_gen << 32 | own
@@ -1439,6 +1558,10 @@ fn draw_wanted_cells(game: &mut Game<'_>, s: &mut State, settings: &m::Settings,
                 }
                 None => continue,
             },
+            4 => match s.viewed.as_ref() {
+                Some(v) => m::compose_cell(|x, z| v.store.column(x, z), &MAP_COLORS, look, None, key, &mut px),
+                None => continue,
+            },
             _ => match saved(s, None) {
                 Some(c) => m::compose_cell(|x, z| c.store.column(x, z), &MAP_COLORS, look, None, key, &mut px),
                 None => continue,
@@ -1487,9 +1610,13 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
         return;
     }
     let held = keys::held(game, keys::ENLARGE);
+    let mut reached = None;
     with(|s| {
         s.big = settings.minimap && if settings.enlarge_toggle { s.big_toggled } else { held && game.native_playing() };
         follow_colours(game, s);
+        if let Some(p) = s.palette.as_mut() {
+            p.blend = settings.blend;
+        }
         follow_world(game, s);
         follow_spawn(game, s);
         explore(game, s, if open { BUDGET_OPEN } else { BUDGET });
@@ -1503,6 +1630,19 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
             }
         }
         s.was_dead = dead;
+        // Waypoints that go when reached (and death points, walked back to).
+        if !dead
+            && s.reached_at.is_none_or(|t| t.elapsed() >= Duration::from_millis(500))
+            && let Some(p) = player_pos(game)
+        {
+            s.reached_at = Some(Instant::now());
+            let gone = s.book.remove_reached(p, game.dim.id(), settings.death_reached, now_secs(), 10);
+            if !gone.is_empty() {
+                s.screen.selected.clear();
+                save_book(s);
+                reached = Some(format!("Reached {}", gone.join(", ")));
+            }
+        }
         if open {
             if s.screen.page == m::Page::Map {
                 follow_map(game, s, &settings);
@@ -1514,6 +1654,9 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
         draw_wanted_cells(game, s, &settings, if open { CELL_BUDGET_OPEN } else { CELL_BUDGET });
         s.icons.follow(game);
     });
+    if let Some(text) = reached {
+        game.native_client_action_bar(Text::literal(text), false);
+    }
 }
 
 /// The client left its level: the explored map is saved and let go.
@@ -1528,6 +1671,7 @@ pub(super) fn on_level_unload(game: &mut Game<'_>) {
         }
         s.cave = None;
         s.cave_view = None;
+        s.viewed = None;
         s.cave_switch = m::CaveSwitch::default();
         s.cells.clear();
         s.cells_gen += 1;
@@ -1639,6 +1783,7 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
                 s.screen.press = None;
                 s.screen.follow = set.map_follow;
                 s.screen.grid = set.map_grid;
+                s.viewed = None;
                 // A layered cave map opens at your head.
                 s.screen.slice = (cave_type(game, s) == m::CaveType::Layered).then(|| head_block(game)).flatten();
                 let (lo, hi) = set.map_zooms();
@@ -1697,6 +1842,8 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
             s.zoom_step(true).then(|| format!("Minimap zoom: {} block(s) a pixel", m::ZOOMS[s.zoom]))
         } else if keys::pressed(game, keys::ZOOM_OUT, key, true) {
             s.zoom_step(false).then(|| format!("Minimap zoom: {} block(s) a pixel", m::ZOOMS[s.zoom]))
+        } else if s.fair_play && (keys::pressed(game, keys::CAVE, key, true) || keys::pressed(game, keys::CAVE_HERE, key, true)) {
+            Some("Fair play is on: no cave view".to_owned())
         } else if keys::pressed(game, keys::CAVE, key, true) {
             s.cave = (s.cave + 1) % m::CAVE_MODES.len();
             // Manual starts where you are.
@@ -1711,6 +1858,22 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
             s.cave = 1;
             s.cave_start = head_block(game);
             s.cave_start.map(|y| format!("Cave view: Manual from Y {y}"))
+        } else if keys::pressed(game, keys::NEXT_SET, key, true) {
+            let name = with(|st| {
+                st.book.next_set();
+                save_book(st);
+                st.book.current_set().to_owned()
+            });
+            game.native_client_action_bar(Text::literal(format!("Waypoint set: {name}")), false);
+            return;
+        } else if keys::pressed(game, keys::ALL_SETS, key, true) {
+            let all = with(|st| {
+                st.book.all_sets = !st.book.all_sets;
+                st.book.all_sets
+            });
+            let text = if all { "Waypoints: every set shown" } else { "Waypoints: each set as set" };
+            game.native_client_action_bar(Text::literal(text), false);
+            return;
         } else if keys::pressed(game, keys::RADAR, key, true) {
             s.radar = !s.radar;
             Some(format!("Entities on the minimap: {}", if s.radar { "Shown" } else { "Hidden" }))
@@ -1805,7 +1968,7 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
     let mut lines: Vec<String> = Vec::new();
     for letter in s.info_letters() {
         match letter {
-            'C' if s.coords => lines.push(format!("{} {} {}", block[0], block[1], block[2])),
+            'C' if s.coords && !s.hide_coords => lines.push(format!("{} {} {}", block[0], block[1], block[2])),
             'B' if s.biome => {
                 let biome = with(|st| match &st.biome {
                     Some((b, name)) if *b == block => Some(name.clone()),
@@ -1825,7 +1988,25 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, corners: &mut Co
                 let l = game.world.light(block[0], block[1], block[2]);
                 lines.push(format!("Light {} (sky {})", l & 15, l >> 4));
             }
-            'T' if s.time => lines.push(m::clock(game.world.day_time)),
+            'T' if s.time => lines.push(m::game_clock(game.world.day_time, s.clock_12h)),
+            'K' if s.chunk && !s.hide_coords => lines.push(m::chunk_line(block)),
+            'O' if s.other_coords && !s.hide_coords => {
+                let other = match game.dim.id() {
+                    m::OVERWORLD => m::converted(block, m::OVERWORLD, m::NETHER).map(|b| ("Nether", b)),
+                    m::NETHER => m::converted(block, m::NETHER, m::OVERWORLD).map(|b| ("Overworld", b)),
+                    _ => None,
+                };
+                if let Some((name, b)) = other {
+                    lines.push(format!("{name} {} {} {}", b[0], b[1], b[2]));
+                }
+            }
+            'A' if s.angles => lines.push(format!("Yaw {:.1} Pitch {:.1}", m::wrap_degrees(game.yaw), game.pitch)),
+            'W' if s.weather => lines.push(m::weather(game.world.weather.rain_level.1, game.world.weather.thunder_level.1).to_owned()),
+            'R' if s.real_time => {
+                use chrono::Timelike;
+                let now = chrono::Local::now();
+                lines.push(m::hm(now.hour(), now.minute(), s.clock_12h));
+            }
             'D' if s.dimension => lines.push(m::pretty_id(game.dim.id())),
             _ => {}
         }
@@ -2056,7 +2237,7 @@ fn draw_entities(
     radius: f32,
     to_map: &dyn Fn(f64, f64) -> (f32, f32),
 ) {
-    if !s.radar {
+    if !s.radar || s.fair_play {
         return;
     }
     let size = m::ICON_SIZES[s.icon_size.min(m::ICON_SIZES.len() - 1)];
@@ -2271,7 +2452,8 @@ fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings)
     let mut shown: Vec<(f64, [f32; 2], bool, f32, String, String, u32, bool)> = Vec::new();
     with(|st| {
         for wp in st.book.list.iter().filter(|w| w.on_screen && st.book.visible(w)) {
-            let Some(c) = wp.place_in(dim, s.convert) else {
+            // A 2D waypoint sits at eye height (its marker straight ahead, its distance flat).
+            let Some(c) = wp.place_at(dim, s.convert, eye[1] - 1.0) else {
                 continue;
             };
             let at = [c[0], c[1] + 1.0, c[2]];
@@ -2418,6 +2600,7 @@ enum Tool {
     LayerUp,
     Caves,
     FollowY,
+    Dimension,
     Filter,
     Png,
     World,
@@ -2448,6 +2631,8 @@ fn tools(w: f32, mp: bool, slime: bool) -> Vec<(Tool, [f32; 4])> {
     y += 18.0;
     out.push((Tool::FollowY, [x, y, full, 16.0]));
     y += 18.0;
+    out.push((Tool::Dimension, [x, y, full, 16.0]));
+    y += 18.0;
     out.push((Tool::Filter, [x, y, full, 16.0]));
     y += 18.0;
     out.push((Tool::Png, [x, y, full, 16.0]));
@@ -2473,6 +2658,7 @@ fn tool_label(t: Tool, s: &State) -> String {
         Tool::LayerUp => "Up".into(),
         Tool::Caves => format!("Caves: {}", m::CAVE_TYPES[s.cave_types.get(&s.map_dim, s.map_roofed).index()]),
         Tool::FollowY => format!("Y follows me {}", on(s.slice_follow)),
+        Tool::Dimension => format!("View: {}", m::pretty_id(s.viewed.as_ref().map_or(&s.map_dim, |v| &v.dim))),
         Tool::Filter => format!("Show: {}", m::MAP_FILTERS[s.screen.filter]),
         Tool::Png => "Save as PNG".into(),
         Tool::World => s
@@ -2609,6 +2795,8 @@ struct EditLayout {
     temporary: [f32; 4],
     scope: [f32; 4],
     always_name: [f32; 4],
+    two_d: [f32; 4],
+    vanish: [f32; 4],
     on_screen: [f32; 4],
     on_minimap: [f32; 4],
     on_map: [f32; 4],
@@ -2656,6 +2844,8 @@ fn edit_layout(w: f32, h: f32) -> EditLayout {
         temporary: half(1.0, 1),
         scope: half(2.0, 0),
         always_name: half(2.0, 1),
+        two_d: half(6.0, 0),
+        vanish: half(6.0, 1),
         on_screen: third(3.0, 0),
         on_minimap: third(3.0, 1),
         on_map: third(3.0, 2),
@@ -2665,7 +2855,7 @@ fn edit_layout(w: f32, h: f32) -> EditLayout {
         duplicate: third(5.0, 0),
         delete: third(5.0, 1),
         done: third(5.0, 2),
-        panel: [x - 8.0, y - 6.0, pw + 16.0, 76.0 + 6.0 * 20.0 + 10.0],
+        panel: [x - 8.0, y - 6.0, pw + 16.0, 76.0 + 7.0 * 20.0 + 10.0],
         create: half(1.0, 0),
         cancel: half(1.0, 1),
         new_panel: [x - 8.0, y - 6.0, pw + 16.0, 76.0 + 2.0 * 20.0 + 10.0],
@@ -2848,7 +3038,9 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
             }
         }
     }
-    let dim = game.dim.id();
+    let here = game.dim.id();
+    let dim = s.viewed.as_ref().map_or(here, |v| v.dim.as_str()).to_owned();
+    let dim = dim.as_str();
     // Waypoints with their letter or symbol; names shown when zoomed in or pointed at.
     for wp in s.book.list.iter().filter(|w| on_map(s, w)) {
         let Some(c) = wp.place_in(dim, settings.convert) else {
@@ -2871,6 +3063,7 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
     }
     // Your recent path, as small dots (fewer when zoomed far out).
     if settings.footsteps
+        && s.viewed.is_none()
         && let Some(e) = s.explored.as_ref()
     {
         let every = (view.bpp() / 2.0).ceil().max(1.0) as usize;
@@ -2882,7 +3075,7 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
         }
     }
     // Other players: dots in their colour, their names when pointed at or zoomed in.
-    if settings.map_players {
+    if settings.map_players && !settings.fair_play && s.viewed.is_none() {
         let t = game.clock.fraction();
         let rgb = settings.dot_rgb(m::DotKind::Player);
         for mob in game.mobs.iter() {
@@ -2904,8 +3097,10 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
             }
         }
     }
-    // You: an arrow the way you face.
-    if let Some(p) = player_pos(game) {
+    // You: an arrow the way you face (in the dimension you are in).
+    if dim == here
+        && let Some(p) = player_pos(game)
+    {
         let [x, y] = view.screen_of(rect, p[0], p[2]);
         if inside(rect, [x, y]) {
             game.native_quad(batch, m::arrow([x, y], game.yaw, 7.0), 0xFF00_0000);
@@ -2940,7 +3135,11 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
                 m::NETHER => format!("   Overworld {} {}", bx * 8, bz * 8),
                 _ => String::new(),
             };
-            format!("X {bx}{y} Z {bz}{other}   {} block(s) a pixel", view.bpp())
+            if settings.hide_coords {
+                format!("(coordinates hidden)   {} block(s) a pixel", view.bpp())
+            } else {
+                format!("X {bx}{y} Z {bz}{other}   {} block(s) a pixel", view.bpp())
+            }
         }
         _ => hint.to_owned(),
     };
@@ -3017,11 +3216,19 @@ fn draw_list(game: &Game<'_>, batch: &mut HudBatch, s: &State, settings: &m::Set
             label.push_str("  [temporary]");
         }
         game.native_text(batch, &label, [r[0] + 36.0, r[1] + 6.0], colour, false);
-        let mut info = format!("{} {} {}", wp.pos[0], wp.pos[1], wp.pos[2]);
+        let mut info = if settings.hide_coords {
+            "hidden".to_owned()
+        } else if wp.two_d {
+            format!("{} ~ {}", wp.pos[0], wp.pos[2])
+        } else {
+            format!("{} {} {}", wp.pos[0], wp.pos[1], wp.pos[2])
+        };
         if wp.dim != dim {
             info = format!("{info}  {}", m::pretty_id(&wp.dim));
-        } else if let Some(p) = here {
-            info = format!("{info}  {}", m::distance_text(m::distance(p, wp.centre()), settings.units));
+        } else if let Some(p) = here
+            && let Some(c) = wp.place_at(dim, false, p[1])
+        {
+            info = format!("{info}  {}", m::distance_text(m::distance(p, c), settings.units));
         }
         let iw = game.native_text_width(&info);
         game.native_text(batch, &info, [r[0] + r[2] - iw - 4.0, r[1] + 6.0], 0xA0A0A0, false);
@@ -3128,6 +3335,8 @@ fn draw_edit(game: &Game<'_>, batch: &mut HudBatch, wp: &m::Waypoint, new: bool,
     button(game, batch, l.temporary, &format!("Temporary: {}", on(wp.temporary)), mouse);
     button(game, batch, l.scope, if wp.global { "Kept for: all worlds" } else { "Kept for: this world" }, mouse);
     button(game, batch, l.always_name, &format!("Always named: {}", on(wp.always_name)), mouse);
+    button(game, batch, l.two_d, &format!("2D (no height): {}", on(wp.two_d)), mouse);
+    button(game, batch, l.vanish, &format!("Gone when reached: {}", on(wp.vanish)), mouse);
     button(game, batch, l.on_screen, &format!("Screen: {}", on(wp.on_screen)), mouse);
     button(game, batch, l.on_minimap, &format!("Minimap: {}", on(wp.on_minimap)), mouse);
     button(game, batch, l.on_map, &format!("Map: {}", on(wp.on_map)), mouse);
@@ -3299,7 +3508,7 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
         m::Page::Map if button == 1 => {
             let rect = map_rect(w, h);
             if inside(rect, mouse) {
-                let waypoint = waypoint_at(s, dim, settings.convert, rect, mouse);
+                let waypoint = waypoint_at(s, &shown_dim(game, s), settings.convert, rect, mouse);
                 let block = spot_at(game, s, rect, mouse, fallback_y);
                 s.screen.menu = Some(m::Menu { at: mouse, block, waypoint });
             }
@@ -3329,6 +3538,7 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
                         set_cave_type(game, s, next);
                         notice(s, format!("Cave map here: {}", m::CAVE_TYPES[next.index()]));
                     }
+                    Tool::Dimension => view_next_dimension(game, s),
                     Tool::FollowY => {
                         s.slice_follow = !s.slice_follow;
                         if s.slice_follow && cave_type(game, s) != m::CaveType::Layered {
@@ -3515,6 +3725,10 @@ pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i
                 s.book.list[index].global = !s.book.list[index].global;
             } else if inside(l.always_name, mouse) {
                 s.book.list[index].always_name = !s.book.list[index].always_name;
+            } else if inside(l.two_d, mouse) {
+                s.book.list[index].two_d = !s.book.list[index].two_d;
+            } else if inside(l.vanish, mouse) {
+                s.book.list[index].vanish = !s.book.list[index].vanish;
             } else if inside(l.on_screen, mouse) {
                 s.book.list[index].on_screen = !s.book.list[index].on_screen;
             } else if inside(l.on_minimap, mouse) {
@@ -3637,7 +3851,6 @@ pub(super) fn on_release(game: &Game<'_>, screen: &NativeScreenView<'_>, button:
     let (w, h) = game.gui_size();
     let rect = map_rect(w, h);
     let mouse = screen.mouse;
-    let dim = game.dim.id();
     let set = settings(game);
     let convert = set.convert;
     let fallback_y = player_pos(game).map_or(64, |p| p[1].floor() as i32);
@@ -3645,6 +3858,8 @@ pub(super) fn on_release(game: &Game<'_>, screen: &NativeScreenView<'_>, button:
         if s.screen.page != m::Page::Map || !s.screen.release() || !inside(rect, mouse) {
             return;
         }
+        let dim = shown_dim(game, s);
+        let dim = dim.as_str();
         let hit = waypoint_at(s, dim, convert, rect, mouse);
         let index = hit.unwrap_or_else(|| {
             let [x, y, z] = spot_at(game, s, rect, mouse, fallback_y);
@@ -3681,12 +3896,19 @@ fn spot_at(game: &Game<'_>, s: &State, rect: [f32; 4], mouse: [f32; 2], fallback
 /// The right-click menu's rows now.
 fn menu_items(game: &Game<'_>, s: &State, menu: &m::Menu) -> Vec<m::MenuItem> {
     let here = menu.waypoint.and_then(|i| s.book.list.get(i)).is_some_and(|w| w.dim == game.dim.id());
-    m::menu_items(menu, may_teleport(game), here)
+    // No teleport into another dimension's map.
+    m::menu_items(menu, may_teleport(game) && s.viewed.is_none(), here)
+}
+
+/// The dimension the world map shows: another one's saved map, or the one you are in.
+fn shown_dim(game: &Game<'_>, s: &State) -> String {
+    s.viewed.as_ref().map_or_else(|| game.dim.id().to_owned(), |v| v.dim.clone())
 }
 
 /// A row of the right-click menu chosen.
 fn menu_pick(game: &Game<'_>, s: &mut State, menu: &m::Menu, item: m::MenuItem, settings: &m::Settings) {
-    let dim = game.dim.id();
+    let dim = shown_dim(game, s);
+    let dim = dim.as_str();
     match (item, menu.waypoint) {
         (m::MenuItem::WaypointHere, _) => {
             let i = s.book.add(menu.block, dim, now_secs());

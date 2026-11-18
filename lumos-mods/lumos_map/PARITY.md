@@ -668,6 +668,27 @@ singleplayer world.
   place the minimap on the settings screen, auto size (GUI scale based).
 - Verify by toggling each in a varied area at day and night.
 
+### Status on `feat/map-xaero-parity` (Lumos Map 3.1.0)
+
+Built from this spec only; checked with `cargo check` on the staged game and the `runtime.rs`
+tests. Not yet run in the game (see the checklist in the branch's report).
+
+| Package | Done | Left, and why |
+|---|---|---|
+| WP1 | Roof test (1x1/3x3/5x5, `ROOF` palette flag, sky light 15 short cut, every 200 ms), 20-tick switch, depth 8..64 (30), floors above (0/2/4/8), Manual with start Y, K cycles, `cave_here` key, Nether from the logical top, roof top above it | Start Y is the head's block (feet + 1), the reading of B.1 that keeps "a block at the start is rock". "Show above" counts floors with open space *over* them (lava lakes, caves over you), the reading of B.3 that does what it says it is for |
+| WP2 | Rock and edge colours, drop colour, depth factor with Legible cap, lava bright, slopes always shaded in caves, cave zoom-in as an effective zoom (the saved zoom is untouched) | - |
+| WP3 | `LMR3` bands under `<dim>/caves/<band>/`, live tiles over saved ones on both maps, Off/Layered/Full per dimension in `<world>/cave-maps.txt`, Nether Full = its old map, "Roof top" for Nether Off, "Y follows me", titles | No typed top Y box (`[`/`]` and follow cover it). Overworld Full is our own design: the first floor under the first solid mass below the surface |
+| WP4 | Z enlarges (hold or toggle), zoom out x1/x2/x4, keep rotation; shows under F3 | No "in place" (always centred) |
+| WP5 | Right-click menu (waypoint here, teleport here, edit/hide/delete/teleport to a waypoint), other players, footsteps (1000 points, saved) | Teleport command not configurable (no text settings in the table; `tp @s x y z` as the editor's); no tracked players (needs a server part) |
+| WP6 | Grid, slime, light overlay (block light up to 0/3/7/11) as HUD quads with keys | Light overlay reads block light only (no sky light choice) |
+| WP7 | Radar key and switch, depth fade, height limit, up/down marks, Y in labels, count limit | No reverse-order key, no per-type lists |
+| WP8 | 2D and vanishing waypoints, death points gone when reached, next-set and all-sets keys, hide coordinates | No angle sort, no "new at the bottom", no sneak-shows-all, no teleport command setting |
+| WP9 | Chunk, other dimension's place, yaw/pitch, weather, real time, 12/24 h | Per-line order and colours (the four fixed orders stay; new lines follow them) |
+| WP10 | "Server maps: Single", viewed-dimension button (saved map, read only) | Manual-confirm mode (needs a prompt flow); viewed dimension reads its folder whole |
+| WP11 | Region cache (2/4/8 regions round you and the view), update/new chunk switches, blend switch | Cave bands are not cached by region yet; zoomed far out, the view shows at most twice the cache radius |
+| WP12 | Fair-play switch | Server opt-out code and hiding the server address |
+| WP13 | Settings screen's third column when two don't fit | Terrain depth, night lighting, palette biomes, glass, frame colour, drag to place, auto size |
+
 ### Not doable on 9f42064c
 
 Anti-aliased minimap (needs a linear sampler for `native_sprite`), keys in Controls through

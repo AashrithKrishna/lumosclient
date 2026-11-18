@@ -1,7 +1,7 @@
 # Lumos Map: a minimap with entity dots, waypoints, a world map of what you explored.
 [mod]
 id = "lumos_map"
-version = "3.0.0"
+version = "3.1.0"
 priority = 100
 
 # Horizon Nightly 2026-11-13. Planned with horizon-mixins e59da9094f0c2fdda6c627fe9eff22dec6a906f0.

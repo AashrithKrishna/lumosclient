@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 pub const ID: &str = "lumos_map";
 pub const NAME: &str = "Map";
-pub const VERSION: &str = "3.0.0";
+pub const VERSION: &str = "3.1.0";
 pub const DESCRIPTION: &str = "A crisp minimap and world map in the game's own colours, \
 entities as dots with faces (and players' names) while Tab is held, waypoints as on-screen markers with a \
 full manager, and a world map (M) of everywhere you have been, saved per world and server.";
@@ -33,6 +33,11 @@ pub const SIZES: [f32; 8] = [64.0, 80.0, 96.0, 112.0, 128.0, 160.0, 192.0, 224.0
 /// The minimap's zoom: blocks per GUI pixel, in steps of a square root of two. The map's own
 /// texture is a block a texel, drawn with crisp (nearest) pixels at any of these.
 pub const ZOOMS: [f32; 9] = [0.25, 0.35, 0.5, 0.71, 1.0, 1.41, 2.0, 2.83, 4.0];
+/// How many region files (512 blocks each) round you and the world map's view stay in memory;
+/// farther ones are let go once saved and read again when you come near.
+pub const CACHE_RADII: [usize; 3] = [2, 4, 8];
+/// How a server's maps are told apart: by the world's spawn (sub-worlds), or one map for all.
+pub const MAP_MODES: [&str; 2] = ["By spawn", "Single"];
 /// How the enlarged minimap (held key) zooms: as the minimap, or out by 2 or 4.
 pub const ENLARGE_ZOOMS: [&str; 3] = ["Same", "Out x2", "Out x4"];
 /// The light overlay marks floors whose block light is at most this (mobs spawn at 0).
@@ -164,6 +169,18 @@ pub struct Settings {
     pub time: bool,
     /// Info line: the dimension.
     pub dimension: bool,
+    /// Info line: the weather.
+    pub weather: bool,
+    /// Info line: the chunk you are in and your place in it.
+    pub chunk: bool,
+    /// Info line: the same place in the other of the Overworld and the Nether.
+    pub other_coords: bool,
+    /// Info line: the camera's yaw and pitch.
+    pub angles: bool,
+    /// Info line: the time on your computer's clock.
+    pub real_time: bool,
+    /// Clocks as 12-hour (3:05 PM), else 24-hour.
+    pub clock_12h: bool,
     /// Index in `INFO_ORDERS`.
     pub info_order: usize,
     /// Index in `MAP_MINS`.
@@ -180,6 +197,18 @@ pub struct Settings {
     pub map_shade: bool,
     /// Your recent path on the world map.
     pub footsteps: bool,
+    /// Index in `MAP_MODES`.
+    pub map_mode: usize,
+    /// Index in `CACHE_RADII`.
+    pub map_cache: usize,
+    /// Chunks scanned again as they change (off: each kept as first seen).
+    pub map_update: bool,
+    /// New chunks mapped (off: the map stays as it is).
+    pub map_new: bool,
+    /// Biome colours blended across biome borders (off: a little faster, with seams).
+    pub blend: bool,
+    /// No entities and no cave view on the maps (fair play).
+    pub fair_play: bool,
     /// Other players on the world map.
     pub map_players: bool,
     /// Players on the minimap.
@@ -256,6 +285,10 @@ pub struct Settings {
     pub wp_symbol: usize,
     /// A waypoint where you die.
     pub death: bool,
+    /// Death points go when you walk back to them.
+    pub death_reached: bool,
+    /// Coordinates hidden on screen (streaming): info line, list, map bar.
+    pub hide_coords: bool,
     /// Index in `DEATHS`.
     pub deaths: usize,
     /// Index in `SORTS`, the waypoint list's order.
@@ -304,6 +337,12 @@ impl Default for Settings {
             light: false,
             time: false,
             dimension: false,
+            weather: false,
+            chunk: false,
+            other_coords: false,
+            angles: false,
+            real_time: false,
+            clock_12h: false,
             info_order: 0,
             map_min: 0,
             map_max: 3,
@@ -312,6 +351,12 @@ impl Default for Settings {
             map_follow: false,
             map_shade: true,
             footsteps: true,
+            map_mode: 0,
+            map_cache: 1,
+            map_update: true,
+            map_new: true,
+            blend: true,
+            fair_play: false,
             map_players: true,
             players: true,
             names: true,
@@ -351,6 +396,8 @@ impl Default for Settings {
             wp_symbol: 0,
             death: true,
             deaths: 1,
+            death_reached: true,
+            hide_coords: false,
             sort: 1,
             beams: false,
             instant_add: false,
@@ -503,6 +550,12 @@ settings_table! {
     light: flag, 1, "Light level";
     time: flag, 1, "Time of day";
     dimension: flag, 1, "Dimension";
+    weather: flag, 6, "Info: weather";
+    chunk: flag, 6, "Info: chunk";
+    other_coords: flag, 6, "Info: Overworld/Nether place";
+    angles: flag, 6, "Info: yaw and pitch";
+    real_time: flag, 6, "Info: real time";
+    clock_12h: flag, 6, "12-hour clocks";
     info_order: index(INFO_ORDERS), 1, "Info line order";
     map_min: index(MAP_MINS), 3, "Closest zoom (blocks per pixel)";
     map_max: index(MAP_MAXES), 3, "Farthest zoom (blocks per pixel)";
@@ -511,6 +564,12 @@ settings_table! {
     map_follow: flag, 3, "Follow you when opened";
     map_shade: flag, 3, "Dim ground not loaded now";
     footsteps: flag, 3, "Footsteps (your recent path)";
+    map_mode: index(MAP_MODES), 3, "Server maps";
+    map_cache: index(CACHE_RADII), 3, "Regions kept round you";
+    map_update: flag, 3, "Update changed chunks";
+    map_new: flag, 3, "Map new chunks";
+    blend: flag, 0, "Blend biome colours";
+    fair_play: flag, 0, "Fair play (no entities, no caves)";
     map_players: flag, 3, "Other players";
     players: flag, 4, "Players";
     names: flag, 4, "Show player names";
@@ -549,6 +608,8 @@ settings_table! {
     wp_colour: index(NEW_COLOURS), 5, "New waypoints' colour";
     wp_symbol: index(SYMBOLS), 5, "New waypoints' symbol";
     death: flag, 5, "Death points";
+    death_reached: flag, 5, "Death points go when reached";
+    hide_coords: flag, 6, "Hide coordinates (streaming)";
     deaths: index(DEATHS), 5, "Death points kept";
     sort: index(SORTS), 5, "List order";
     beams: flag, 5, "Beams (old style)";
@@ -570,9 +631,12 @@ impl Settings {
         (self.map_min.min(3) * 2, MAP_ZOOM_ONE + 4 + self.map_max.min(3) * 2)
     }
 
-    /// The info lines' order, as letters (`INFO_ORDERS`).
+    /// The info lines' order, as letters (`INFO_ORDERS`), then the newer lines: K chunk, O the
+    /// other dimension's place, A angles, W weather, R real time.
     pub fn info_letters(&self) -> Vec<char> {
-        INFO_ORDERS[self.info_order.min(INFO_ORDERS.len() - 1)].chars().filter(|c| c.is_alphabetic()).collect()
+        let mut out: Vec<char> = INFO_ORDERS[self.info_order.min(INFO_ORDERS.len() - 1)].chars().filter(|c| c.is_alphabetic()).collect();
+        out.extend(['K', 'O', 'A', 'W', 'R']);
+        out
     }
     pub fn shows(&self, kind: DotKind) -> bool {
         match kind {
@@ -727,6 +791,10 @@ pub enum CaveView {
 /// (`ceiling`: the logical top of a roofed dimension), with `roofed` the switch's state now.
 /// None: the surface map.
 pub fn cave_view(s: &Settings, head: i32, roofed: bool, ceiling: Option<i32>) -> Option<CaveView> {
+    if s.fair_play {
+        // Fair play: the surface only (a roofed dimension shows its under-roof map, as always).
+        return None;
+    }
     if let Some(roof) = ceiling
         && head > roof
         && !(s.cave == 1 && s.cave_start.is_some())
@@ -1123,6 +1191,23 @@ impl Store {
         }
     }
 
+    /// The tiles of every region but those `keep` keeps and those not saved yet let go; whether
+    /// any went (an epoch, so the cells showing them are drawn again).
+    pub fn let_go(&mut self, keep: impl Fn((i32, i32)) -> bool) -> bool {
+        let n = self.tiles.len();
+        let dirty = &self.dirty;
+        self.tiles.retain(|k, _| {
+            let r = region_of(*k);
+            keep(r) || dirty.contains(&r)
+        });
+        let gone = self.tiles.len() != n;
+        if gone {
+            self.revision += 1;
+            self.epoch += 1;
+        }
+        gone
+    }
+
     /// The column at block `x, z`.
     #[inline]
     pub fn column(&self, x: i32, z: i32) -> Option<Col> {
@@ -1173,6 +1258,20 @@ const ONE_V3: usize = ONE_V2 + 256;
 /// The band a cave layer's region file was saved for (None: not a cave layer's).
 pub fn region_band(bytes: &[u8]) -> Option<i32> {
     (bytes.len() >= 8 && &bytes[..4] == MAGIC_CAVE).then(|| i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]))
+}
+
+/// The regions within `radius` of any of `centres` (blocks): the ones a region cache keeps.
+pub fn regions_near(centres: &[(f64, f64)], radius: i32) -> HashSet<(i32, i32)> {
+    let mut out = HashSet::new();
+    for &(x, z) in centres {
+        let r = region_of(((x.floor() as i32) >> 4, (z.floor() as i32) >> 4));
+        for dz in -radius..=radius {
+            for dx in -radius..=radius {
+                out.insert((r.0 + dx, r.1 + dz));
+            }
+        }
+    }
+    out
 }
 
 /// The tiles of a region file (a cave layer's, this version's, or the first's without
@@ -1864,10 +1963,43 @@ pub fn facing(yaw: f32) -> String {
     format!("Facing {}", WAYS[i])
 }
 
-/// The game's time of day (`day_time`, ticks) as "hh:mm".
-pub fn clock(day_time: i64) -> String {
+/// An angle in degrees as the debug screen shows yaw: -180 to 180.
+pub fn wrap_degrees(a: f32) -> f32 {
+    (a + 180.0).rem_euclid(360.0) - 180.0
+}
+
+/// Hours and minutes as a clock: "15:05", or "3:05 PM" when `h12`.
+pub fn hm(hour: u32, minute: u32, h12: bool) -> String {
+    if !h12 {
+        return format!("{hour:02}:{minute:02}");
+    }
+    let h = match hour % 12 {
+        0 => 12,
+        h => h,
+    };
+    format!("{h}:{minute:02} {}", if hour < 12 { "AM" } else { "PM" })
+}
+
+/// The game's time of day as `hm` shows it.
+pub fn game_clock(day_time: i64, h12: bool) -> String {
     let t = (day_time + 6000).rem_euclid(24000);
-    format!("{:02}:{:02}", t / 1000, (t % 1000) * 60 / 1000)
+    hm((t / 1000) as u32, ((t % 1000) * 60 / 1000) as u32, h12)
+}
+
+/// The chunk line: the chunk's X and Z and the block's place in it.
+pub fn chunk_line(block: [i32; 3]) -> String {
+    format!("Chunk {} {} ({} {})", block[0] >> 4, block[2] >> 4, block[0] & 15, block[2] & 15)
+}
+
+/// The weather as the info line says it, from the rain and thunder levels (0 to 1).
+pub fn weather(rain: f32, thunder: f32) -> &'static str {
+    if thunder > 0.9 && rain > 0.2 {
+        "Thunder"
+    } else if rain > 0.2 {
+        "Rain"
+    } else {
+        "Clear"
+    }
 }
 
 // ---------------------------------------------------------------- the world map
@@ -2133,6 +2265,10 @@ pub struct Waypoint {
     pub on_map: bool,
     /// Its name on screen always, not only when looked at.
     pub always_name: bool,
+    /// No height of its own: it is at your height (distances are flat).
+    pub two_d: bool,
+    /// Removed when you reach it.
+    pub vanish: bool,
 }
 
 impl Default for Waypoint {
@@ -2154,6 +2290,8 @@ impl Default for Waypoint {
             on_minimap: true,
             on_map: true,
             always_name: false,
+            two_d: false,
+            vanish: false,
         }
     }
 }
@@ -2200,6 +2338,8 @@ impl Waypoint {
             (!self.on_minimap, 'M'),
             (!self.on_map, 'W'),
             (self.always_name, 'N'),
+            (self.two_d, '2'),
+            (self.vanish, 'V'),
         ] {
             if on {
                 f.push(c);
@@ -2215,6 +2355,17 @@ impl Waypoint {
         self.on_minimap = !f.contains('M');
         self.on_map = !f.contains('W');
         self.always_name = f.contains('N');
+        self.two_d = f.contains('2');
+        self.vanish = f.contains('V');
+    }
+
+    /// Where it is in `dim` as seen from height `y`: a 2D waypoint is at that height.
+    pub fn place_at(&self, dim: &str, convert: bool, y: f64) -> Option<[f64; 3]> {
+        let mut p = self.place_in(dim, convert)?;
+        if self.two_d {
+            p[1] = y;
+        }
+        Some(p)
     }
     /// The block centre at its foot.
     pub fn centre(&self) -> [f64; 3] {
@@ -2287,6 +2438,8 @@ pub struct Book {
     pub sets: Vec<WaySet>,
     /// Index in `sets`.
     pub current: usize,
+    /// Every set shows for now, its own switch aside (the render-all-sets key; not saved).
+    pub all_sets: bool,
 }
 
 impl Default for Book {
@@ -2295,6 +2448,7 @@ impl Default for Book {
             list: Vec::new(),
             sets: vec![WaySet { name: DEFAULT_SET.into(), shown: true }],
             current: 0,
+            all_sets: false,
         }
     }
 }
@@ -2336,7 +2490,7 @@ impl Book {
     /// A file of this version or the first (whose lines have no set or time); lines that don't
     /// read are skipped.
     pub fn from_text(text: &str) -> Self {
-        let mut book = Book { list: Vec::new(), sets: Vec::new(), current: 0 };
+        let mut book = Book { list: Vec::new(), sets: Vec::new(), current: 0, all_sets: false };
         for l in text.lines() {
             let f: Vec<&str> = l.split('\t').collect();
             if f.first() == Some(&"#set") && f.len() >= 4 {
@@ -2396,7 +2550,28 @@ impl Book {
 
     /// Whether `w` shows: it and its set on.
     pub fn visible(&self, w: &Waypoint) -> bool {
-        w.shown && self.set_index(&w.set).is_none_or(|i| self.sets[i].shown)
+        w.shown && (self.all_sets || self.set_index(&w.set).is_none_or(|i| self.sets[i].shown))
+    }
+
+    /// Waypoints reached at `at` in `dim` (within 4 blocks, flat for 2D ones) that go when
+    /// reached: those marked so, and (`deaths`) death points made at least `age` seconds before
+    /// `now`. Removed; their names.
+    pub fn remove_reached(&mut self, at: [f64; 3], dim: &str, deaths: bool, now: u64, age: u64) -> Vec<String> {
+        let mut gone = Vec::new();
+        self.list.retain(|w| {
+            let goes = (w.vanish || (deaths && w.death && now.saturating_sub(w.created) >= age))
+                && w.dim == dim
+                && {
+                    let c = w.centre();
+                    let dy = if w.two_d { 0.0 } else { at[1] - c[1] };
+                    ((at[0] - c[0]).powi(2) + dy.powi(2) + (at[2] - c[2]).powi(2)).sqrt() <= 4.0
+                };
+            if goes {
+                gone.push(w.name.clone());
+            }
+            !goes
+        });
+        gone
     }
 
     pub fn current_set(&self) -> &str {
@@ -3243,7 +3418,7 @@ mod tests {
         b.click_dir(opacity, true);
         assert_eq!(b.opacity, OPACITY.len() - 1, "back wraps round");
         assert_eq!(d.map_zooms(), (0, MAP_ZOOM_STEPS - 1));
-        assert_eq!(d.info_letters(), vec!['C', 'B', 'F', 'L', 'T', 'D']);
+        assert_eq!(d.info_letters(), vec!['C', 'B', 'F', 'L', 'T', 'D', 'K', 'O', 'A', 'W', 'R']);
         // 2.0's settings: an old flag kept as an index falls back to the default.
         assert_eq!(Settings::read(|k| (k == "cave").then(|| "true".into())).cave, 0);
         let mut z = Settings::default();
@@ -3337,9 +3512,16 @@ mod tests {
         assert!((t[0].2 - 1.0).abs() < 1e-5, "facing south, north is down");
         assert_eq!(facing(180.0), "Facing North (-Z)");
         assert_eq!(facing(-90.0), "Facing East (+X)");
-        assert_eq!(clock(0), "06:00");
-        assert_eq!(clock(18000), "00:00");
-        assert_eq!(clock(6500), "12:30");
+        assert_eq!(game_clock(0, false), "06:00");
+        assert_eq!(game_clock(18000, false), "00:00");
+        assert_eq!(game_clock(6500, false), "12:30");
+        assert_eq!(game_clock(6500, true), "12:30 PM");
+        assert_eq!(game_clock(18000, true), "12:00 AM");
+        assert_eq!(hm(15, 5, true), "3:05 PM");
+        assert_eq!(hm(9, 7, false), "09:07");
+        assert_eq!((wrap_degrees(190.0), wrap_degrees(-90.0)), (-170.0, -90.0));
+        assert_eq!(chunk_line([-1, 64, 33]), "Chunk -1 2 (15 1)");
+        assert_eq!((weather(0.0, 0.0), weather(1.0, 0.0), weather(1.0, 1.0)), ("Clear", "Rain", "Thunder"));
     }
 
     #[test]
@@ -3810,6 +3992,30 @@ mod tests {
     }
 
     #[test]
+    fn waypoints_flat_vanishing_and_reached_deaths() {
+        let mut b = Book::default();
+        let i = b.add([10, 64, 10], OVERWORLD, 0);
+        b.list[i].two_d = true;
+        b.list[i].vanish = true;
+        let back = Book::from_text(&b.to_text());
+        assert!(back.list[0].two_d && back.list[0].vanish);
+        assert_eq!(b.list[i].place_at(OVERWORLD, false, 100.0), Some([10.5, 100.0, 10.5]));
+        b.add_death([0, 64, 0], OVERWORLD, 3, 100);
+        b.add([50, 64, 50], OVERWORLD, 0);
+        // Far above the 2D one: still reached (flat). The new death point is too young.
+        assert_eq!(b.remove_reached([11.0, 120.0, 10.0], OVERWORLD, true, 105, 10), vec!["Waypoint 1".to_owned()]);
+        assert!(b.remove_reached([0.5, 64.0, 0.5], OVERWORLD, true, 105, 10).is_empty());
+        assert!(b.remove_reached([0.5, 64.0, 0.5], OVERWORLD, false, 200, 10).is_empty(), "setting off");
+        assert_eq!(b.remove_reached([0.5, 64.0, 0.5], OVERWORLD, true, 200, 10), vec![DEATH_NAME.to_owned()]);
+        assert_eq!(b.list.len(), 1, "others stay");
+        // Render all sets shows a hidden set's waypoints for now.
+        b.sets[0].shown = false;
+        assert!(!b.visible(&b.list[0]));
+        b.all_sets = true;
+        assert!(b.visible(&b.list[0]));
+    }
+
+    #[test]
     fn entities_fade_and_mark_by_height() {
         let d = Settings::default();
         assert_eq!(d.depth_look(3.0), Some((255, None)));
@@ -3829,6 +4035,26 @@ mod tests {
         let q = line_quad([0.0, 0.0], [10.0, 0.0], 2.0);
         assert_eq!(q, [[0.0, 1.0], [10.0, 1.0], [10.0, -1.0], [0.0, -1.0]]);
         assert_eq!(LIGHT_MAXES[Settings::default().light_max], 7);
+    }
+
+    #[test]
+    fn the_region_cache_keeps_what_is_near_and_unsaved() {
+        let near = regions_near(&[(0.0, 0.0), (5000.0, -10.0)], 1);
+        assert_eq!(near.len(), 18);
+        assert!(near.contains(&(-1, -1)) && near.contains(&(10, 0)) && !near.contains(&(5, 0)));
+        let mut s = Store::default();
+        s.put((0, 0), tile(1, 64, 1));
+        s.put((100, 0), tile(1, 64, 1));
+        s.put((200, 0), tile(1, 64, 1));
+        s.dirty.clear();
+        s.put((200, 1), tile(2, 64, 1)); // region (6, 0) changed since saved
+        let epoch = s.epoch;
+        assert!(s.let_go(|r| near.contains(&r)));
+        assert!(s.tiles.contains_key(&(0, 0)), "near: kept");
+        assert!(!s.tiles.contains_key(&(100, 0)), "far and saved: let go");
+        assert!(s.tiles.contains_key(&(200, 0)), "far but not saved yet: kept");
+        assert!(s.epoch > epoch);
+        assert!(!s.let_go(|r| near.contains(&r)));
     }
 
     #[test]
@@ -3988,5 +4214,6 @@ mod tests {
         assert_eq!(cave_view(&manual, 70, false, None), Some(CaveView::Slice { start: -10, depth: 8, above: 4 }));
         assert_eq!(cave_view(&Settings { cave_start: None, ..manual }, 70, false, None), Some(CaveView::Slice { start: 70, depth: 8, above: 4 }));
         assert_eq!(cave_view(&Settings { cave: 2, ..d }, 20, true, Some(127)), None);
+        assert_eq!(cave_view(&Settings { fair_play: true, cave: 1, ..d }, 20, true, None), None, "fair play: no caves");
     }
 }

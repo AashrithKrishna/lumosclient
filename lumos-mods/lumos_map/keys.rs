@@ -24,6 +24,9 @@ pub(super) const ENLARGE: &str = "enlarge";
 pub(super) const GRID: &str = "grid";
 pub(super) const SLIME: &str = "slime";
 pub(super) const LIGHT: &str = "light_overlay";
+/// The next waypoint set becomes current; every set shown for now (or not).
+pub(super) const NEXT_SET: &str = "next_set";
+pub(super) const ALL_SETS: &str = "all_sets";
 /// Entities on the minimap on and off.
 pub(super) const RADAR: &str = "radar";
 /// Shows or hides the minimap.
@@ -36,7 +39,7 @@ pub(super) const WAYPOINT_LIST: &str = "waypoint_list";
 pub(super) const SETTINGS: &str = "settings";
 
 /// Each key: its name, its label on the page, and its default (`key.keyboard.g`).
-const KEYS: [[&str; 3]; 15] = [
+const KEYS: [[&str; 3]; 17] = [
     [MAP, "World Map", "key.keyboard.m"],
     [WAYPOINT, "Add Waypoint", "key.keyboard.b"],
     [ZOOM_IN, "Minimap Zoom In", "key.keyboard.equal"],
@@ -45,6 +48,8 @@ const KEYS: [[&str; 3]; 15] = [
     [CAVE_HERE, "Cave Start Y Here", "key.keyboard.unknown"],
     [MINIMAP, "Show/Hide Minimap", "key.keyboard.h"],
     [ENLARGE, "Enlarge Minimap", "key.keyboard.z"],
+    [NEXT_SET, "Next Waypoint Set", "key.keyboard.unknown"],
+    [ALL_SETS, "Show All Waypoint Sets", "key.keyboard.unknown"],
     [RADAR, "Show/Hide Entities", "key.keyboard.unknown"],
     [GRID, "Minimap Chunk Grid", "key.keyboard.unknown"],
     [SLIME, "Minimap Slime Chunks", "key.keyboard.unknown"],
