@@ -258,24 +258,24 @@ Y in Manual.
 | Rotating square map | Square map turns with the player | on | MR-MM | Have | `rotate`, default on |
 | Circle shape | Round map | square | MR-MM, HP | Have | `round` |
 | Lock north | North fixed up, an arrow shows your facing | off | MR-MM, HP | Have | `rotate` off |
-| Sizes | Several sizes plus "auto" | auto | MR-MM | Partial | 64..224 GUI px, no auto (scale with GUI/screen) |
+| Sizes | Several sizes plus "auto" | auto | MR-MM | Have | 64..224 GUI px, or `auto_size` (about a quarter of the GUI's short side, so it follows the GUI scale); off by default |
 | Zoom levels | Several; I/O keys | 1x (CL-MM 21.0.0) | MR-MM | Have | 9 steps 0.25..4 blocks/px, = and - |
 | Position | Anywhere, 1-pixel precision, "Change Position" screen | top-left | MR-MM | Partial | 4 corners, offsets 0..64 in 7 steps; no drag-to-place |
 | Block colours: Accurate | Texture and biome colours | Accurate | MR-MM, HP | Have | `textured` |
 | Block colours: Vanilla | Map colour palette | - | MR-MM | Have | `textured` off |
-| Biomes in Vanilla mode | Biome tint on the palette | off | MR-MM, HP | Missing | |
-| Terrain depth | Darker the lower the ground relative to you | on | MR-MM, HP | Missing | Lumos shades by slope only |
+| Biomes in Vanilla mode | Biome tint on the palette | off | MR-MM, HP | Have | `palette_biomes`: grass, leaves and water take the column's biome hue at the palette colour's brightness |
+| Terrain depth | Darker the lower the ground relative to you | on | MR-MM, HP | Have | `depth_shade`, minimap only, off by default (keeps 3.1's look); up to 40% darker 48 blocks below you, your height in 4-block steps |
 | Terrain slopes | 3D, flat or overhead shading | 3D | HP | Partial | shading on/off only |
 | Biome blending | On, can be turned off for speed | on | CL-MM 23.4.4 | Partial | always on, no toggle |
-| Lighting | Map darkens at night / by light | on | HP | Missing | |
+| Lighting | Map darkens at night / by light | on | HP | Partial | `night`: the minimap's Overworld surface times the sky's brightness (time, rain, thunder); off by default; no block light |
 | Show flowers | Flowers in their own colours | - | HP | Partial | flowers get their texture average; no toggle |
-| Stained glass / transparency | Glass tinted, blocks seen through | - | HP | Missing | glass has a map colour so it hides the floor |
+| Stained glass / transparency | Glass tinted, blocks seen through | - | HP | Have | `glass`: stained glass and panes are passed and tint the ground under them (plain glass has no map colour, so it never hid it); loaded chunks are mapped again on a switch, saved ones keep how they were mapped |
 | Short blocks | Slabs/stairs nudged so they don't look like walls | - | HP | Missing | |
 | Show redstone | Redstone visible | - | HP | Missing | see 1.4 D |
 | Anti-aliasing | Smoother block edges | off | HP | Blocked | nearest-only sampling |
 | Opacity | Map see-through | 100% | HP | Have | 5 steps |
 | Undiscovered opacity | How dark unknown areas are | 50% | CL-MM 26.2.0 | Have | `BACKGROUNDS` incl. see-through |
-| Frame style / colour | Choose frame and its colour | - | HP; CL-MM 22.2.0 | Partial | 3 styles, no colour |
+| Frame style / colour | Choose frame and its colour | - | HP; CL-MM 22.2.0 | Have | 3 styles, 8 rim colours (`frame_colour`, "Dark" as before) |
 | Compass letters | N/E/S/W round the rim, colours | on | HP | Have | off / N only / all; no colour choice |
 | Player arrow | Your arrow in the middle, colour | - | HP | Have | |
 | Enlarge (Z) | Hold to enlarge; centred, zoom when enlarged, toggle option, keep rotation | Z held | MR-MM, HP, CL-MM 22.13.0/22.17.0 | Missing | |
@@ -687,7 +687,7 @@ tests. Not yet run in the game (see the checklist in the branch's report).
 | WP10 | "Server maps: Single", viewed-dimension button (saved map, read only) | Manual-confirm mode (needs a prompt flow); viewed dimension reads its folder whole |
 | WP11 | Region cache (2/4/8 regions round you and the view), update/new chunk switches, blend switch | Cave bands are not cached by region yet; zoomed far out, the view shows at most twice the cache radius |
 | WP12 | Fair-play switch | Server opt-out code and hiding the server address |
-| WP13 | Settings screen's third column when two don't fit | Terrain depth, night lighting, palette biomes, glass, frame colour, drag to place, auto size |
+| WP13 | Settings screen's third column when two don't fit; terrain depth, night lighting, palette biomes, stained glass seen through, frame colour, auto size (each off or as before by default) | Drag to place: the minimap sits in a `Corners` slot shared with other HUD mods (corner and offsets), and a free position would need a new setting kind and a minimap preview on the settings screen (the HUD minimap isn't drawn under the mod screen). Night lighting has no block light. Auto size is off by default (it matches the old size only at a 640x360 GUI). Checked with `cargo check` and the runtime tests, not yet in the game |
 
 ### Not doable on 9f42064c
 

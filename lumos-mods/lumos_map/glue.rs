@@ -42,6 +42,9 @@ const SAVE_EVERY: Duration = Duration::from_secs(30);
 const CELL_BUDGET: Duration = Duration::from_micros(800);
 const CELL_BUDGET_OPEN: Duration = Duration::from_micros(3000);
 
+/// The longest the "New waypoint" box ignores typing while the key that opened it is held.
+const SWALLOW_MAX: Duration = Duration::from_secs(1);
+
 /// The map screen's bars, in GUI pixels.
 const TOP: f32 = 22.0;
 const BOTTOM: f32 = 14.0;
@@ -52,6 +55,8 @@ const AIR: u8 = 4;
 /// Makes a roof for the cave view: not air or a fluid, has a map colour, and the map doesn't
 /// see through it (leaves, glass, panes and bars let the sky down).
 const ROOF: u8 = 8;
+/// Stained glass (blocks and panes): seen through when the glass setting is on.
+const GLASS: u8 = 16;
 /// How often the roof over the player is tested.
 const ROOF_EVERY: Duration = Duration::from_millis(200);
 
@@ -62,6 +67,8 @@ struct Palette {
     look: Vec<m::BlockColour>,
     /// Biome colours blended across borders (the setting, kept here for the scans).
     blend: bool,
+    /// Stained glass seen through (the setting, kept here for the scans).
+    glass: bool,
 }
 
 impl Palette {
@@ -81,9 +88,13 @@ impl Palette {
             } else if b == 0 && f.map_color != 0 && !f.skylight_down && !f.has_class("LeavesBlock") {
                 b |= ROOF;
             }
+            let name = f.name.strip_prefix("minecraft:").unwrap_or(&f.name);
+            if f.map_color != 0 && (name.ends_with("stained_glass") || name.ends_with("stained_glass_pane")) {
+                b |= GLASS;
+            }
             flags.push(b);
         }
-        Self { color, flags, look, blend: true }
+        Self { color, flags, look, blend: true, glass: false }
     }
 
     #[inline]
@@ -169,6 +180,8 @@ struct Hit {
     depth: u8,
     /// Under water: the first block with a colour below it.
     ground: Option<(u32, u8)>,
+    /// Seen through: the stained glass over it.
+    glass: Option<(u32, u8)>,
     /// `m::FLOOR`, `m::WALL` or `m::DEEP`.
     kind: u8,
     found: bool,
@@ -296,6 +309,9 @@ fn scan(
                 hits[(z * 16 + x) as usize] = Hit { color: m::BLACK, y: lowest, kind: m::DEEP, found: true, ..Hit::default() };
                 continue;
             }
+            // Stained glass passed through (the setting): the first pane over the ground, and
+            // the glass itself should nothing be under it.
+            let mut glass: Option<Hit> = None;
             while y >= lowest {
                 let id = chunk.get(x, y, z);
                 let (color, flags) = palette.get(id);
@@ -304,7 +320,12 @@ fn scan(
                     continue;
                 }
                 let kind = if wall { m::WALL } else { m::FLOOR };
-                let mut hit = Hit { id, color, y, kind, found: true, ..Hit::default() };
+                if palette.glass && flags & GLASS != 0 && !wall {
+                    glass.get_or_insert(Hit { id, color, y, kind, found: true, ..Hit::default() });
+                    y -= 1;
+                    continue;
+                }
+                let mut hit = Hit { id, color, y, kind, found: true, glass: glass.map(|g| (g.id, g.color)), ..Hit::default() };
                 if flags & FLUID == 1 {
                     let mut below = y - 1;
                     while below > min {
@@ -320,7 +341,11 @@ fn scan(
                     }
                 }
                 hits[(z * 16 + x) as usize] = hit;
+                glass = None;
                 break;
+            }
+            if let Some(g) = glass {
+                hits[(z * 16 + x) as usize] = g;
             }
             if deep && !hits[(z * 16 + x) as usize].found {
                 hits[(z * 16 + x) as usize] = Hit { color: m::BLACK, y: lowest, kind: m::DEEP, found: true, ..Hit::default() };
@@ -370,6 +395,11 @@ fn scan(
             {
                 let ground = colour(gid, &t).unwrap_or_else(|| map_rgb(gc));
                 rgb = m::water_over(ground, rgb, h.depth).max(1);
+            }
+            if let Some((gid, gc)) = h.glass {
+                let base = if rgb != 0 { rgb } else { map_rgb(h.color) };
+                let tint = colour(gid, &t).unwrap_or_else(|| map_rgb(gc));
+                rgb = m::glass_over(base, tint).max(1);
             }
             if h.kind == m::WALL {
                 // Walls cut at the layer: darker, so the floor stands out.
@@ -624,7 +654,6 @@ fn write_regions(store: &mut m::Store, dir: &Path) {
 
 /// Tiles of one layer (under the player's head, or the world map's slice), scanned live from the
 /// loaded chunks; a cave slice's are also kept in its band's saved layer.
-#[derive(Default)]
 struct Layer {
     /// What it was scanned as (None: nothing yet).
     mode: Option<Scan>,
@@ -633,11 +662,27 @@ struct Layer {
     revision: u64,
     /// Chunks scanned since the maps last looked, and a count that goes up when it starts over.
     changed: Vec<(i32, i32)>,
+    /// From `m::fresh_epoch`: no two layers ever share one, so a layer made after another (the
+    /// cave view off and on again) never shows the old one's cells as its own.
     epoch: u64,
     /// When the chunks around the player were last queued again for changed blocks: at most
     /// once every `NEAR_RESCAN`, as the surface map does (any block change anywhere bumps
     /// `world.revision`, so near water, crops or redstone it would be every frame).
     near_at: Option<Instant>,
+}
+
+impl Default for Layer {
+    fn default() -> Self {
+        Self {
+            mode: None,
+            tiles: HashMap::new(),
+            queue: VecDeque::new(),
+            revision: 0,
+            changed: Vec::new(),
+            epoch: m::fresh_epoch(),
+            near_at: None,
+        }
+    }
 }
 
 impl Layer {
@@ -739,9 +784,13 @@ struct State {
     /// The map closed on the next frame (the "New waypoint" box opened with the key is done),
     /// with what to say on the action bar: the waypoint made, and its colour.
     pending_close: Option<Option<(String, u32)>>,
-    /// The character of the key that just opened the "New waypoint" box, and when: the game
-    /// hands it to the screen the key opened, and it mustn't land in the name box.
-    swallow: Option<(char, Instant)>,
+    /// The key that just opened the "New waypoint" box (its name, as `native_key` gave it), and
+    /// when: the text the game hands the screen for that press, whatever character the layout
+    /// makes of it, mustn't land in the name box. Kept until the key is let go.
+    swallow: Option<(String, Instant)>,
+    /// The minimap's terrain depth: the height (in steps) the surface darkens below; None when
+    /// it is off or the world map is open.
+    depth_from: Option<i32>,
 }
 
 thread_local! {
@@ -962,7 +1011,9 @@ fn follow_colours(game: &Game<'_>, s: &mut State) {
         && let Ok((v, table)) = rx.try_recv()
     {
         s.colours = None;
-        s.palette = Some(Palette::new(game, table));
+        // The glass setting carries over (the chunks are mapped again below anyway).
+        let glass = s.palette.as_ref().is_some_and(|p| p.glass);
+        s.palette = Some(Palette { glass, ..Palette::new(game, table) });
         s.colours_version = Some(v);
         s.tints.clear();
         s.cells_gen += 1;
@@ -1221,17 +1272,22 @@ fn follow_layer(
     budget: Duration,
 ) {
     let started = Instant::now();
-    let State { cave, slice: sliced, palette, tints, explored, .. } = s;
+    let State { cave, slice: sliced, palette, tints, explored, cells, .. } = s;
     let Some(palette) = palette.as_ref() else {
         return;
     };
-    let layer = if slice { sliced } else { cave }.get_or_insert_with(Layer::default);
+    let held = if slice { sliced } else { cave };
+    if held.is_none() {
+        // A new layer: the cells of the last one (the cave view before it went off) go.
+        cells.forget(if slice { 2 } else { 1 });
+    }
+    let layer = held.get_or_insert_with(Layer::default);
     let world = &game.world;
     // Another slice (a new height by more than a step) or changed blocks: scanned again,
     // nearest first.
     if layer.mode.is_none_or(|m| !m.same(mode)) || layer.tiles.is_empty() {
         if !layer.tiles.is_empty() || layer.mode != Some(mode) {
-            layer.epoch += 1;
+            layer.epoch = m::fresh_epoch();
         }
         layer.mode = Some(mode);
         layer.queue.clear();
@@ -1302,6 +1358,10 @@ fn look(settings: &m::Settings) -> m::Look {
         textured: settings.textured,
         shading: settings.shading,
         legible: settings.cave_legible,
+        biomes: settings.palette_biomes,
+        // The minimap's terrain depth is per frame (`State::depth_from`), not part of the look
+        // that clears every cell.
+        depth_from: None,
     }
 }
 
@@ -1398,12 +1458,9 @@ fn mini_bpp(settings: &m::Settings, cave: bool) -> f32 {
 
 /// The minimap's side in GUI pixels: its size, or most of the screen while enlarged.
 fn mini_size(game: &Game<'_>, settings: &m::Settings, big: bool) -> f32 {
-    if big {
-        let (w, h) = game.gui_size();
-        (w.min(h) * 0.8).floor().max(m::SIZES[settings.size])
-    } else {
-        m::SIZES[settings.size]
-    }
+    let (w, h) = game.gui_size();
+    let size = if settings.auto_size { m::auto_size(w, h) } else { m::SIZES[settings.size] };
+    if big { (w.min(h) * 0.8).floor().max(size) } else { size }
 }
 
 /// Underground: the cave layer under the head, kept scanned around the player.
@@ -1554,15 +1611,17 @@ fn draw_overlays(
 /// A source's epoch for its cells: they are drawn again when it changes (a live layer's, with
 /// its band's saved layer under it).
 fn epoch_of(s: &State, source: u8) -> u64 {
-    let layer = |l: &Layer| l.epoch + l.band().and_then(|b| saved(s, Some(b))).map_or(0, |c| c.store.epoch);
+    let layer = |l: &Layer| [l.epoch, l.band().and_then(|b| saved(s, Some(b))).map_or(0, |c| c.store.epoch)];
     let own = match source {
-        0 => s.explored.as_ref().map_or(0, |e| e.store.epoch),
-        1 => s.cave.as_ref().map_or(0, layer),
-        2 => s.slice.as_ref().map_or(0, layer),
-        4 => s.viewed.as_ref().map_or(0, |v| v.store.epoch),
-        _ => saved(s, None).map_or(0, |c| c.store.epoch),
+        // The surface's cells also follow the terrain depth's height.
+        0 => [s.explored.as_ref().map_or(0, |e| e.store.epoch), s.depth_from.map_or(u64::MAX, |y| y as u64)],
+        1 => s.cave.as_ref().map_or([0, 0], layer),
+        2 => s.slice.as_ref().map_or([0, 0], layer),
+        4 => [s.viewed.as_ref().map_or(0, |v| v.store.epoch), 0],
+        _ => [saved(s, None).map_or(0, |c| c.store.epoch), 0],
     };
-    s.cells_gen << 32 | own
+    // Mixed, not added: a layer's epoch and its band's can't add up to another pair's.
+    m::epoch_mix(&[s.cells_gen, own[0], own[1]])
 }
 
 /// Cell upkeep once a frame: cells of changed chunks marked, the cells the maps asked for last
@@ -1606,7 +1665,7 @@ fn draw_wanted_cells(game: &mut Game<'_>, s: &mut State, settings: &m::Settings,
         }
     }
     let todo = s.cells.take_wanted(1024);
-    let look = look(settings);
+    let look = m::Look { depth_from: s.depth_from, ..look(settings) };
     let mut px = [0u8; 1024];
     for key in todo {
         if started.elapsed() >= budget {
@@ -1684,7 +1743,21 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
         follow_colours(game, s);
         if let Some(p) = s.palette.as_mut() {
             p.blend = settings.blend;
+            if p.glass != settings.glass {
+                p.glass = settings.glass;
+                // Every loaded chunk mapped again, with or without its glass.
+                if let Some(e) = s.explored.as_mut() {
+                    e.seen.clear();
+                    e.queue.clear();
+                    e.refilled = None;
+                }
+                s.cave = None;
+                s.slice = None;
+            }
         }
+        s.depth_from = (settings.depth_shade && settings.minimap && !open)
+            .then(|| player_pos(game).map(|p| m::depth_step(p[1])))
+            .flatten();
         follow_world(game, s);
         follow_spawn(game, s);
         explore(game, s, if open { BUDGET_OPEN } else { BUDGET });
@@ -1766,6 +1839,7 @@ fn draw_cells(
     to_screen: &dyn Fn(f64, f64) -> [f32; 2],
     shape: &m::Shape,
     alpha: u8,
+    bright: f32,
 ) {
     let clip = shape.polygon();
     let Some(r) = game.gui.atlas.sprites.get(MOD_IMAGE_SPRITE).copied() else {
@@ -1775,7 +1849,9 @@ fn draw_cells(
     let span = f64::from(16i32 << lod);
     let cell = |v: f64| (v / span).floor() as i32;
     let epoch = epoch_of(s, source);
-    let colour = rgba(255, 255, 255, alpha);
+    // Night (the minimap's setting): the cells' colours times the sky's brightness.
+    let v = (255.0 * bright.clamp(0.0, 1.0)).round() as u8;
+    let colour = rgba(v, v, v, alpha);
     // A hair inside each cell, so nearest sampling never reads the next one.
     let eps = 0.01;
     for cz in cell(area[1])..=cell(area[3]) {
@@ -1816,7 +1892,16 @@ fn fill_polygon(game: &Game<'_>, batch: &mut HudBatch, poly: &[[f32; 2]], argb: 
 /// `native_key`: M opens (or closes) the world map, B opens the "New waypoint" box (or, with
 /// "B adds instantly", adds one where you stand).
 pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
-    if !pressed || !game.native_on(m::ID) || game.player.is_none() {
+    if !pressed {
+        // The key that opened the "New waypoint" box let go: what is typed now is the name.
+        with(|s| {
+            if s.swallow.as_ref().is_some_and(|(k, _)| k == key) {
+                s.swallow = None;
+            }
+        });
+        return;
+    }
+    if !game.native_on(m::ID) || game.player.is_none() {
         return;
     }
     if map_open(game) {
@@ -1878,10 +1963,6 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
                 return;
             };
             if game.native_mod_screen_open(m::ID) {
-                let typed = key.strip_prefix("key.keyboard.").and_then(|k| {
-                    let mut c = k.chars();
-                    c.next().filter(|_| c.next().is_none())
-                });
                 with(|s| {
                     s.screen.view.x = p[0];
                     s.screen.view.z = p[2];
@@ -1889,7 +1970,7 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
                     s.screen.menu = None;
                     s.screen.searching = false;
                     s.screen.page = m::Page::new_waypoint(wp, true);
-                    s.swallow = typed.map(|c| (c, Instant::now()));
+                    s.swallow = Some((key.to_owned(), Instant::now()));
                 });
             }
             return;
@@ -2478,21 +2559,29 @@ fn draw_minimap_terrain(
     with(|st| {
         let source = if st.cave.is_some() && st.cave_view.is_some() { 1 } else { 0 };
         let shape = if round { m::Shape::Circle(c, half) } else { m::Shape::Rect([c[0] - half, c[1] - half, size, size]) };
-        draw_cells(game, st, batch, source, lod, area, &to_screen, &shape, alpha);
+        // At night the surface darkens as the sky does (caves keep their own light).
+        let bright = if settings.night && source == 0 && game.dim.id() == "minecraft:overworld" {
+            let w = &game.world.weather;
+            m::sky_brightness(game.world.day_time, w.rain_level.1, w.thunder_level.1)
+        } else {
+            1.0
+        };
+        draw_cells(game, st, batch, source, lod, area, &to_screen, &shape, alpha, bright);
         draw_overlays(game, batch, st, settings, area, &to_screen, &shape);
     });
-    // The frame: a dark rim with a faint light edge inside it.
+    // The frame: a dark rim (or the frame colour) with a faint light edge inside it.
+    let rim = m::FRAME_COLOURS[settings.frame_colour.min(m::FRAME_COLOURS.len() - 1)].1;
     if settings.frame == 2 {
     } else if round {
         for q in m::ring(c, half - 0.5, half + 1.0) {
-            game.native_quad(batch, q, shade(0xFF) | 0x00_0C0C_0E);
+            game.native_quad(batch, q, shade(0xFF) | rim);
         }
         for q in m::ring(c, half - 1.5, half - 0.5) {
             game.native_quad(batch, q, shade(0x28) | 0x00FF_FFFF);
         }
     } else {
         let (x, y) = (c[0] - half, c[1] - half);
-        let dark = shade(0xFF) | 0x00_0C0C_0E;
+        let dark = shade(0xFF) | rim;
         game.native_fill(batch, [x - 1.0, y - 1.0, size + 2.0, 1.0], dark);
         game.native_fill(batch, [x - 1.0, y + size, size + 2.0, 1.0], dark);
         game.native_fill(batch, [x - 1.0, y, 1.0, size], dark);
@@ -3053,7 +3142,7 @@ fn draw_map(game: &Game<'_>, batch: &mut HudBatch, s: &mut State, settings: &m::
         });
         let source = map_source(game, s);
         let to_screen = |x: f64, z: f64| view.screen_of(rect, x, z);
-        draw_cells(game, s, batch, source, lod, [x0, z0, x1, z1], &to_screen, &m::Shape::Rect(rect), 255);
+        draw_cells(game, s, batch, source, lod, [x0, z0, x1, z1], &to_screen, &m::Shape::Rect(rect), 255, 1.0);
     }
     // Explored ground outside the chunks loaded now, dimmed (the surface view only).
     if settings.map_shade && map_source(game, s) == 0
@@ -3954,12 +4043,14 @@ fn waypoint_at(s: &State, dim: &str, convert: bool, rect: [f32; 4], mouse: [f32;
 }
 
 /// The block to stand on at GUI point `mouse` of the world map: over the floor the map shows
-/// there, else at `fallback_y`.
+/// there; over unexplored ground, a block over the highest floor known near it; with nothing
+/// known near, at `fallback_y` (your own Y).
 fn spot_at(game: &Game<'_>, s: &State, rect: [f32; 4], mouse: [f32; 2], fallback_y: i32) -> [i32; 3] {
     let (x, z) = s.screen.view.world_at(rect, mouse);
     let (x, z) = (x.floor() as i32, z.floor() as i32);
-    let column = map_column(s, map_source(game, s), x, z).filter(|c| c.kind == m::FLOOR);
-    [x, column.map_or(fallback_y, |c| i32::from(c.height) + 1), z]
+    let source = map_source(game, s);
+    let floor = |x: i32, z: i32| map_column(s, source, x, z).filter(|c| c.kind == m::FLOOR).map(|c| i32::from(c.height));
+    [x, m::spot_y(floor, x, z, fallback_y), z]
 }
 
 /// The right-click menu's rows now.
@@ -4146,13 +4237,15 @@ pub(super) fn on_char(game: &Game<'_>, screen: &NativeScreenView<'_>, c: char, c
         return;
     }
     with(|s| {
-        // The add-waypoint key's own character, handed to the box it just opened.
-        if let Some((k, at)) = s.swallow.take()
-            && at.elapsed() < Duration::from_millis(250)
-            && c.to_lowercase().eq(k.to_lowercase())
-        {
-            *canceled = true;
-            return;
+        // The text of the add-waypoint key's press, handed to the box it just opened: whatever
+        // arrives while that key is still held (any layout's character for it, and its repeats),
+        // for at most a second in case its release never came.
+        if let Some((_, at)) = &s.swallow {
+            if at.elapsed() < SWALLOW_MAX {
+                *canceled = true;
+                return;
+            }
+            s.swallow = None;
         }
         let searching = s.screen.searching && matches!(s.screen.page, m::Page::List { .. });
         match &mut s.screen.page {

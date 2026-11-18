@@ -44,6 +44,17 @@ pub const ENLARGE_ZOOMS: [&str; 3] = ["Same", "Out x2", "Out x4"];
 pub const LIGHT_MAXES: [usize; 4] = [0, 3, 7, 11];
 pub const OPACITY: [u8; 5] = [255, 217, 178, 140, 102];
 pub const FRAMES: [&str; 3] = ["Rim and shadow", "Thin rim", "None"];
+/// The frame's rim colour: name and 0xRRGGBB ("Dark" is the rim it always had).
+pub const FRAME_COLOURS: [(&str, u32); 8] = [
+    ("Dark", 0x0C_0C0E),
+    ("Black", 0x00_0000),
+    ("Grey", 0x80_8088),
+    ("White", 0xF0_F0F0),
+    ("Gold", 0xC8_A040),
+    ("Red", 0xB0_3030),
+    ("Green", 0x40_9040),
+    ("Blue", 0x40_60C0),
+];
 /// The minimap's unexplored ground: name and 0xAARRGGBB.
 pub const BACKGROUNDS: [(&str, u32); 4] = [
     ("Dark", 0xFF1A_1C20),
@@ -149,6 +160,18 @@ pub struct Settings {
     pub background: usize,
     /// Index in `COMPASS`.
     pub compass: usize,
+    /// Index in `FRAME_COLOURS`.
+    pub frame_colour: usize,
+    /// The minimap's size follows the GUI scale (`auto_size`), instead of `size`.
+    pub auto_size: bool,
+    /// The minimap's ground darker the lower it is below you.
+    pub depth_shade: bool,
+    /// The minimap's surface darker at night (and in rain), as the sky is.
+    pub night: bool,
+    /// The map palette's grass, leaves and water in their biome's colours.
+    pub palette_biomes: bool,
+    /// Stained glass seen through: the ground under it, tinted (chunks are mapped again).
+    pub glass: bool,
     /// The chunk grid on the minimap.
     pub mini_grid: bool,
     /// Slime chunks on the minimap (where the seed is known).
@@ -327,6 +350,12 @@ impl Default for Settings {
             frame: 0,
             background: 0,
             compass: 2,
+            frame_colour: 0,
+            auto_size: false,
+            depth_shade: false,
+            night: false,
+            palette_biomes: false,
+            glass: false,
             mini_grid: false,
             mini_slime: false,
             light_overlay: false,
@@ -540,6 +569,12 @@ settings_table! {
     frame: index(FRAMES), 1, "Frame";
     background: index(BACKGROUNDS), 1, "Unexplored ground";
     compass: index(COMPASS), 1, "Compass letters";
+    frame_colour: index(FRAME_COLOURS), 1, "Frame colour";
+    auto_size: flag, 1, "Auto size (by GUI scale)";
+    depth_shade: flag, 1, "Terrain depth (lower is darker)";
+    night: flag, 1, "Darker at night";
+    palette_biomes: flag, 0, "Biome colours in the map palette";
+    glass: flag, 0, "See through stained glass";
     mini_grid: flag, 6, "Chunk grid";
     mini_slime: flag, 6, "Slime chunks";
     light_overlay: flag, 6, "Light overlay (dark floors)";
@@ -1451,11 +1486,70 @@ pub fn water_over(ground: u32, water: u32, depth: u8) -> u32 {
 
 /// How a column is coloured.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default)]
 pub struct Look {
     pub textured: bool,
     pub shading: bool,
     /// Cave floors darken less with depth.
     pub legible: bool,
+    /// The map palette's biome-tinted colours (grass, leaves, water) take the column's tint.
+    pub biomes: bool,
+    /// The surface darkens below this Y (the minimap's terrain depth, from your height).
+    pub depth_from: Option<i32>,
+}
+
+/// Map colours the game tints by biome: grass, plants (leaves) and water.
+pub const BIOME_TINTED: [u8; 3] = [1, 7, WATER];
+
+/// Palette colour `palette` in the hue of `tinted` (the column's own colour, its biome's
+/// tint in it), as bright as the palette colour: palette mode with biome colours.
+pub fn palette_biome(palette: u32, tinted: u32) -> u32 {
+    let lum = |c: u32| 0.299 * ((c >> 16) & 255) as f32 + 0.587 * ((c >> 8) & 255) as f32 + 0.114 * (c & 255) as f32;
+    let (want, have) = (lum(palette), lum(tinted));
+    if have < 1.0 {
+        return palette;
+    }
+    let k = want / have;
+    let ch = |s: u32| ((((tinted >> s) & 255) as f32 * k).round().clamp(0.0, 255.0) as u32) << s;
+    ch(16) | ch(8) | ch(0)
+}
+
+/// How much the surface `below` blocks under you darkens (terrain depth): not at all at or over
+/// your height, down to 0.6 at 48 blocks below.
+pub fn surface_depth_factor(below: i32) -> f32 {
+    1.0 - (below.clamp(0, 48) as f32 / 48.0) * 0.4
+}
+
+/// The terrain depth's reference height for feet at `y`: in steps of 4 blocks, so the minimap
+/// is drawn again only when you have climbed or dropped a few blocks.
+pub fn depth_step(y: f64) -> i32 {
+    (y.floor() as i32).div_euclid(4) * 4
+}
+
+/// How bright the sky is (1 at day, about 0.4 at midnight, less in rain and thunder): the
+/// game's own sky darkening at `day_time`, as a factor for the minimap's surface at night.
+pub fn sky_brightness(day_time: i64, rain: f32, thunder: f32) -> f32 {
+    let t = (day_time.rem_euclid(24000) as f64) / 24000.0;
+    let f = (t - 0.25).rem_euclid(1.0);
+    let g = 0.5 - (f * std::f64::consts::PI).cos() / 2.0;
+    let angle = (f * 2.0 + g) / 3.0;
+    let mut light = (1.0 - ((angle * std::f64::consts::TAU).cos() * 2.0 + 0.5)).clamp(0.0, 1.0);
+    light = 1.0 - light;
+    light *= 1.0 - f64::from(rain.clamp(0.0, 1.0)) * 5.0 / 16.0;
+    light *= 1.0 - f64::from(thunder.clamp(0.0, 1.0)) * 5.0 / 16.0;
+    // The game darkens the sky light by up to 11 of 15 levels; the map keeps some colour.
+    (0.4 + 0.6 * light) as f32
+}
+
+/// The minimap's auto size for a GUI `w` x `h` (pixels after the GUI scale): about a quarter
+/// of the short side, in steps of 8, within the sizes the setting offers.
+pub fn auto_size(w: f32, h: f32) -> f32 {
+    ((w.min(h) * 0.27 / 8.0).round() * 8.0).clamp(SIZES[0], SIZES[SIZES.len() - 1])
+}
+
+/// The ground under stained glass, seen through it: tinted by the glass's colour.
+pub fn glass_over(ground: u32, glass: u32) -> u32 {
+    lerp_rgb(ground, glass, 0.35)
 }
 
 /// A column's colour as the maps show it: its own colour (or its map colour), lit where the
@@ -1476,7 +1570,8 @@ pub fn shade(
     let base = if own {
         c.rgb
     } else {
-        palette.get(usize::from(c.color)).copied().unwrap_or(0)
+        let flat = palette.get(usize::from(c.color)).copied().unwrap_or(0);
+        if look.biomes && c.rgb != 0 && BIOME_TINTED.contains(&c.color) { palette_biome(flat, c.rgb) } else { flat }
     };
     let water = c.color == WATER || c.depth > 0;
     let factor = if water {
@@ -1532,12 +1627,22 @@ fn shaded(
         }
         return Some(rgba);
     }
-    if !look.shading || c.color == WATER || c.depth > 0 {
-        return Some(shade(palette, look, c, None, None));
+    let mut rgba = if !look.shading || c.color == WATER || c.depth > 0 {
+        shade(palette, look, c, None, None)
+    } else {
+        let n = column(x, z - 1).map(|c| c.height);
+        let w = column(x - 1, z).map(|c| c.height);
+        shade(palette, look, c, n, w)
+    };
+    if let Some(from) = look.depth_from
+        && c.kind != DEEP
+    {
+        let k = surface_depth_factor(from - i32::from(c.height));
+        for ch in &mut rgba[..3] {
+            *ch = (f32::from(*ch) * k).round() as u8;
+        }
     }
-    let n = column(x, z - 1).map(|c| c.height);
-    let w = column(x - 1, z).map(|c| c.height);
-    Some(shade(palette, look, c, n, w))
+    Some(rgba)
 }
 
 // ---------------------------------------------------------------- the map texture: cells
@@ -1556,6 +1661,29 @@ pub const ICONS_Y: u32 = CELL_ROWS * CELL;
 pub const ICON: u32 = 16;
 pub const ICON_COLS: u32 = 1024 / ICON;
 pub const ICON_SLOTS: usize = (ICON_COLS * ((1024 - ICONS_Y) / ICON)) as usize;
+
+/// A new epoch for a live layer, from one counter for the whole game: a layer made after
+/// another (the cave view turned off and on, another slice) never starts at an epoch an old one
+/// had, so the cells cached from the old layer are never taken for the new one's.
+pub fn fresh_epoch() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The epoch a cell is checked against, from all the counts it depends on (mixed so that
+/// different counts never add up to the same epoch).
+pub fn epoch_mix(parts: &[u64]) -> u64 {
+    let mut h: u64 = 0x9E37_79B9_7F4A_7C15;
+    for &p in parts {
+        // splitmix64 over each part in turn.
+        let mut z = h ^ p.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        h = z ^ (z >> 31);
+    }
+    h
+}
 
 /// What a cell shows: the explored surface (0), the cave layer (1) or the world map's slice (2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1695,6 +1823,17 @@ impl CellCache {
                 mark(x, z + 1);
             }
         }
+    }
+
+    /// Every cell of `source` forgotten: a new layer took its place, and the old one's cells
+    /// must not show (not even until they are redrawn, as a stale cell of the same layer does).
+    pub fn forget(&mut self, source: u8) {
+        for slot in &mut self.slots {
+            if slot.is_some_and(|s| s.key.source == source) {
+                *slot = None;
+            }
+        }
+        self.index.retain(|k, _| k.source != source);
     }
 
     /// Everything forgotten (the slot was rebuilt).
@@ -3300,6 +3439,28 @@ pub fn menu_rects(at: [f32; 2], rows: usize, w: f32, h: f32) -> Vec<[f32; 4]> {
     (0..rows).map(|i| [x, y + i as f32 * rh, rw, rh]).collect()
 }
 
+/// How far round a spot the map isn't known at (blocks) a known floor gives its height.
+pub const SPOT_NEAR: i32 = 16;
+
+/// The Y to stand at on block `x, z` of the map: on the floor known there (`floor` gives a
+/// column's floor height); else a block over the highest floor known within `SPOT_NEAR`
+/// blocks (unexplored ground beside a mountain or over a valley: not into the hill, and a fall
+/// at worst); else `fallback` (nothing known near: where you are).
+pub fn spot_y(floor: impl Fn(i32, i32) -> Option<i32>, x: i32, z: i32, fallback: i32) -> i32 {
+    if let Some(h) = floor(x, z) {
+        return h + 1;
+    }
+    let mut best: Option<i32> = None;
+    for dz in -SPOT_NEAR..=SPOT_NEAR {
+        for dx in -SPOT_NEAR..=SPOT_NEAR {
+            if let Some(h) = floor(x + dx, z + dz) {
+                best = Some(best.map_or(h, |b| b.max(h)));
+            }
+        }
+    }
+    best.map_or(fallback, |h| h + 1)
+}
+
 /// The teleport command to block `b`: onto its top, in its middle.
 pub fn tp_command(b: [i32; 3]) -> String {
     format!("tp @s {} {} {}", f64::from(b[0]) + 0.5, b[1], f64::from(b[2]) + 0.5)
@@ -3602,13 +3763,13 @@ mod tests {
     #[test]
     fn shading_lights_rises_and_darkens_water() {
         let palette = [0, 0x808080, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x4040FF];
-        let look = Look { textured: true, shading: true, legible: true };
+        let look = Look { textured: true, shading: true, legible: true, ..Look::default() };
         let col = |h: i16, rgb: u32| Col { color: 1, rgb, height: h, depth: 0, kind: FLOOR };
         assert_eq!(shade(&palette, look, col(64, 0), Some(64), Some(64)), [128, 128, 128, 255]);
         assert!(shade(&palette, look, col(66, 0), Some(64), Some(64))[0] > 128);
         assert!(shade(&palette, look, col(62, 0), Some(64), Some(64))[0] < 128);
         assert_eq!(shade(&palette, look, col(64, 0x00FF00), None, None), [0, 255, 0, 255]);
-        let flat = Look { textured: false, shading: false, legible: true };
+        let flat = Look { textured: false, shading: false, legible: true, ..Look::default() };
         assert_eq!(shade(&palette, flat, col(70, 0x00FF00), Some(10), None), [128, 128, 128, 255]);
         let water = |d: u8| Col { color: WATER, rgb: 0, height: 60, depth: d, kind: FLOOR };
         assert!(shade(&palette, look, water(10), None, None)[2] < shade(&palette, look, water(1), None, None)[2]);
@@ -3653,7 +3814,7 @@ mod tests {
         let palette = [0u32, 0xFF0000];
         let mut s = Store::default();
         s.put((0, 0), tile(1, 64, 0));
-        let look = Look { textured: true, shading: true, legible: true };
+        let look = Look { textured: true, shading: true, legible: true, ..Look::default() };
         let view = MapView { x: 0.0, z: 0.0, zoom: MAP_ZOOM_ONE };
         let mut out = Vec::new();
         compose(|x, z| s.column(x, z), &palette, look, &view, 64, 64, 1.0, &mut out);
@@ -3669,7 +3830,7 @@ mod tests {
         let mut s = Store::default();
         s.put((0, 0), tile(1, 64, 0));
         assert_eq!(s.changed, vec![(0, 0)]);
-        let look = Look { textured: true, shading: true, legible: true };
+        let look = Look { textured: true, shading: true, legible: true, ..Look::default() };
         let mut px = [0u8; 1024];
         let key = CellKey { source: 0, lod: 0, x: 0, z: 0 };
         assert!(!compose_cell(|x, z| s.column(x, z), &palette, look, None, key, &mut px));
@@ -4102,6 +4263,18 @@ mod tests {
         let r = menu_rects([390.0, 290.0], 3, 400.0, 300.0);
         assert!(r[0][0] + r[0][2] <= 400.0 && r[2][1] + r[2][3] <= 300.0, "kept on screen");
         assert_eq!(tp_command([-3, 70, 8]), "tp @s -2.5 70 8.5");
+        // Its Y: the floor there, else the highest known nearby, else where you are.
+        let floor = |x: i32, z: i32| match (x, z) {
+            (0, 0) => Some(63),
+            (5, -3) => Some(80),
+            (-10, 10) => Some(72),
+            (100, 100) => Some(40),
+            _ => None,
+        };
+        assert_eq!(spot_y(floor, 0, 0, 12), 64, "known: on its floor");
+        assert_eq!(spot_y(floor, 2, 2, 12), 81, "unknown: over the highest known nearby");
+        assert_eq!(spot_y(floor, 500, 500, 12), 12, "nothing known near: your own Y");
+        assert_eq!(spot_y(floor, 100 + SPOT_NEAR + 1, 100, 12), 12, "too far to count");
         let mut f = Footsteps::default();
         assert!(f.step(0.5, 0.5));
         assert!(!f.step(1.4, 0.9), "less than 2 blocks on");
@@ -4147,7 +4320,7 @@ mod tests {
     #[test]
     fn caves_show_rock_drops_and_darker_deep_floors() {
         let palette = [0u32, 0x808080, 0, 0, 0xFF0000];
-        let look = Look { textured: true, shading: false, legible: false };
+        let look = Look { textured: true, shading: false, legible: false, ..Look::default() };
         let cave = Some(CaveShade { start: 40, depth: 30 });
         // Columns: x < 0 rock, x == 0 a floor at 40, x == 1 floor 70 below (past the depth),
         // x == 2 lava deep down, x >= 3 a drop.
@@ -4248,5 +4421,95 @@ mod tests {
         assert_eq!(cave_view(&Settings { cave_start: None, ..manual }, 70, false, None), Some(CaveView::Slice { start: 70, depth: 8, above: 4 }));
         assert_eq!(cave_view(&Settings { cave: 2, ..d }, 20, true, Some(127)), None);
         assert_eq!(cave_view(&Settings { fair_play: true, cave: 1, ..d }, 20, true, None), None, "fair play: no caves");
+    }
+
+    #[test]
+    fn new_layers_never_reuse_an_epoch() {
+        // A cave layer made after another (cave view off, then on) gets an epoch none had.
+        let a = fresh_epoch();
+        let b = fresh_epoch();
+        assert_ne!(a, b);
+        assert!(b > a);
+        // The cache's epoch for a layer and its band's saved layer: pairs that add up the same
+        // still differ, and a new layer's first epoch is never an old one's.
+        assert_ne!(epoch_mix(&[1, 5, 0]), epoch_mix(&[1, 3, 2]));
+        assert_ne!(epoch_mix(&[1, a, 0]), epoch_mix(&[1, b, 0]));
+        assert_ne!(epoch_mix(&[1, 2, 0]), epoch_mix(&[2, 2, 0]), "a new cell generation draws again");
+        assert_eq!(epoch_mix(&[7, 8, 9]), epoch_mix(&[7, 8, 9]));
+        let mut c = CellCache::default();
+        let key = CellKey { source: 1, lod: 0, x: 0, z: 0 };
+        let old = epoch_mix(&[0, a, 0]);
+        assert!(c.get(key, old).is_none());
+        let slot = c.place(key, old, false);
+        assert!(slot.is_some());
+        // The new layer's epoch: the old layer's cell is drawn again before it shows as current.
+        let new = epoch_mix(&[0, b, 0]);
+        c.next_frame();
+        assert!(c.get(key, new).is_some(), "the same layer's stale cell shows until redrawn");
+        assert!(c.take_wanted(16).contains(&key), "the old layer's cell is redrawn for the new one");
+        // A new layer forgets the old one's cells: nothing shows until drawn for it.
+        let other = CellKey { source: 0, ..key };
+        c.place(other, 1, false);
+        c.forget(1);
+        c.next_frame();
+        assert!(c.get(key, new).is_none());
+        assert!(c.get(other, 1).is_some(), "other sources keep theirs");
+    }
+
+    #[test]
+    fn minimap_look_extras() {
+        // Every extra is off by default: the look stays as it was.
+        let d = Settings::default();
+        assert!(!d.auto_size && !d.depth_shade && !d.night && !d.palette_biomes && !d.glass);
+        assert_eq!(FRAME_COLOURS[d.frame_colour].1, 0x0C_0C0E, "the rim it always had");
+        let back = Settings::read(|k| d.stored().into_iter().find(|(n, _)| *n == k).map(|(_, v)| v));
+        assert_eq!(back, d);
+        // Terrain depth: none at or over you, darker below, capped.
+        assert_eq!(surface_depth_factor(-5), 1.0);
+        assert_eq!(surface_depth_factor(0), 1.0);
+        assert!(surface_depth_factor(24) < 1.0 && surface_depth_factor(24) > surface_depth_factor(48));
+        assert_eq!(surface_depth_factor(48), surface_depth_factor(200));
+        assert_eq!(depth_step(64.9), 64);
+        assert_eq!(depth_step(67.0), 64);
+        assert_eq!(depth_step(-1.0), -4);
+        let palette = [0u32; 64];
+        let col = Col { color: 1, rgb: 0x80_8080, height: 40, depth: 0, kind: FLOOR };
+        let flat = Look { textured: true, ..Look::default() };
+        let mut one = |_x: i32, _z: i32| Some(col);
+        let lit = shaded(&mut one, &palette, flat, None, 0, 0).unwrap();
+        assert_eq!(lit[0], 0x80);
+        let deep = shaded(&mut one, &palette, Look { depth_from: Some(88), ..flat }, None, 0, 0).unwrap();
+        assert!(deep[0] < 0x80, "48 blocks under you: darker");
+        let level = shaded(&mut one, &palette, Look { depth_from: Some(40), ..flat }, None, 0, 0).unwrap();
+        assert_eq!(level, lit, "at your height: unchanged");
+        // Palette biomes: the palette's brightness in the column's hue; off, the palette.
+        let mut pal = [0u32; 64];
+        pal[1] = 0x7F_B238;
+        let swamp = Col { color: 1, rgb: 0x4C_763C, height: 64, depth: 0, kind: FLOOR };
+        let mut sw = |_x: i32, _z: i32| Some(swamp);
+        let plain = Look::default();
+        let off = shaded(&mut sw, &pal, plain, None, 0, 0).unwrap();
+        assert_eq!(off, [0x7F, 0xB2, 0x38, 255]);
+        let on = shaded(&mut sw, &pal, Look { biomes: true, ..plain }, None, 0, 0).unwrap();
+        assert_ne!(on, off);
+        let lum = |c: [u8; 4]| 0.299 * f32::from(c[0]) + 0.587 * f32::from(c[1]) + 0.114 * f32::from(c[2]);
+        assert!((lum(on) - lum(off)).abs() < 2.0, "as bright as the palette colour");
+        let stone = Col { color: 11, ..swamp };
+        let mut st = |_x: i32, _z: i32| Some(stone);
+        assert_eq!(shaded(&mut st, &pal, Look { biomes: true, ..plain }, None, 0, 0), shaded(&mut st, &pal, plain, None, 0, 0), "untinted colours stay");
+        // Night: full at noon, darkest at midnight, rain darker.
+        let noon = sky_brightness(6000, 0.0, 0.0);
+        let midnight = sky_brightness(18000, 0.0, 0.0);
+        assert!((noon - 1.0).abs() < 1e-3, "{noon}");
+        assert!(midnight < 0.5 && midnight >= 0.4, "{midnight}");
+        assert!(sky_brightness(6000, 1.0, 0.0) < noon);
+        assert!(sky_brightness(13000, 0.0, 0.0) < noon && sky_brightness(13000, 0.0, 0.0) > midnight, "dusk between");
+        // Auto size: a quarter of the short side, in the sizes offered.
+        assert_eq!(auto_size(640.0, 360.0), 96.0, "1080p at GUI scale 3: the default size");
+        assert_eq!(auto_size(4000.0, 2000.0), SIZES[SIZES.len() - 1]);
+        assert_eq!(auto_size(200.0, 120.0), SIZES[0]);
+        // Glass: the ground shows, tinted.
+        let g = glass_over(0x00_0000, 0xFF_0000);
+        assert!(g >> 16 > 0 && g >> 16 < 0xFF);
     }
 }

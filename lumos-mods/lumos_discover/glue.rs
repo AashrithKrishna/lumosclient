@@ -570,12 +570,17 @@ fn open_screen(game: &mut Game<'_>) {
 
 // ── hooks ──
 
-/// `native_key`: the hotkey opens and closes the screen, in the world or the pause menu.
+/// `native_key`: the hotkey opens and closes the screen, in the world or the pause menu. Bound
+/// to a key that types (a letter), it doesn't close the screen while the search is typed in:
+/// the letter goes into the search (Escape still closes).
 pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
     if !pressed || !game.native_on(m::ID) || !keys::pressed(game, "open", key, pressed) {
         return;
     }
     if open(game) {
+        if typing_into_search(key) {
+            return;
+        }
         game.native_mod_screen_close(m::ID);
     } else if game.native_playing() || game.screen == Screen::Paused {
         open_screen(game);
@@ -794,14 +799,19 @@ pub(super) fn on_screen_key(game: &Game<'_>, screen: &NativeScreenView<'_>, key:
     if !mine(game, screen) || key == "key.keyboard.escape" {
         return;
     }
-    // The hotkey closes the screen through `native_key`.
-    if keys::bound(game, "open") == key {
+    // The hotkey closes the screen through `native_key` (unless it is typed into the search).
+    if keys::bound(game, "open") == key && !typing_into_search(key) {
         return;
     }
     *canceled = true;
     if key == "key.keyboard.backspace" {
         m::with(|s| s.ui.backspace());
     }
+}
+
+/// Key `key` is a character of the search: the search box has the keyboard and the key types.
+fn typing_into_search(key: &str) -> bool {
+    m::types_text(key) && m::with(|s| s.ui.typing)
 }
 
 pub(super) fn on_char(game: &Game<'_>, screen: &NativeScreenView<'_>, c: char, canceled: &mut bool) {

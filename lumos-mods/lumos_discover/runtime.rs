@@ -23,6 +23,39 @@ button) opens it. Packs and shaders apply at once; native mods apply after a res
 /// vanilla or Horizon mapping (Studio's free camera reads it only inside a replay).
 pub const HOTKEYS: [(&str, &str, &str); 1] = [("open", "Open Discover", "key.keyboard.right.control")];
 
+/// Whether key `key` (`key.keyboard.k`) types text: a letter, digit or sign, space, or a
+/// keypad digit or sign. Bound to one, the hotkey must not close the screen while the search
+/// box is being typed in (the key is a character of the search then).
+pub fn types_text(key: &str) -> bool {
+    let Some(k) = key.strip_prefix("key.keyboard.") else {
+        return false;
+    };
+    let k = k.strip_prefix("keypad.").unwrap_or(k);
+    k.chars().count() == 1
+        || matches!(
+            k,
+            "space"
+                | "apostrophe"
+                | "comma"
+                | "minus"
+                | "period"
+                | "slash"
+                | "semicolon"
+                | "equal"
+                | "left.bracket"
+                | "backslash"
+                | "right.bracket"
+                | "grave.accent"
+                | "world.1"
+                | "world.2"
+                | "add"
+                | "subtract"
+                | "multiply"
+                | "divide"
+                | "decimal"
+        )
+}
+
 /// What the game asks of Lumos when it closes (beside `options.txt`): native mods to add or
 /// take out, content mods to delete, and whether to start the game again.
 pub const REQUESTS_FILE: &str = "lumos-requests.json";
@@ -971,5 +1004,15 @@ mod tests {
         assert_eq!(fit("short", 100.0, &width), "short");
         let cut = fit("a very long summary indeed", 60.0, &width);
         assert!(cut.ends_with("...") && width(&cut) <= 60.0, "{cut}");
+    }
+
+    #[test]
+    fn keys_that_type_text() {
+        for k in ["key.keyboard.d", "key.keyboard.7", "key.keyboard.space", "key.keyboard.keypad.3", "key.keyboard.minus", "key.keyboard.keypad.add"] {
+            assert!(types_text(k), "{k}");
+        }
+        for k in ["key.keyboard.right.control", "key.keyboard.f6", "key.keyboard.escape", "key.keyboard.keypad.enter", "key.mouse.left", "key.keyboard.unknown"] {
+            assert!(!types_text(k), "{k}");
+        }
     }
 }
