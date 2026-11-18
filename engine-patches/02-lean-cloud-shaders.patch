@@ -1,0 +1,54 @@
+diff --git a/crates/horizon-client-render/src/entity.wgsl b/crates/horizon-client-render/src/entity.wgsl
+index 80d0c34..1d6a601 100644
+--- a/crates/horizon-client-render/src/entity.wgsl
++++ b/crates/horizon-client-render/src/entity.wgsl
+@@ -200,9 +200,12 @@ struct CloudInfo {
+     colors: array<vec4<f32>, 4>,
+ }
+ @group(1) @binding(0) var<uniform> cloud: CloudInfo;
++// Every cloud vertex is overlay 4 (clouds.rs's `push_quad`): passing it as a constant lets the
++// compiler drop what unlit sky geometry never uses (the lightmap fetch, dynamic and coloured
++// lights), the same values as with the attribute.
+ @vertex fn vs_cloud(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
+     @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>, @location(5) normal: vec4<f32>) -> Out {
+-    return entity_vertex(position + cloud.offset.xyz, uv, overlay, cloud.colors[light.x], light, normal);
++    return entity_vertex(position + cloud.offset.xyz, uv, 4u, cloud.colors[light.x], light, normal);
+ }
+ // rendertype_end_portal.fsh: the layer colours.
+ const PORTAL_COLORS = array<vec3<f32>, 16>(
+@@ -301,6 +304,13 @@ fn entity_written_color(in: Out, color: vec4<f32>) -> vec4<f32> {
+     }
+     return frame_stored(color);
+ }
++// fs_entity for the clouds (overlay 4, `vs_cloud`): the same colour, with the other overlays'
++// branches and the discard left out at compile time.
++@fragment fn fs_cloud(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
++    var cloud = in;
++    cloud.overlay = 4u;
++    return entity_written_color(cloud, entity_color(cloud, front));
++}
+ @fragment fn fs_entity_unmarked(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+     return frame_stored(entity_color(in, front));
+ }
+diff --git a/crates/horizon-client-render/src/gfx.rs b/crates/horizon-client-render/src/gfx.rs
+index 2eb5f97..fd5f4ce 100644
+--- a/crates/horizon-client-render/src/gfx.rs
++++ b/crates/horizon-client-render/src/gfx.rs
+@@ -3961,7 +3961,7 @@ impl Renderer {
+             alpha_blend,
+             false,
+         );
+-        let cloud_pipeline = entity_pipeline(
++        let cloud_pipeline = entity_pipeline_with(
+             "Clouds",
+             Some(wgpu::Face::Back),
+             true,
+@@ -3969,6 +3969,8 @@ impl Renderer {
+             Default::default(),
+             alpha_blend,
+             true,
++            "fs_cloud",
++            wgpu::ColorWrites::ALL,
+         );
+         let hdr_cloud_mark_pipeline = entity_pipeline_with(
+             "HDR cloud mark",

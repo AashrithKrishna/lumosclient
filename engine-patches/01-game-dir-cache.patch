@@ -1,0 +1,75 @@
+diff --git a/crates/horizon-client/src/game/chat/suggestion_completion_tests.rs b/crates/horizon-client/src/game/chat/suggestion_completion_tests.rs
+index f003073..7cb8a36 100644
+--- a/crates/horizon-client/src/game/chat/suggestion_completion_tests.rs
++++ b/crates/horizon-client/src/game/chat/suggestion_completion_tests.rs
+@@ -23,10 +23,12 @@ fn chat_completion_reaches_mods_from_keyboard_and_mouse_in_own_process() {
+     impl Drop for RestoreDir {
+         fn drop(&mut self) {
+             std::env::set_current_dir(&self.0).unwrap();
++            crate::game::Game::forget_game_dir();
+         }
+     }
+     let _restore = RestoreDir(std::env::current_dir().unwrap());
+     std::env::set_current_dir(&scratch).unwrap();
++    crate::game::Game::forget_game_dir();
+     let settings = Settings::default();
+     let loaded = load_resources(
+         root.clone(),
+diff --git a/crates/horizon-client/src/game/launch_options.rs b/crates/horizon-client/src/game/launch_options.rs
+index c356903..3404cf6 100644
+--- a/crates/horizon-client/src/game/launch_options.rs
++++ b/crates/horizon-client/src/game/launch_options.rs
+@@ -149,6 +149,7 @@ impl Options {
+             std::fs::create_dir_all(&dir)
+                 .and_then(|()| std::env::set_current_dir(&dir))
+                 .map_err(|e| format!("game folder {}: {e}", dir.display()))?;
++            super::Game::forget_game_dir();
+         }
+         // Vanilla's quick play (Main, QuickPlay.joinSingleplayerWorld): only a
+         // world that exists opens; else the title screen. --world also creates one.
+diff --git a/crates/horizon-client/src/game/options.rs b/crates/horizon-client/src/game/options.rs
+index 06c5b93..4e3e7d4 100644
+--- a/crates/horizon-client/src/game/options.rs
++++ b/crates/horizon-client/src/game/options.rs
+@@ -20,6 +20,9 @@ pub(super) const CONTROL_HELP: &[&str] = &[
+     "options-set KEY VALUE          set an option (enums by name, keys as key.keyboard.w, lists as JSON), apply and save it",
+ ];
+ 
++/// `Game::game_dir`, once known.
++static GAME_DIR: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
++
+ impl Game<'_> {
+     pub(super) fn save_title_options(&mut self) {
+         if let Some(title) = &self.title
+@@ -99,8 +102,30 @@ impl Game<'_> {
+         horizon_client::logging::player_dir().join("options.txt")
+     }
+     /// The game folder (the working directory): what its players share, saves, packs, mods.
++    /// Kept once known: native mods ask for their folders (`native_data_dir`,
++    /// `native_config_dir`) several times a frame, and macOS's getcwd opens the folder each
++    /// time, about a tenth of a modded frame's main thread. Only the launch options change
++    /// the working directory, before the first frame, and they forget it then.
+     pub(super) fn game_dir() -> std::path::PathBuf {
+-        std::env::current_dir().unwrap_or_default()
++        let mut kept = GAME_DIR
++            .lock()
++            .unwrap_or_else(std::sync::PoisonError::into_inner);
++        if let Some(dir) = kept.as_ref() {
++            return dir.clone();
++        }
++        match std::env::current_dir() {
++            Ok(dir) => {
++                *kept = Some(dir.clone());
++                dir
++            }
++            Err(_) => std::path::PathBuf::new(),
++        }
++    }
++    /// Forgets the kept game folder, after the working directory changed.
++    pub(super) fn forget_game_dir() {
++        *GAME_DIR
++            .lock()
++            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+     }
+     /// `shaderpacks/` in the game folder.
+     pub(super) fn shader_packs_dir() -> std::path::PathBuf {

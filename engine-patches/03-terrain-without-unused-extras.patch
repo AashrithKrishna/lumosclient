@@ -1,0 +1,211 @@
+diff --git a/crates/horizon-client-render/src/gfx.rs b/crates/horizon-client-render/src/gfx.rs
+index fd5f4ce..1979bbd 100644
+--- a/crates/horizon-client-render/src/gfx.rs
++++ b/crates/horizon-client-render/src/gfx.rs
+@@ -1026,6 +1026,10 @@ pub struct ScreenshotRequest {
+ pub struct SolidPipeline {
+     plain: wgpu::RenderPipeline,
+     hdr: Option<wgpu::RenderPipeline>,
++    /// `plain` without the code of the emissive overlays, RGSS sampling and native coloured
++    /// lights (terrain.wgsl's `EMISSIVE_OVERLAYS`, `RGSS_SAMPLING`, `COLORED_LIGHTS`), for the
++    /// frames that use none of them: the same pixels, faster on Apple GPUs. None: `plain`.
++    bare: Option<wgpu::RenderPipeline>,
+ }
+ 
+ impl SolidPipeline {
+@@ -1036,6 +1040,15 @@ impl SolidPipeline {
+             _ => &self.plain,
+         }
+     }
++    /// `get` for a frame that may use (`extras`) the emissive overlays, RGSS sampling or
++    /// native coloured lights: without HDR output and any of them, the pipeline without their
++    /// code.
++    pub fn get_for(&self, hdr: bool, extras: bool) -> &wgpu::RenderPipeline {
++        match &self.bare {
++            Some(bare) if !extras && !(hdr && self.hdr.is_some()) => bare,
++            _ => self.get(hdr),
++        }
++    }
+ }
+ 
+ pub struct Renderer {
+@@ -2815,6 +2828,16 @@ impl Renderer {
+             sprite_constants[1],
+             ("HDR_LIGHTING", 0.0),
+         ];
++        // The same without the emissive overlays', RGSS's and coloured lights' code, for the
++        // frames that use none of them (`SolidPipeline::get_for`).
++        let bare_constants = [
++            sprite_constants[0],
++            sprite_constants[1],
++            ("HDR_LIGHTING", 0.0),
++            ("EMISSIVE_OVERLAYS", 0.0),
++            ("RGSS_SAMPLING", 0.0),
++            ("COLORED_LIGHTS", 0.0),
++        ];
+         // `hud`: the debug crosshair, drawn with the HUD in the overlays' format, with its
+         // coverage or without.
+         let pipeline_with = |constants: &[(&str, f64)],
+@@ -2943,6 +2966,7 @@ impl Renderer {
+             SolidPipeline {
+                 plain: build(&plain_constants),
+                 hdr: hdr_output.is_some().then(|| build(&sprite_constants)),
++                bare: Some(build(&bare_constants)),
+             }
+         };
+         let pipeline = |label: &str,
+@@ -10257,12 +10281,17 @@ impl Renderer {
+             .and_then(|n| Some((n.material.as_ref()?, &n.frame.group)));
+         // Without HDR output, the solid shaders without its lighting (`SolidPipeline`).
+         let hdr = self.hdr.is_some();
++        // Whether the frame's solid terrain may use the emissive overlays, RGSS sampling or
++        // native coloured lights, as `Globals` tells the shaders (`SolidPipeline::get_for`).
++        let terrain_extras = !frame.emissive_layers.is_empty()
++            || self.texture_filtering == 1
++            || !frame.colored_lights.is_empty();
+         // A world warp's pipelines in place of the terrain's and the entities' (`warp_on`).
+         let warped = self.world_warps.pipelines().filter(|_| warp_on);
+         let warp_group = self.world_warps.group().filter(|_| warp_on);
+         let solid_pipeline = match warped {
+             Some(w) => w.solid.get(hdr),
+-            None => material.map_or(self.solid.get(hdr), |(m, _)| &m.solid),
++            None => material.map_or(self.solid.get_for(hdr, terrain_extras), |(m, _)| &m.solid),
+         };
+         // Two solid passes only where a discard costs the GPU its hidden surface
+         // removal: Apple's tiled GPUs, behind Metal. Elsewhere the second pass
+@@ -10524,14 +10553,22 @@ impl Renderer {
+                     let passes: &[(&wgpu::RenderPipeline, Calls, Calls)] = match pack_flat {
+                         Some(p) => &[(&p.0, 0..flat.phase1_calls, 0..phase2_calls)],
+                         None if split_solid => &[
+-                            (flat.solid_opaque.get(hdr), 0..opaque, 0..phase2_split),
+                             (
+-                                flat.solid_cutout.get(hdr),
++                                flat.solid_opaque.get_for(hdr, terrain_extras),
++                                0..opaque,
++                                0..phase2_split,
++                            ),
++                            (
++                                flat.solid_cutout.get_for(hdr, terrain_extras),
+                                 cutout..flat.phase1_calls,
+                                 phase2_split..phase2_calls,
+                             ),
+                         ],
+-                        None => &[(flat.solid.get(hdr), 0..flat.phase1_calls, 0..phase2_calls)],
++                        None => &[(
++                            flat.solid.get_for(hdr, terrain_extras),
++                            0..flat.phase1_calls,
++                            0..phase2_calls,
++                        )],
+                     };
+                     let draw = |pass: &mut wgpu::RenderPass<'_>| {
+                         for (pipeline, calls, _) in passes {
+@@ -10590,12 +10627,12 @@ impl Renderer {
+                     let passes: &[(&wgpu::RenderPipeline, Draws, Draws)] = match material {
+                         None if split_solid => &[
+                             (
+-                                self.solid_opaque.get(hdr),
++                                self.solid_opaque.get_for(hdr, terrain_extras),
+                                 0..opaque,
+                                 phase1_draws..phase2_cutout,
+                             ),
+                             (
+-                                self.solid_cutout.get(hdr),
++                                self.solid_cutout.get_for(hdr, terrain_extras),
+                                 cutout..phase1_draws,
+                                 phase2_cutout..solid_draws,
+                             ),
+diff --git a/crates/horizon-client-render/src/gfx/arena.rs b/crates/horizon-client-render/src/gfx/arena.rs
+index ddc7a46..4e94523 100644
+--- a/crates/horizon-client-render/src/gfx/arena.rs
++++ b/crates/horizon-client-render/src/gfx/arena.rs
+@@ -1149,6 +1149,7 @@ mod tests {
+             super::super::SolidPipeline {
+                 plain: pipeline(layout, label, "", "", None, None, true),
+                 hdr: None,
++                bare: None,
+             }
+         };
+         let mut flat = flat::Flat::new(
+diff --git a/crates/horizon-client-render/src/gfx/world_warp.rs b/crates/horizon-client-render/src/gfx/world_warp.rs
+index 7e82e70..44c3a80 100644
+--- a/crates/horizon-client-render/src/gfx/world_warp.rs
++++ b/crates/horizon-client-render/src/gfx/world_warp.rs
+@@ -399,6 +399,7 @@ impl WorldWarps {
+         let solid = SolidPipeline {
+             plain: solid(&plain),
+             hdr: kit.hdr_output.then(|| solid(&lit)),
++            bare: None,
+         };
+         let translucent = terrain_pipeline(
+             "Warped terrain translucent",
+diff --git a/crates/horizon-client-render/src/terrain.wgsl b/crates/horizon-client-render/src/terrain.wgsl
+index 9b22898..332dc06 100644
+--- a/crates/horizon-client-render/src/terrain.wgsl
++++ b/crates/horizon-client-render/src/terrain.wgsl
+@@ -71,6 +71,16 @@ override SPRITE_SPLIT: u32 = 2048u;
+ // `hdr_light.z` is 0, since even a branch never taken costs Apple GPUs ~15% of a
+ // solid pixel's time (gfx.rs's `SolidPipeline`).
+ override HDR_LIGHTING: bool = true;
++// Whether the solid shaders carry the code of the emissive overlays (`Globals.emissive_layers`),
++// of RGSS sampling (Texture Filtering's RGSS, `filtering.x` 1) and of native coloured lights
++// (`colored_count`), as pipeline constants. The renderer also builds its HDR-off solid terrain
++// without the three, for the frames that use none of them (gfx.rs's `SolidPipeline::get_for`):
++// there the loop never runs and no pixel or vertex takes those branches, so the picture is the
++// same, while the code carried, even never taken, slows the shaders on Apple GPUs (about a fifth
++// of a Retina frame's GPU time).
++override EMISSIVE_OVERLAYS: bool = true;
++override RGSS_SAMPLING: bool = true;
++override COLORED_LIGHTS: bool = true;
+ // A sprite sampled with the given gradients, from whichever array holds its layer.
+ fn sprite_grad(uv: vec2<f32>, layer: u32, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
+     let l = i32(layer % SPRITE_SPLIT);
+@@ -188,7 +198,7 @@ fn sprite_at(tiled: vec2<f32>, layer: u32, du: vec2<f32>, dv: vec2<f32>) -> vec4
+     let tiled_face = any(tiled - uv >= vec2(0.5));
+     let pixel = vec2(1.0 / globals.filtering.y);
+     let texel_screen = sqrt(du * du + dv * dv);
+-    if u32(globals.filtering.x) == 1u {
++    if RGSS_SAMPLING && u32(globals.filtering.x) == 1u {
+         return sample_rgss(uv, layer, pixel, du, dv, texel_screen, tiled_face);
+     }
+     return sample_nearest(uv, layer, pixel, du, dv, texel_screen, tiled_face);
+@@ -690,20 +700,22 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
+     out.emissive_layer = 0xffffffffu;
+     // The pairs are sorted by base layer: stop at the first past this one.
+     let sprite_layer = layer & 0x7fffu;
+-    for (var i = 0u; i < min(globals.emissive_count.x, 128u); i++) {
+-        let pair = globals.emissive_layers[i];
+-        if pair.x == sprite_layer {
+-            out.emissive_layer = pair.y;
+-            break;
+-        }
+-        if pair.x > sprite_layer {
+-            break;
++    if EMISSIVE_OVERLAYS {
++        for (var i = 0u; i < min(globals.emissive_count.x, 128u); i++) {
++            let pair = globals.emissive_layers[i];
++            if pair.x == sprite_layer {
++                out.emissive_layer = pair.y;
++                break;
++            }
++            if pair.x > sprite_layer {
++                break;
++            }
+         }
+     }
+     let block = max(f32(light.y), dynamic_block_light(pos));
+     out.color = vec4(color.rgb, 1.0) * sample_lightmap(f32(light.x) / 16.0, block / 16.0);
+     out.scene = vec2(block / 16.0, f32(light.x) / 16.0);
+-    if globals.colored_count.x > 0u {
++    if COLORED_LIGHTS && globals.colored_count.x > 0u {
+         out.color = vec4(min(out.color.rgb + color.rgb * native_colored_light(pos), vec3(1.0)), out.color.a);
+     }
+     out.emission = 15u - (u32(round(color.a * 255.0)) & 15u);
+@@ -826,7 +838,7 @@ fn solid_finish_at(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>, du: vec2<
+             }
+         }
+     }
+-    if in.emissive_layer != 0xffffffffu {
++    if EMISSIVE_OVERLAYS && in.emissive_layer != 0xffffffffu {
+         // The high bit: an OptiFine overlay, drawn cutout (opaque where alpha >= 0.1).
+         var mask = sprite_at(in.uv, in.emissive_layer & 0x7fffffffu, du, dv);
+         if (in.emissive_layer & 0x80000000u) != 0u {
