@@ -3360,6 +3360,30 @@ fn main() {
                         push_state(&ipc_proxy, &st);
                     }
                 }
+                // Discover's "Needs another instance": make a fresh Horizon 26.3 instance for the
+                // mod and install it there, instead of leaving the player to do it by hand.
+                "native_new_instance" => {
+                    let slug = text("slug");
+                    let title = text("title");
+                    if slug.len() <= 64 && !slug.is_empty() && slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+                        let new_id = {
+                            let mut st = ipc_state.lock().unwrap();
+                            let mut id = format!("prof-{}", now_millis());
+                            while st.config.profiles.iter().any(|p| p.id == id) {
+                                id.push('x');
+                            }
+                            let _ = fs::create_dir_all(st.base_dir.join("instances").join(&id));
+                            let label: String = format!("26.3 · {}", if title.trim().is_empty() { slug.as_str() } else { title.trim() }).chars().take(40).collect();
+                            st.config.profiles.push(Profile { id: id.clone(), name: label, version: HORIZON_ID.to_owned(), ..Default::default() });
+                            st.config.active_profile_id = id.clone();
+                            st.config.selected_version = HORIZON_ID.to_owned();
+                            st.save_config();
+                            push_state(&ipc_proxy, &st);
+                            id
+                        };
+                        download_modrinth_async(ipc_proxy.clone(), ipc_state.clone(), slug, "mod".into(), new_id, false);
+                    }
+                }
                 "select_profile" => {
                     let id = text("id");
                     let mut st = ipc_state.lock().unwrap();
