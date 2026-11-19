@@ -288,6 +288,8 @@ pub struct Settings {
     pub wp_worldmap: bool,
     /// Index in `WP_NAMES`: when a marker shows its name.
     pub wp_names: usize,
+    /// Index in `WP_NAMES`: when a marker shows its distance.
+    pub wp_dist: usize,
     /// Index in `WP_LABELS`.
     pub wp_label: usize,
     /// Index in `WP_SHAPES`.
@@ -338,7 +340,7 @@ impl Default for Settings {
             cave_start: None,
             cave_legible: true,
             cave_zoom: 0,
-            convert: true,
+            convert: false,
             corner: 1,
             offset_x: 0,
             offset_y: 0,
@@ -417,9 +419,10 @@ impl Default for Settings {
             wp_minimap: true,
             wp_worldmap: true,
             wp_names: 0,
+            wp_dist: 0,
             wp_label: 1,
             wp_shape: 0,
-            wp_edge: true,
+            wp_edge: false,
             wp_scale: false,
             fade: true,
             wp_range: 0,
@@ -469,7 +472,7 @@ impl ShowEntry for usize {
 }
 
 /// The settings file's version (`settings_version`): saved with every setting.
-pub const SETTINGS_VERSION: u32 = 3;
+pub const SETTINGS_VERSION: u32 = 4;
 pub const SETTINGS_VERSION_KEY: &str = "settings_version";
 
 macro_rules! settings_table {
@@ -499,8 +502,14 @@ macro_rules! settings_table {
                 // Before 3.0 `markers` was the beams ("Waypoints in the world"): turning those off
                 // must not hide 3.0's markers. Settings saved before the version key are reset once.
                 let version = get(SETTINGS_VERSION_KEY).and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0);
-                if version < SETTINGS_VERSION {
+                if version < 3 {
                     s.markers = d.markers;
+                }
+                // 4: on-screen markers as Xaero's: only where they are (none pinned to the edges),
+                // only this dimension's (no converted Overworld/Nether ones).
+                if version < 4 {
+                    s.wp_edge = d.wp_edge;
+                    s.convert = d.convert;
                 }
                 s
             }
@@ -637,6 +646,7 @@ settings_table! {
     wp_minimap: flag, 5, "On the minimap";
     wp_worldmap: flag, 5, "On the world map";
     wp_names: index(WP_NAMES), 5, "Names on screen";
+    wp_dist: index(WP_NAMES), 5, "Distances on screen";
     wp_label: index(WP_LABELS), 5, "Name size";
     wp_shape: index(WP_SHAPES), 5, "Marker";
     wp_edge: flag, 5, "Off-screen ones at the edge";
@@ -3987,9 +3997,22 @@ mod tests {
         let mut s = Settings::default();
         s.markers = false;
         let stored = s.stored();
-        assert!(stored.iter().any(|(k, v)| *k == SETTINGS_VERSION_KEY && v == "3"));
+        assert!(stored.iter().any(|(k, v)| *k == SETTINGS_VERSION_KEY && v == "4"));
         let read = Settings::read(|k| stored.iter().find(|p| p.0 == k).map(|p| p.1.clone()));
         assert!(!read.markers);
+        // 4: markers as Xaero's: none pinned to the edges, no converted Overworld/Nether ones,
+        // distance only on the one looked at; settings saved by 3 get these once.
+        assert!(!d.wp_edge && !d.convert && WP_NAMES[d.wp_dist] == "Looked at");
+        let v3 = Settings::read(|k| match k {
+            "wp_edge" | "convert" => Some("true".into()),
+            SETTINGS_VERSION_KEY => Some("3".into()),
+            _ => None,
+        });
+        assert!(!v3.wp_edge && !v3.convert);
+        let mut kept = Settings::default();
+        kept.wp_edge = true;
+        let stored = kept.stored();
+        assert!(Settings::read(|k| stored.iter().find(|p| p.0 == k).map(|p| p.1.clone())).wp_edge);
         let w = Waypoint { name: "nether hub".into(), ..Waypoint::default() };
         assert_eq!(w.mark(), "N");
         assert_eq!(Waypoint::default().mark(), "?");

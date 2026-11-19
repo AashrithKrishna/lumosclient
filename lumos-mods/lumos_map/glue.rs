@@ -2787,7 +2787,7 @@ fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings)
             continue;
         }
         let k = if s.wp_scale { m::marker_scale(d) } else { 1.0 };
-        let r = 6.0 * k;
+        let r = 4.5 * k;
         let [x, y] = [q[0].round(), q[1].round()];
         let a = alpha << 24;
         // The marker: a dark rim, the colour, a lighter top half for a little depth.
@@ -2808,7 +2808,7 @@ fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings)
         let tw = game.native_text_width(&text);
         let start = batch.vertices.len();
         game.native_text(batch, &text, [x - tw / 2.0, y - 3.5], ink, false);
-        let ts = (k * 0.75).clamp(0.5, 1.0);
+        let ts = (k * 0.6).clamp(0.45, 0.8);
         batch.scale_since(start, x, y, ts, ts);
         if edge {
             // An arrow beside it pointing the way to turn.
@@ -2823,11 +2823,18 @@ fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings)
             );
         }
         // Distance under it; the name over it.
-        let dist = m::distance_text(d, s.units);
-        let dw = game.native_text_width(&dist) * 0.75;
-        let start = batch.vertices.len();
-        game.native_text(batch, &dist, [x - dw / 2.0, y + r + 3.0], 0xE0E0E0, true);
-        batch.scale_since(start, x, y + r + 3.0, 0.75, 0.75);
+        let show_dist = match s.wp_dist {
+            1 => true,
+            0 => looked == Some(i) || edge,
+            _ => false,
+        };
+        if show_dist {
+            let dist = m::distance_text(d, s.units);
+            let dw = game.native_text_width(&dist) * 0.75;
+            let start = batch.vertices.len();
+            game.native_text(batch, &dist, [x - dw / 2.0, y + r + 3.0], 0xE0E0E0, true);
+            batch.scale_since(start, x, y + r + 3.0, 0.75, 0.75);
+        }
         let show_name = always_name || match s.wp_names {
             1 => true,
             0 => looked == Some(i),

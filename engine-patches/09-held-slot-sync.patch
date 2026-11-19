@@ -1,0 +1,18 @@
+diff --git a/crates/horizon-client/src/game/remote.rs b/crates/horizon-client/src/game/remote.rs
+index e5936099e8..a730484948 100644
+--- a/crates/horizon-client/src/game/remote.rs
++++ b/crates/horizon-client/src/game/remote.rs
+@@ -4702,6 +4702,13 @@ impl Game<'_> {
+             C::SetHeldSlot(p) => {
+                 if (0..9).contains(&p.slot) {
+                     self.selected = p.slot as usize;
++                    // Lumos: the server holds this slot now. Without this the slot last
++                    // sent (0 after Login) still looked current, so choosing it again
++                    // sent nothing and the server kept the slot it gave (a world saved
++                    // on another slot): placing and using refused, blocks put back.
++                    if let Some(r) = &self.remote {
++                        r.carried.set(Some(p.slot as usize));
++                    }
+                 }
+             }
+             C::ContainerSetContent(p) => {

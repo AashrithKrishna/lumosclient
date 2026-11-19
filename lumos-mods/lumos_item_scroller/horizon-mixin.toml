@@ -1,8 +1,8 @@
-# Lumos Item Scroller: the mouse wheel and mass clicks move items between inventories, recipe slots
-# beside the crafting grid fill it and mass craft, and favourite villager trades trade max.
+# Lumos Item Scroller: Item Scroller's controls (its default keys): the wheel, click and drag moves
+# between inventories, the recipe view (hold A) with crafting helpers, and villager favourites.
 [mod]
 id = "lumos_item_scroller"
-version = "1.0.0"
+version = "2.0.0"
 priority = 100
 
 # Horizon Nightly 2026-11-13. Planned with horizon-mixins e59da9094f0c2fdda6c627fe9eff22dec6a906f0.
@@ -52,7 +52,7 @@ bindings = [
   { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
 ]
 
-# Ctrl+Shift+click, the recipe slots, the merchant's offers, a Shift+drag's start.
+# Click moves and the start of drag moves, the recipe view, the merchant's offers.
 [[injection]]
 id = "press"
 kind = "HEAD"
@@ -78,7 +78,7 @@ bindings = [
   { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
 ]
 
-# Shift+drag over slots.
+# Click-drag moves over slots.
 [[injection]]
 id = "drag"
 kind = "HEAD"
@@ -87,12 +87,14 @@ helper = "hooks/drag.rs"
 bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
   { name = "screen", ty = "&str", value = "screen" },
+  { name = "mouse", ty = "[f32; 2]", value = "mouse" },
   { name = "button", ty = "i32", value = "button" },
+  { name = "delta", ty = "[f32; 2]", value = "delta" },
   { name = "modifiers", ty = "u32", value = "modifiers" },
   { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
 ]
 
-# Ctrl+Shift+Q (the drop key) and the recipe keys.
+# Ctrl+Shift+Q, the recipe view's keys, the crafting, trading, sort and on/off keys.
 [[injection]]
 id = "key"
 kind = "HEAD"
@@ -107,7 +109,7 @@ bindings = [
   { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
 ]
 
-# The recipe slots, the favourite stars and the notices.
+# The recipe view, the favourite stars and the notices.
 [[injection]]
 id = "render"
 kind = "HEAD"
