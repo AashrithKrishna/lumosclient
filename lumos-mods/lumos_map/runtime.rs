@@ -320,6 +320,9 @@ pub struct Settings {
     pub beams: bool,
     /// The add-waypoint key adds one where you stand at once, without the "New waypoint" box.
     pub instant_add: bool,
+    /// With Lumos World Map on: the region files it writes are read again as they change, so
+    /// the minimap shows what it mapped (its chunks) where this mod has none of its own.
+    pub wm_chunks: bool,
 }
 
 impl Default for Settings {
@@ -430,6 +433,7 @@ impl Default for Settings {
             sort: 1,
             beams: false,
             instant_add: false,
+            wm_chunks: true,
         }
     }
 }
@@ -649,6 +653,7 @@ settings_table! {
     sort: index(SORTS), 5, "List order";
     beams: flag, 5, "Beams (old style)";
     instant_add: flag, 5, "B adds instantly";
+    wm_chunks: flag, 3, "With World Map: use its chunks";
 }
 
 impl Settings {

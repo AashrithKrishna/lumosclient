@@ -5,6 +5,11 @@
 // list, each file checked against it (`horizon_mods::index::check_file`: size, SHA-256, the
 // author's minisign signature, the file's own manifest) before it is moved into the instance.
 // What needs the game mutably (switching packs, mods, the restart) runs in the client tick.
+//
+// Modrinth's shader packs (the Shaders tab, after the registry's) are read from Modrinth's public
+// API on a worker too, one request at a time and only as the list is scrolled or searched
+// (`lumos_discover::Feed`). A pack's file comes only from `cdn.modrinth.com` and goes into
+// `shaderpacks/` only with Modrinth's size and SHA-512.
 use crate::game::lumos_discover as m;
 use crate::game::lumos_discover_keys as keys;
 use crate::game::{Game, Screen};
@@ -19,8 +24,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use sha2::{Digest, Sha512};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Which native mods Lumos's cloud builds have (`obsidian-launcher-rs/src/native_builds.rs`).
 const NATIVE_INDEX: &str = "https://github.com/AashrithKrishna/lumosclient/releases/download/native-builds/native-index.json";
@@ -33,12 +40,20 @@ enum Finished {
     Catalogue(Result<(Arc<Index>, Vec<m::Entry>), String>),
     /// A pack or content mod landed in the instance: (id, its kind, its file, signed) or why not.
     Installed(String, m::Kind, Result<(String, bool), String>),
+    /// A Modrinth search page: (search key, offset, its hits and total, or why not).
+    Search(String, usize, Result<(Vec<m::Entry>, usize), String>),
 }
+
+/// Modrinth projects' versions read this session, by project id.
+static MODRINTH_VERSIONS: Mutex<BTreeMap<String, Vec<m::MrVersion>>> = Mutex::new(BTreeMap::new());
+/// What Discover installed from Modrinth, in its data folder: `<project id> <file>` a line.
+const MODRINTH_RECORDS: &str = "modrinth-shaders.txt";
 
 #[derive(Default)]
 struct Jobs {
     catalogue: Option<Receiver<Finished>>,
     install: Option<Receiver<Finished>>,
+    search: Option<Receiver<Finished>>,
     index: Option<Arc<Index>>,
     /// Files to delete once the game no longer reads them: (path, ticks to wait).
     delete: Vec<(PathBuf, u32)>,
@@ -136,6 +151,7 @@ fn entries(index: &Index, cloud: &BTreeSet<String>) -> Vec<m::Entry> {
                 file: version.map(|v| v.file.name.clone()).unwrap_or_default(),
                 own: false,
                 cloud: cloud.contains(&p.id),
+                modrinth: None,
             })
         })
         .collect();
@@ -212,6 +228,17 @@ fn refresh(game: &Game<'_>) {
     };
     let mods = &game.settings.mods;
     let applied = game.applied_mods();
+    // Modrinth's packs: the file recorded at their install, or one named like them.
+    let shader_files: Vec<String> = shaders.iter().cloned().collect();
+    let records = modrinth_records(game);
+    m::with(|s| {
+        for e in s.entries.iter_mut() {
+            if let Some(slug) = &e.modrinth {
+                let recorded = e.id.strip_prefix(m::MODRINTH_PREFIX).and_then(|p| records.get(p)).map(String::as_str);
+                e.file = m::installed_file(slug, &e.name, &shader_files, recorded).unwrap_or_default();
+            }
+        }
+    });
     let have: BTreeMap<String, m::Have> = m::with(|s| {
         s.entries
             .iter()
@@ -289,7 +316,141 @@ fn fetch_into(index: &Index, home: &Path, id: &str, folder: &Path) -> Result<(St
     Ok((name, trust == Trust::Verified))
 }
 
+// ── Modrinth ──
+
+fn modrinth_records_path(game: &Game<'_>) -> PathBuf {
+    game.native_data_dir(m::ID).join(MODRINTH_RECORDS)
+}
+
+fn modrinth_records(game: &Game<'_>) -> BTreeMap<String, String> {
+    m::parse_records(&fs::read_to_string(modrinth_records_path(game)).unwrap_or_default())
+}
+
+/// Records (`Some(file)`) or forgets (`None`) Modrinth project `project`'s file.
+fn modrinth_record(game: &Game<'_>, project: &str, file: Option<&str>) {
+    let mut records = modrinth_records(game);
+    match file {
+        Some(f) => records.insert(project.to_owned(), f.to_owned()),
+        None => records.remove(project),
+    };
+    let path = modrinth_records_path(game);
+    let written = path.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| fs::write(&path, m::records_text(&records)));
+    if let Err(e) = written {
+        log::warn!("Lumos Discover: {}: {e}", path.display());
+    }
+}
+
+/// GETs `url` from Modrinth (at most `max` bytes, no redirects followed), with a generic client
+/// name and nothing else about the player.
+fn modrinth_get(url: &str, max: u64, timeout: u64) -> Result<Vec<u8>, String> {
+    let agent = ureq::AgentBuilder::new()
+        .redirects(0)
+        .timeout_connect(Duration::from_secs(15))
+        .timeout(Duration::from_secs(timeout))
+        .build();
+    let response = agent.get(url).set("User-Agent", m::MODRINTH_AGENT).call().map_err(|e| match e {
+        ureq::Error::Status(429, _) => "too many requests just now, try again shortly".to_owned(),
+        ureq::Error::Status(code, _) => format!("Modrinth answered {code}"),
+        ureq::Error::Transport(t) => {
+            log::info!("Lumos Discover: {url}: {t}");
+            "can't be reached (offline?)".to_owned()
+        }
+    })?;
+    if response.status() != 200 {
+        return Err(format!("Modrinth answered {}", response.status()));
+    }
+    let mut body = Vec::new();
+    response.into_reader().take(max + 1).read_to_end(&mut body).map_err(|e| format!("the download stopped: {e}"))?;
+    if body.len() as u64 > max {
+        return Err("Modrinth's answer is larger than expected".into());
+    }
+    Ok(body)
+}
+
+/// Asks Modrinth for search `key`'s hits from `offset`, on a worker.
+fn search_modrinth(key: String, offset: usize) {
+    let (send, receive) = channel();
+    jobs(|j| j.search = Some(receive));
+    m::with(|s| s.feed.sent(&key, offset));
+    spawn("lumos-discover-modrinth", move || {
+        let read = modrinth_get(&m::search_url(&key, offset), 4 << 20, 20)
+            .and_then(|b| String::from_utf8(b).map_err(|_| "Modrinth's answer isn't text".to_owned()))
+            .and_then(|t| m::parse_search(&t));
+        if let Err(e) = &read {
+            log::info!("Lumos Discover: Modrinth search {key:?} at {offset}: {e}");
+        }
+        let _ = send.send(Finished::Search(key, offset, read));
+    });
+}
+
+/// Installs Modrinth project `project`'s pack into `folder` (on a worker): its versions (kept for
+/// the session), the one `pick_version` picks, its primary file from `cdn.modrinth.com` checked
+/// against Modrinth's size and SHA-512, under a name that stays in the folder.
+fn fetch_modrinth(home: &Path, project: &str, folder: &Path) -> Result<(String, bool), String> {
+    let cached = MODRINTH_VERSIONS.lock().ok().and_then(|v| v.get(project).cloned());
+    let versions = match cached {
+        Some(v) => v,
+        None => {
+            let url = m::versions_url(project).ok_or("it isn't a Modrinth project")?;
+            let text = String::from_utf8(modrinth_get(&url, 16 << 20, 30)?).map_err(|_| "Modrinth's answer isn't text")?;
+            let v = m::parse_versions(&text)?;
+            if let Ok(mut cache) = MODRINTH_VERSIONS.lock() {
+                cache.insert(project.to_owned(), v.clone());
+            }
+            v
+        }
+    };
+    let v = m::pick_version(&versions, mod_registry::GAME).ok_or("Modrinth has no file of it")?;
+    let f = m::primary_file(v).ok_or("Modrinth has no file of it")?;
+    if !m::cdn_url_ok(&f.url) {
+        return Err("its file isn't on cdn.modrinth.com".into());
+    }
+    if !m::safe_file_name(&f.name) {
+        return Err(format!("its file name {:?} isn't a plain .zip name", f.name));
+    }
+    if f.size == 0 || f.size > m::MODRINTH_MAX_FILE {
+        return Err(format!("its file is {} bytes", f.size));
+    }
+    log::info!("Lumos Discover: Modrinth {project}: version {} ({}), {}", v.number, v.id, f.url);
+    let bytes = modrinth_get(&f.url, f.size, 300)?;
+    let sha512 = format!("{:x}", Sha512::digest(&bytes));
+    m::check_download(f, &bytes, &sha512)?;
+    let staging = home.join(DOWNLOADS);
+    fs::create_dir_all(&staging).map_err(|e| format!("{}: {e}", staging.display()))?;
+    let part = staging.join(format!("modrinth-{project}.part"));
+    fs::write(&part, &bytes).map_err(|e| format!("{}: {e}", part.display()))?;
+    fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    let target = folder.join(&f.name);
+    if target.parent() != Some(folder) {
+        let _ = fs::remove_file(&part);
+        return Err("its file name leaves shaderpacks/".into());
+    }
+    fs::rename(&part, &target).map_err(|e| {
+        let _ = fs::remove_file(&part);
+        format!("{}: {e}", target.display())
+    })?;
+    Ok((f.name.clone(), true))
+}
+
 fn install(e: &m::Entry) {
+    if let Some(project) = e.id.strip_prefix(m::MODRINTH_PREFIX).filter(|_| e.modrinth.is_some()) {
+        if jobs(|j| j.install.is_some()) {
+            m::with(|s| s.ui.message = Some(("One download at a time: wait for the one running.".into(), false)));
+            return;
+        }
+        let (home, id, project, folder) = (Game::game_dir(), e.id.clone(), project.to_owned(), Game::shader_packs_dir());
+        let (send, receive) = channel();
+        jobs(|j| j.install = Some(receive));
+        m::with(|s| {
+            s.ui.busy = Some(id.clone());
+            s.ui.message = Some((format!("Downloading {} from Modrinth...", e.name), true));
+        });
+        spawn("lumos-discover-install", move || {
+            let done = fetch_modrinth(&home, &project, &folder);
+            let _ = send.send(Finished::Installed(id, m::Kind::Shader, done));
+        });
+        return;
+    }
     let Some(index) = jobs(|j| j.index.clone()) else { return };
     if jobs(|j| j.install.is_some()) {
         m::with(|s| s.ui.message = Some(("One download at a time: wait for the one running.".into(), false)));
@@ -342,7 +503,13 @@ fn landed(game: &mut Game<'_>, id: String, kind: m::Kind, done: Result<(String, 
             return;
         }
     };
-    log::info!("Lumos Discover: installed {id} ({file}, {})", if verified { "signed" } else { "unsigned" });
+    let project = id.strip_prefix(m::MODRINTH_PREFIX).map(str::to_owned);
+    if let Some(p) = &project {
+        log::info!("Lumos Discover: installed Modrinth {p} ({file}, size and SHA-512 checked)");
+        modrinth_record(game, p, Some(&file));
+    } else {
+        log::info!("Lumos Discover: installed {id} ({file}, {})", if verified { "signed" } else { "unsigned" });
+    }
     match kind {
         m::Kind::Content => {
             game.settings.mods.enabled.insert(id.clone());
@@ -366,7 +533,11 @@ fn landed(game: &mut Game<'_>, id: String, kind: m::Kind, done: Result<(String, 
         }
         m::Kind::Shader => {
             pick_shader(game, &file);
-            say(format!("{name} is installed and on."), true);
+            if project.is_some() {
+                say(format!("{name} is installed and on. {}", m::MODRINTH_NOTE), true);
+            } else {
+                say(format!("{name} is installed and on."), true);
+            }
         }
         m::Kind::Native => {}
     }
@@ -467,6 +638,9 @@ fn act(game: &mut Game<'_>, i: usize, act: m::Act) {
                 pick_shader(game, "");
             }
             if act == m::Act::Remove {
+                if let Some(project) = id.strip_prefix(m::MODRINTH_PREFIX) {
+                    modrinth_record(game, project, None);
+                }
                 jobs(|j| j.delete.push((Game::shader_packs_dir().join(&e.file), 40)));
                 say(format!("{name} is removed."), true);
             } else {
@@ -561,8 +735,7 @@ fn open_screen(game: &mut Game<'_>) {
             s.ui.message = None;
         });
         refresh(game);
-        let failed = m::with(|s| s.entries.is_empty());
-        if failed {
+        if jobs(|j| j.index.is_none()) {
             load_catalogue();
         }
     }
@@ -617,7 +790,7 @@ pub(super) fn on_tick(game: &mut Game<'_>) {
     }
     let finished = jobs(|j| {
         let mut out = Vec::new();
-        for slot in [&mut j.catalogue, &mut j.install] {
+        for slot in [&mut j.catalogue, &mut j.install, &mut j.search] {
             if let Some(rx) = slot {
                 match rx.try_recv() {
                     Ok(f) => {
@@ -638,7 +811,7 @@ pub(super) fn on_tick(game: &mut Game<'_>) {
             Finished::Catalogue(Ok((index, list))) => {
                 jobs(|j| j.index = Some(index));
                 m::with(|s| {
-                    s.entries = list;
+                    s.registry = list;
                     s.ui.loading = false;
                 });
             }
@@ -650,8 +823,20 @@ pub(super) fn on_tick(game: &mut Game<'_>) {
                 });
             }
             Finished::Installed(id, kind, done) => landed(game, id, kind, done),
+            Finished::Search(key, offset, read) => m::with(|s| s.feed.landed(&key, offset, read)),
         }
     }
+    // A search worker that ended without an answer.
+    if jobs(|j| j.search.is_none())
+        && let Some((key, offset)) = m::with(|s| s.feed.busy.clone())
+    {
+        m::with(|s| s.feed.landed(&key, offset, Err("the search stopped".into())));
+    }
+    let modrinth = settings(game).modrinth;
+    m::with(|s| {
+        let query = s.ui.query.clone();
+        s.feed.tick(&query);
+    });
     if !open(game) {
         if changed {
             refresh(game);
@@ -680,6 +865,29 @@ pub(super) fn on_tick(game: &mut Game<'_>) {
             m::Hit::Row(i, a) => act(game, i, a),
         }
     }
+    // Modrinth's next page, when the Shaders tab wants one.
+    if modrinth && jobs(|j| j.search.is_none()) {
+        let (sw, sh) = game.gui_size();
+        let fits = m::rows_fit(&m::layout(sw, sh));
+        let settings = settings(game);
+        let next = m::with(|s| {
+            if s.ui.tab != m::Tab::Shaders {
+                return None;
+            }
+            let have = |id: &str| s.have.get(id).copied().unwrap_or_default();
+            let width = |_: &str| 0.0_f32;
+            let view = m::View { entries: &s.entries, have: &have, width: &width, settings, tail: None };
+            let want_more = s.ui.scroll + fits + 4 >= m::rows(&s.ui, &view).len();
+            s.feed.next(&s.ui.query, want_more)
+        });
+        if let Some((key, offset)) = next {
+            search_modrinth(key, offset);
+        }
+    }
+    // After the clicks, which name rows as they were drawn.
+    if m::with(|s| s.compose(modrinth)) {
+        changed = true;
+    }
     // What the instance has is read again after a change, and every two seconds.
     let stale = m::with(|s| {
         s.stale = s.stale.saturating_add(1);
@@ -702,6 +910,11 @@ fn paint(game: &Game<'_>, batch: &mut HudBatch, prims: &[m::Prim]) {
     }
 }
 
+/// The line after the Shaders tab's rows: Modrinth's state, when its packs are listed.
+fn tail(s: &m::State, settings: m::Settings) -> Option<(String, u32)> {
+    (settings.modrinth && s.ui.tab == m::Tab::Shaders).then(|| s.feed.tail(&s.ui.query))
+}
+
 /// The screen's frame: the catalogue, what the instance has, the current search.
 fn with_frame<R>(game: &Game<'_>, mouse: [f32; 2], f: impl FnOnce(Vec<m::Prim>, Vec<([f32; 4], m::Hit)>) -> R) -> R {
     let (sw, sh) = game.gui_size();
@@ -709,7 +922,7 @@ fn with_frame<R>(game: &Game<'_>, mouse: [f32; 2], f: impl FnOnce(Vec<m::Prim>, 
     let width = |t: &str| game.native_text_width(t);
     m::with(|s| {
         let have = |id: &str| s.have.get(id).copied().unwrap_or_default();
-        let view = m::View { entries: &s.entries, have: &have, width: &width, settings };
+        let view = m::View { entries: &s.entries, have: &have, width: &width, settings, tail: tail(s, settings) };
         let (prims, hits) = m::frame(&s.ui, &view, mouse, sw, sh);
         f(prims, hits)
     })
@@ -779,8 +992,8 @@ pub(super) fn on_scroll(game: &Game<'_>, screen: &NativeScreenView<'_>, scroll: 
     let width = |t: &str| game.native_text_width(t);
     let rows = m::with(|s| {
         let have = |id: &str| s.have.get(id).copied().unwrap_or_default();
-        let view = m::View { entries: &s.entries, have: &have, width: &width, settings };
-        (m::rows(&s.ui, &view).len(), m::categories(&s.entries, s.ui.tab).len() + 1)
+        let view = m::View { entries: &s.entries, have: &have, width: &width, settings, tail: tail(s, settings) };
+        (m::list_len(&s.ui, &view), m::categories(&s.entries, s.ui.tab).len() + 1)
     });
     m::with(|s| {
         if m::inside(l.cats, screen.mouse) {

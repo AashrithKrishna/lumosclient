@@ -1,8 +1,9 @@
 # Lumos Discover: Horizon's registry (mods, resource packs, shaders) and Lumos's own mods, browsed
 # and installed from inside the game. Right Control or the pause menu's Discover button opens it.
+# The Shaders tab also lists Modrinth's Iris/OptiFine shader packs (api.modrinth.com, no key).
 [mod]
 id = "lumos_discover"
-version = "1.0.0"
+version = "1.1.0"
 priority = 100
 
 # Horizon Nightly 2026-11-13. Planned with horizon-mixins e59da9094f0c2fdda6c627fe9eff22dec6a906f0.

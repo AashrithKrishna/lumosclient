@@ -258,6 +258,7 @@ const OWN: &[(&str, &str, &str, &[&str])] = &[
     ("lumos_map", "Map", "Crisp minimap and saved world map in the game's own colours, mob faces on Tab, on-screen waypoints and a full waypoint manager.", &["utility", "adventure"]),
     ("lumos_fullbright_key", "Fullbright Key", "A key (G) that turns Horizon's Fullbright on and off, with a notice.", &["utility"]),
     ("lumos_discover", "Lumos Discover", "Browse and install mods, resource packs and shaders from inside the game. Right Control opens it.", &["utility"]),
+    ("lumos_world_map", "World Map", "Fullscreen map of everywhere you explored, saved per world and server: smooth zoom, cave layers, dimensions, waypoints shared with Lumos Map, PNG export.", &["utility", "adventure"]),
     ("lumos_item_scroller", "Item Scroller", "Move items with the mouse wheel and mass clicks, recipe slots with mass crafting, and favourite villager trades.", &["utility"]),
     ("lumos_controls", "Lumos Controls", "Every native mod's keys in Options > Controls > Key Binds, a section per mod, with clashes in red.", &["utility"]),
 ];

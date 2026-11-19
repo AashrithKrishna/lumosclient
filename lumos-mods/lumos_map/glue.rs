@@ -439,6 +439,13 @@ struct Explored {
     /// Your recent path here (`<dim>/footsteps.txt`), and whether it changed since saved.
     steps: m::Footsteps,
     steps_dirty: bool,
+    /// Lumos World Map is on: it writes the explored regions (this mod's scans stay in memory),
+    /// and with "use its chunks" the region files it changed are read again.
+    handed: bool,
+    reread: bool,
+    /// The cached regions' files' times when last read, and when they were last looked at.
+    mtimes: HashMap<(i32, i32), std::time::SystemTime>,
+    reread_at: Option<Instant>,
 }
 
 impl Explored {
@@ -460,6 +467,10 @@ impl Explored {
             caves: HashMap::new(),
             steps,
             steps_dirty: false,
+            handed: false,
+            reread: false,
+            mtimes: HashMap::new(),
+            reread_at: None,
         }
     }
 
@@ -482,6 +493,14 @@ impl Explored {
         }
         // A region still being read is written once its saved tiles are in (else the file
         // would lose them).
+        if self.handed {
+            // Lumos World Map writes the regions (merged with what is on disk); this mod's
+            // scans of the same chunks stay in memory only.
+            self.store.dirty.clear();
+            for c in self.caves.values_mut() {
+                c.store.dirty.clear();
+            }
+        }
         let reading: HashSet<(i32, i32)> = self.loading.iter().flat_map(|(r, _)| r.iter().copied()).collect();
         let later: Vec<(i32, i32)> = self.store.dirty.iter().filter(|r| reading.contains(r)).copied().collect();
         for r in &later {
@@ -551,7 +570,28 @@ impl Explored {
             want.extend(m::regions_near(&[centre], reach));
             keep.extend(m::regions_near(&[centre], reach + 1));
         }
-        let new: HashSet<(i32, i32)> = want.difference(&self.cached).copied().collect();
+        let mut new: HashSet<(i32, i32)> = want.difference(&self.cached).copied().collect();
+        // With Lumos World Map: its newer region files read again (every 10 seconds), so the
+        // minimap shows the chunks it mapped.
+        if self.handed && self.reread {
+            let due = self.reread_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(10));
+            let mut look: Vec<(i32, i32)> = new.iter().copied().collect();
+            if due {
+                look.extend(self.cached.iter().copied());
+            }
+            for r in look {
+                let t = std::fs::metadata(self.dir.join(m::region_file(r))).and_then(|m| m.modified()).ok();
+                if let Some(t) = t
+                    && self.mtimes.insert(r, t) != Some(t)
+                    && self.cached.contains(&r)
+                {
+                    new.insert(r);
+                }
+            }
+            if due {
+                self.reread_at = Some(Instant::now());
+            }
+        }
         if !new.is_empty() {
             self.cached.extend(new.iter().copied());
             self.loading.push((new.clone(), load_regions(self.dir.clone(), None, Some(new))));
@@ -560,6 +600,8 @@ impl Explored {
         self.store.let_go(|r| keep.contains(&r) || reading.contains(&r));
         let dirty = &self.store.dirty;
         self.cached.retain(|r| keep.contains(r) || reading.contains(r) || dirty.contains(r));
+        let cached = &self.cached;
+        self.mtimes.retain(|r, _| cached.contains(r));
     }
 }
 
@@ -791,6 +833,10 @@ struct State {
     /// The minimap's terrain depth: the height (in steps) the surface darkens below; None when
     /// it is off or the world map is open.
     depth_from: Option<i32>,
+    /// The waypoint files' times when last read or written, and when they were last looked at
+    /// (with Lumos World Map on, which writes them too).
+    book_seen: std::cell::Cell<(Option<std::time::SystemTime>, Option<std::time::SystemTime>)>,
+    book_at: Option<Instant>,
 }
 
 thread_local! {
@@ -856,6 +902,39 @@ fn save_book(s: &State) {
     if let Some(g) = &s.global_path {
         let _ = std::fs::write(g, all.to_text());
     }
+    s.book_seen.set(book_times(s));
+}
+
+/// The waypoint files' times (this world's, every world's).
+fn book_times(s: &State) -> (Option<std::time::SystemTime>, Option<std::time::SystemTime>) {
+    let t = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    (s.world_dir.as_ref().and_then(|d| t(&d.join("waypoints.txt"))), s.global_path.as_ref().and_then(|g| t(g)))
+}
+
+/// With Lumos World Map on: the waypoint files read again when it changed them (once a second,
+/// while this mod's screen is closed).
+fn follow_book_file(s: &mut State) {
+    if s.book_at.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+        return;
+    }
+    s.book_at = Some(Instant::now());
+    let now = book_times(s);
+    if now == s.book_seen.get() {
+        return;
+    }
+    s.book_seen.set(now);
+    let Some(dir) = &s.world_dir else {
+        return;
+    };
+    let all_sets = s.book.all_sets;
+    s.book = std::fs::read_to_string(dir.join("waypoints.txt")).map(|t| m::Book::from_text(&t)).unwrap_or_default();
+    if let Some(g) = &s.global_path
+        && let Ok(t) = std::fs::read_to_string(g)
+    {
+        s.book.merge_global(m::Book::from_text(&t));
+    }
+    s.book.all_sets = all_sets;
+    s.screen.selected.clear();
 }
 
 /// Writes `rgba` (`w` x `h`) into the mod image slot at `at`.
@@ -932,6 +1011,24 @@ fn follow_spawn(game: &Game<'_>, s: &mut State) {
         return;
     }
     s.spawn_checked = Some(Instant::now());
+    // Lumos World Map chooses the server's map (it can ask which one): its choice, from the
+    // sub-worlds file both keep.
+    if world_map_on(game) {
+        let dim = game.dim.id();
+        let Some((dir, subs)) = s.subworlds.as_mut() else {
+            return;
+        };
+        let file = m::SubWorlds::from_text(&std::fs::read_to_string(dir.join("subworlds.txt")).unwrap_or_default());
+        if file.current_name() != subs.current_name() || file.list.len() != subs.list.len() {
+            let sub = sub_dir(dir, file.current_name());
+            let switch = file.current_name() != subs.current_name();
+            *subs = file;
+            if switch {
+                open_world(s, sub, dim);
+            }
+        }
+        return;
+    }
     // "Server maps: Single": one map, whatever the spawn.
     if settings(game).map_mode == 1 {
         return;
@@ -996,6 +1093,7 @@ fn open_world(s: &mut State, dir: PathBuf, dim: &'static str) {
         s.screen.selected.clear();
         s.cave_types = m::CaveTypes::from_text(&std::fs::read_to_string(dir.join("cave-maps.txt")).unwrap_or_default());
         s.world_dir = Some(dir.clone());
+        s.book_seen.set(book_times(s));
     }
     s.explored = Some(Explored::open(&dir, dim));
     s.cave = None;
@@ -1351,6 +1449,31 @@ fn map_rect(w: f32, h: f32) -> [f32; 4] {
 
 fn map_open(game: &Game<'_>) -> bool {
     game.native_mod_screen() == Some(m::ID)
+}
+
+/// Lumos World Map, which takes over the world map when it is built into this game and on.
+/// The two share files and settings only, so either builds without the other.
+const WORLD_MAP: &str = "lumos_world_map";
+
+fn world_map_on(game: &Game<'_>) -> bool {
+    option_env!("HORIZON_MIXIN_MODS").is_some_and(|l| l.split(',').any(|id| id.trim() == WORLD_MAP))
+        && ::horizon_core::lumos_mods::on(WORLD_MAP)
+        && game.native_on(WORLD_MAP)
+}
+
+/// One of Lumos World Map's switches (its settings file).
+fn world_map_flag(game: &Game<'_>, key: &str) -> bool {
+    game.native_setting(WORLD_MAP, key).is_none_or(|v| v.trim() != "false")
+}
+
+/// M and the map page open Lumos World Map instead of this mod's world map.
+fn hands_map(game: &Game<'_>) -> bool {
+    world_map_on(game) && world_map_flag(game, "take_m")
+}
+
+/// The enlarge key opens Lumos World Map instead of enlarging the minimap.
+fn hands_enlarge(game: &Game<'_>) -> bool {
+    world_map_on(game) && world_map_flag(game, "enlarge_opens")
 }
 
 fn look(settings: &m::Settings) -> m::Look {
@@ -1736,7 +1859,14 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
         game.send_command(&command);
         return;
     }
-    let held = keys::held(game, keys::ENLARGE);
+    // With Lumos World Map: the map page is its screen (the list, editor and settings stay here).
+    if open && hands_map(game) && with(|s| s.screen.page == m::Page::Map) {
+        game.native_mod_screen_close(m::ID);
+        game.native_mod_screen_open(WORLD_MAP);
+        return;
+    }
+    let handed = world_map_on(game);
+    let held = keys::held(game, keys::ENLARGE) && !hands_enlarge(game);
     let mut reached = None;
     with(|s| {
         s.big = settings.minimap && if settings.enlarge_toggle { s.big_toggled } else { held && game.native_playing() };
@@ -1760,6 +1890,13 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
             .flatten();
         follow_world(game, s);
         follow_spawn(game, s);
+        if let Some(e) = s.explored.as_mut() {
+            e.handed = handed;
+            e.reread = settings.wm_chunks;
+        }
+        if handed && !open {
+            follow_book_file(s);
+        }
         explore(game, s, if open { BUDGET_OPEN } else { BUDGET });
         if std::mem::take(&mut s.pending_export) {
             export_png(game, s, &settings);
@@ -1912,6 +2049,10 @@ pub(super) fn on_key(game: &mut Game<'_>, key: &str, pressed: bool) {
         return;
     }
     if !game.native_playing() {
+        return;
+    }
+    if (hands_map(game) && keys::pressed(game, keys::MAP, key, true)) || (hands_enlarge(game) && keys::pressed(game, keys::ENLARGE, key, true)) {
+        game.native_mod_screen_open(WORLD_MAP);
         return;
     }
     let page = if keys::pressed(game, keys::MAP, key, true) {
@@ -3100,6 +3241,8 @@ pub(super) fn on_render(game: &Game<'_>, batch: &mut HudBatch, screen: &NativeSc
     game.native_fill(batch, [0.0, 0.0, w, h], if over_world { 0x9010_1014 } else { 0xFF10_1014 });
     let settings = settings(game);
     with(|s| match s.screen.page.clone() {
+        // Handed to Lumos World Map (the frame hook opens it).
+        m::Page::Map if hands_map(game) => {}
         m::Page::Map => draw_map(game, batch, s, &settings, mouse),
         m::Page::List { scroll } => draw_list(game, batch, s, &settings, scroll, mouse),
         m::Page::Edit { form, draft: Some(d), .. } => draw_edit(game, batch, &d.wp, true, &form, mouse),
