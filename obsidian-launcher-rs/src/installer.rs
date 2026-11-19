@@ -342,7 +342,7 @@ pub struct CatalogEntry {
 }
 
 /// Fabric supports Minecraft 1.14 and newer (and every year-numbered release).
-fn fabric_supports(mc: &str) -> bool {
+pub(crate) fn fabric_supports(mc: &str) -> bool {
     let mut it = mc.split('.').filter_map(|p| p.parse::<u32>().ok());
     match (it.next(), it.next()) {
         (Some(1), Some(minor)) => minor >= 14,

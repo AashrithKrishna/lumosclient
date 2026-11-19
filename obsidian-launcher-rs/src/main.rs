@@ -39,6 +39,9 @@ mod curseforge;
 mod discover;
 // The in-game Discover's requests between runs (lumos-mods/lumos_discover).
 mod ingame_requests;
+// Instances from other launchers (import.rs, IMPORT-PLAN.md); sqlite_ro reads the Modrinth App's database.
+mod import;
+mod sqlite_ro;
 
 const HORIZON_ID: &str = "Horizon 26.3 (Rust)";
 const LAUNCHER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -169,6 +172,10 @@ struct LauncherConfig {
     /// owner-only; never sent to the page or logged).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     curseforge_api_key: String,
+    /// The getting-started guide was shown once (finished or skipped). Settings files from
+    /// before the guide count as seen: those players already know the launcher.
+    #[serde(default)]
+    guide_seen: bool,
 }
 
 fn default_player_name() -> String {
@@ -569,6 +576,7 @@ impl AppState {
             // Never overwrite settings we couldn't read: keep a copy for recovery.
             let _ = fs::copy(&cfg_path, base_dir.join(format!("launcher.json.unreadable-{}", now_millis())));
         }
+        let known_player = parsed.is_some() && raw.as_deref().is_some_and(|r| !r.contains("\"guideSeen\""));
         let mut config = parsed.unwrap_or_else(|| LauncherConfig {
                 player_name: "Player".into(),
                 minecraft_dir: official.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
@@ -603,7 +611,11 @@ impl AppState {
                 }],
                 servers: vec![],
                 curseforge_api_key: String::new(),
+                guide_seen: false,
             });
+        if known_player {
+            config.guide_seen = true;
+        }
         // Older builds pinned a Homebrew Java; LumosClient now downloads the right Java itself.
         if config.java_home.contains("/opt/homebrew/opt/openjdk") {
             config.java_home.clear();
@@ -756,6 +768,7 @@ impl AppState {
             "launcherVersion": LAUNCHER_VERSION,
             // feat/discover: only whether a key is saved, never the key.
             "curseforgeKeySet": !self.config.curseforge_api_key.trim().is_empty(),
+            "guideSeen": self.config.guide_seen,
         })
         .to_string()
     }
@@ -2691,6 +2704,105 @@ fn install_modpack_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<App
     });
 }
 
+// ───────────────────────── Import from other launchers ─────────────────────────
+
+/// Finds other launchers' instances (import.rs) and lists them in the import dialog.
+fn import_scan_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>) {
+    std::thread::spawn(move || {
+        let latest = lock(&shared).catalog.iter().find(|e| e.kind == "vanilla").map(|e| e.id.clone());
+        let payload = match import::Roots::system() {
+            Some(roots) => import::scan_json(&roots, latest.as_deref()),
+            None => json!({"items": [], "launchers": [], "error": "Couldn't find your home folder."}),
+        };
+        call_js(&proxy, "onImportScan", payload);
+    });
+}
+
+/// Copies the chosen instances into new Lumos instances, one after another, with progress in
+/// the task strip. Each becomes a normal profile only once its copy finished.
+fn import_run_async(proxy: EventLoopProxy<UserEvent>, shared: Arc<Mutex<AppState>>, keys: Vec<String>) {
+    let chosen = import::take(&keys);
+    if chosen.is_empty() {
+        call_js(&proxy, "onImportDone", json!({"results": [], "error": "That list is out of date. Look for instances again."}));
+        return;
+    }
+    {
+        let mut st = lock(&shared);
+        if st.task.is_some() || st.active_child.is_some() {
+            call_js(&proxy, "onImportDone", json!({"results": [], "error": "LumosClient is busy (a game is running or getting ready). Try again when it's done."}));
+            return;
+        }
+        st.task = Some(("Getting ready to copy".into(), -1.0));
+        push_state(&proxy, &st);
+    }
+    import::CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
+    std::thread::spawn(move || {
+        let reporter = TaskReporter::new(&proxy, &shared);
+        let (base_dir, latest) = {
+            let st = lock(&shared);
+            (st.base_dir.clone(), st.catalog.iter().find(|e| e.kind == "vanilla").map(|e| e.id.clone()))
+        };
+        let mut results = Vec::new();
+        let mut cancelled = false;
+        for f in &chosen {
+            let name: String = f.name.chars().take(40).collect();
+            let counts = import::counts(&f.game_dir);
+            let plan = import::plan(f, counts.mods, latest.as_deref());
+            let Some(target) = plan.target.clone() else {
+                results.push(json!({"name": name, "ok": false, "error": plan.notes.join(" ")}));
+                continue;
+            };
+            if cancelled {
+                results.push(json!({"name": name, "ok": false, "error": "Not copied: the import was cancelled."}));
+                continue;
+            }
+            reporter.report(&format!("Looking through {name}"), -1.0);
+            let collected = import::collect(f, &plan);
+            let mut id = format!("prof-{}", now_millis());
+            while lock(&shared).config.profiles.iter().any(|p| p.id == id) || base_dir.join("instances").join(&id).exists() {
+                id.push('x');
+            }
+            let dest = base_dir.join("instances").join(&id);
+            let total = collected.bytes.max(1);
+            let label = format!("Copying {name}");
+            let out = run_guarded(|| {
+                import::copy_into(&collected.items, &dest, &import::CANCEL, &|done| reporter.report(&label, done as f64 / total as f64))
+            });
+            match out {
+                Ok(()) => {
+                    {
+                        let mut st = lock(&shared);
+                        st.config.profiles.push(Profile { id: id.clone(), name: name.clone(), version: target.clone(), ..Default::default() });
+                        st.config.active_profile_id = id.clone();
+                        st.config.selected_version = target.clone();
+                        st.save_config();
+                        push_state(&proxy, &st);
+                    }
+                    let (copied, skipped) = import::summary(counts, &plan, collected.outside_links);
+                    reporter.log(&format!("[LumosClient] Imported {name} from {} into {target} ({}).", f.source.label(), dest.display()));
+                    results.push(json!({"name": name, "ok": true, "id": id, "target": if target == HORIZON_ID { "Horizon 26.3".to_owned() } else { target.clone() }, "copied": copied, "skipped": skipped}));
+                }
+                Err(e) => {
+                    // The folder is brand new and only holds this import's files.
+                    let _ = fs::remove_dir_all(&dest);
+                    cancelled = e == "cancelled";
+                    if !cancelled {
+                        push_log(&proxy, &format!("[LumosClient] import of {name}: {e}"));
+                    }
+                    results.push(json!({"name": name, "ok": false, "error": if cancelled { "Cancelled. Nothing was kept from this copy.".to_owned() } else { e }}));
+                }
+            }
+        }
+        {
+            let mut st = lock(&shared);
+            st.task = None;
+            push_state(&proxy, &st);
+        }
+        call_js(&proxy, "onTask", json!({"done": true}));
+        call_js(&proxy, "onImportDone", json!({"results": results, "cancelled": cancelled}));
+    });
+}
+
 fn url_encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
@@ -3165,6 +3277,20 @@ fn main() {
                     refresh_catalog_async(ipc_proxy.clone(), ipc_state.clone());
                     refresh_skin_async(ipc_proxy.clone(), ipc_state.clone());
                 }
+                "guide_seen" => {
+                    let mut st = ipc_state.lock().unwrap();
+                    if !st.config.guide_seen {
+                        st.config.guide_seen = true;
+                        st.save_config();
+                    }
+                }
+                // ── Import from other launchers (import.rs) ──
+                "import_scan" => import_scan_async(ipc_proxy.clone(), ipc_state.clone()),
+                "import_run" => {
+                    let keys: Vec<String> = v.get("keys").and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|k| k.as_str()).filter(|k| k.len() <= 40).take(200).map(str::to_owned).collect()).unwrap_or_default();
+                    import_run_async(ipc_proxy.clone(), ipc_state.clone(), keys);
+                }
+                "import_cancel" => import::CANCEL.store(true, std::sync::atomic::Ordering::Relaxed),
                 "set_player_name" => {
                     let name = text("name");
                     if valid_player_name(name.trim()) {

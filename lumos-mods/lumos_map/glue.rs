@@ -2772,13 +2772,17 @@ fn draw_waypoint_markers(game: &Game<'_>, batch: &mut HudBatch, s: &m::Settings)
     // Far ones first, so near ones are on top.
     shown.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     let centre = [w / 2.0, h / 2.0];
-    // The one nearest the crosshair (within reach) shows its name when names show "looked at".
+    // The one under the crosshair shows its name when names show "looked at": as Xaero's, the
+    // crosshair has to be on the marker (its size, a few units' margin), not merely near it.
     let looked = shown
         .iter()
         .enumerate()
         .filter(|(_, e)| !e.2)
-        .map(|(i, e)| (i, (e.1[0] - centre[0]).hypot(e.1[1] - centre[1])))
-        .filter(|&(_, r)| r < 40.0)
+        .map(|(i, e)| {
+            let reach = 4.5 * if s.wp_scale { m::marker_scale(e.0) } else { 1.0 } + 4.0;
+            (i, (e.1[0] - centre[0]).hypot(e.1[1] - centre[1]) - reach)
+        })
+        .filter(|&(_, r)| r < 0.0)
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(i, _)| i);
     for (i, (d, q, edge, angle, initials, name, rgb, always_name)) in shown.into_iter().enumerate() {

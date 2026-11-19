@@ -786,6 +786,8 @@
           <!-- Modpacks (modpack.rs) -->
           <button class="btn" data-act="import-modpack" title="Make a new instance from a Modrinth modpack (.mrpack)"><svg class="i sm"><use href="#i-download"/></svg>Import modpack</button>
           <input type="file" id="packFile" accept=".mrpack" hidden />
+          <!-- Import from other launchers (import.rs) -->
+          <button class="btn" data-act="import-launchers" title="Copy instances from the Minecraft Launcher, Prism, MultiMC, Modrinth App, CurseForge, SKLauncher or ATLauncher"><svg class="i sm"><use href="#i-copy"/></svg>Import from launcher</button>
           <button class="btn primary" data-act="new-instance"><svg class="i sm"><use href="#i-plus"/></svg>New instance</button>
         </div>
       </div>
@@ -1303,6 +1305,10 @@
               <div class="txt"><b>Official launcher versions</b><span class="mono" id="mcDirLabel">Not found</span></div>
               <span class="chip">Reused automatically</span>
             </div>
+            <div class="set-row" data-k="import other launcher prism multimc modrinth curseforge sklauncher atlauncher instances copy">
+              <div class="txt"><b>Import from another launcher</b><span>Copy instances, worlds and packs from launchers on this computer. The originals stay as they are.</span></div>
+              <button class="btn sm" data-act="import-launchers"><svg class="i sm"><use href="#i-copy"/></svg>Import</button>
+            </div>
             <div class="set-row" data-k="instance folder">
               <div class="txt"><b>Active instance</b><span class="mono" id="instDirLabel">instances/default</span></div>
               <button class="btn sm" data-act="open-folder" data-target="instance"><svg class="i sm"><use href="#i-folder"/></svg>Open</button>
@@ -1337,6 +1343,10 @@
               </div>
             </div>
             <!-- /feat/updater -->
+            <div class="set-row" data-k="getting started guide tour help welcome walkthrough">
+              <div class="txt"><b>Getting started</b><span>A short tour of names, instances, Discover, Horizon 26.3 and your folders.</span></div>
+              <button class="btn sm" data-act="guide-open"><svg class="i sm"><use href="#i-info"/></svg>Show the getting-started guide</button>
+            </div>
             <div class="set-row stack" data-k="keyboard shortcuts keys">
               <div class="txt"><b>Keyboard shortcuts</b></div>
               <div class="kbd-list">
@@ -2494,6 +2504,7 @@
     if (state.running) add('Actions', 'Stop the running game', 'stop', () => send('stop_process'));
     else add('Actions', `Launch ${state.selectedVersion}`, 'play', launch, '⌘↩');
     add('Actions', 'New instance', 'plus', openNewInstance);
+    if (window.lumosImport) add('Actions', 'Import instances from another launcher', 'copy', () => window.lumosImport.open());
     add('Actions', 'Refresh server ping', 'refresh', () => send('ping_all'));
     add('Actions', 'Open launcher folder', 'folder', () => send('open_folder', {}));
     add('Actions', 'Open active instance folder', 'folder', () => send('open_folder', { target: 'instance' }));
@@ -2502,6 +2513,7 @@
     (state.versions || []).forEach(v => add('Versions', 'Use ' + v, 'box', () => pickVersion(v), v === state.selectedVersion ? 'current' : ''));
     (state.profiles || []).forEach(p => add('Instances', 'Switch to ' + p.name, 'library', () => { selectProfile(p.id); }, p.id === state.activeProfileId ? 'active' : ''));
     (state.servers || []).forEach(s => add('Servers', 'Join ' + s.name, 'globe', () => join(s.address), s.address));
+    if (window.lumosGuide) add('Help', 'Show the getting-started guide', 'info', () => window.lumosGuide.open());
     return items;
   }
   function openPalette() {
@@ -2900,6 +2912,8 @@
     findMod(q) { ui.modLoaded = true; window.lumosDiscover.openBrowser('mod', q); },
     // feat/discover
     fmtNum, fmtAgo, pxSvg, profileIcon, selectProfile, ui,
+    // getting-started guide / import from other launchers
+    openAccount, openNewInstance, closePalette, closeSettings,
   };
   send('init', {});
 })();
@@ -4110,5 +4124,281 @@
 })();
 </script>
 <!-- ═════════════════ end feat/discover ═════════════════ -->
+<!-- ═════════════════ Import from other launchers (import.rs) and the getting-started guide ═════════════════ -->
+<style>
+  .imp-card { width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 64px); display: flex; flex-direction: column; }
+  .imp-card .imp-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 20px 20px 12px; }
+  .imp-card h2 { font-size: 18px; font-weight: 750; }
+  .imp-card .imp-head p { color: var(--fg-2); font-size: 12.5px; margin-top: 3px; line-height: 1.5; }
+  .imp-card .imp-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 20px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .imp-card .imp-foot { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); background: var(--bg-0); }
+  .imp-card .imp-foot .grow { flex: 1; min-width: 0; font-size: 11.5px; color: var(--fg-3); }
+  .imp-group { font-size: 10.5px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); padding: 8px 2px 0; }
+  .imp-row { display: flex; gap: 12px; align-items: flex-start; padding: 11px 12px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--line); }
+  .imp-row.on { border-color: rgba(var(--accent-rgb), .45); }
+  .imp-row.off { opacity: .62; }
+  .imp-row .switch { margin-top: 2px; flex: none; }
+  .imp-row .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+  .imp-row .nm { font-weight: 650; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .imp-row .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-2); }
+  .imp-row .meta svg.i { color: var(--fg-3); }
+  .imp-row .note { font-size: 12px; color: var(--fg-2); line-height: 1.45; }
+  .imp-row .note.warn { color: var(--warn); }
+  .imp-progress { display: flex; flex-direction: column; gap: 8px; padding: 18px 0 6px; font-size: 13px; font-weight: 600; }
+  .imp-progress .bar { height: 6px; border-radius: 6px; background: var(--bg-4); overflow: hidden; position: relative; }
+  .imp-progress .bar i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 6px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .25s var(--ease); }
+  .imp-progress.indeterminate .bar i { width: 35% !important; animation: slide 1.1s ease-in-out infinite; }
+  .imp-done { display: flex; gap: 10px; align-items: flex-start; padding: 11px 12px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--line); font-size: 12.5px; color: var(--fg-2); line-height: 1.5; }
+  .imp-done > svg.i { flex: none; margin-top: 2px; color: var(--ok); }
+  .imp-done.bad > svg.i { color: var(--bad); }
+  .imp-done b { color: var(--fg-1); }
+
+  .guide-card { width: min(520px, calc(100vw - 32px)); display: flex; flex-direction: column; }
+  .guide-card .g-top { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 0; }
+  .guide-dots { display: flex; gap: 6px; }
+  .guide-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--bg-4); transition: background .15s var(--ease), width .15s var(--ease); }
+  .guide-dots i.on { width: 20px; border-radius: 4px; background: var(--accent); }
+  .guide-card .g-body { padding: 18px 26px 6px; display: flex; flex-direction: column; gap: 12px; min-height: 230px; }
+  .guide-card .g-ic { width: 46px; height: 46px; border-radius: 13px; display: grid; place-items: center; background: rgba(var(--accent-rgb), .14); color: var(--accent); }
+  .guide-card .g-ic svg.i { width: 22px; height: 22px; }
+  .guide-card h2 { font-size: 19px; font-weight: 750; }
+  .guide-card p { color: var(--fg-2); font-size: 13.5px; line-height: 1.55; }
+  .guide-card p b { color: var(--fg-1); font-weight: 650; }
+  .guide-card .g-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+  .guide-card .g-foot { display: flex; align-items: center; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--line); margin-top: 14px; }
+  .guide-card .g-foot .grow { flex: 1; font-size: 11.5px; color: var(--fg-3); }
+</style>
+<script>
+(() => {
+  'use strict';
+  const L = window.lumosUi;
+  if (!L) return;
+  const { $, esc, icon, toast, send } = L;
+
+  // A dialog made once, on first use, like the other feature dialogs.
+  function makeScrim(id, cls, label) {
+    let el = $(id);
+    if (!el) {
+      el = document.createElement('div');
+      el.id = id; el.className = 'scrim';
+      el.innerHTML = `<div class="modal ${cls}" role="dialog" aria-modal="true" aria-label="${esc(label)}" id="${id}Card"></div>`;
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+  const isOpen = id => !!($(id) && $(id).classList.contains('open'));
+  const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
+
+  // ───────────── Import from other launchers ─────────────
+  // import_scan → onImportScan (what was found), import_run → task progress → onImportDone.
+  const imp = { phase: 'idle', data: null, picked: new Set(), progress: null, done: null };
+
+  function openImport() {
+    L.closePalette(); L.closeSettings();
+    makeScrim('impScrim', 'imp-card', 'Import from another launcher').classList.add('open');
+    if (imp.phase !== 'copying') { imp.phase = 'scanning'; imp.done = null; send('import_scan'); }
+    renderImport();
+  }
+  function closeImport() { if ($('impScrim')) $('impScrim').classList.remove('open'); }
+
+  function counts(it) {
+    const parts = [];
+    if (it.worlds) parts.push(plural(it.worlds, 'world'));
+    if (it.mods) parts.push(plural(it.mods, 'mod'));
+    if (it.resourcepacks) parts.push(plural(it.resourcepacks, 'resource pack'));
+    if (it.shaderpacks) parts.push(plural(it.shaderpacks, 'shader pack'));
+    return parts.join(' · ') || 'Settings only';
+  }
+
+  function renderImport() {
+    const card = $('impScrimCard'); if (!card) return;
+    const head = (title, sub) => `<div class="imp-head"><div><h2>${title}</h2><p>${sub}</p></div><button class="btn ghost icon" data-act="imp-close" aria-label="Close">${icon('x', '')}</button></div>`;
+    const keep = 'Lumos copies. Nothing in the other launcher is changed or removed.';
+    if (imp.phase === 'scanning') {
+      card.innerHTML = head('Import from another launcher', keep)
+        + `<div class="imp-body"><div class="empty"><span class="spinner"></span><span>Looking for other launchers on this computer…</span></div></div>`;
+      return;
+    }
+    if (imp.phase === 'copying') {
+      const p = imp.progress || { label: 'Getting ready to copy', fraction: -1 };
+      const indet = !(p.fraction >= 0);
+      const pct = indet ? 0 : Math.round(Math.min(1, p.fraction) * 100);
+      card.innerHTML = head('Importing…', 'Big worlds take a while. You can close this window: the copy keeps going, with its progress at the top of Lumos.')
+        + `<div class="imp-body"><div class="imp-progress ${indet ? 'indeterminate' : ''}"><span>${esc(p.label)}${indet ? '…' : ` · ${pct}%`}</span><div class="bar"><i style="width:${pct}%"></i></div></div></div>`
+        + `<div class="imp-foot"><span class="grow">${esc(keep)}</span><button class="btn danger" data-act="imp-cancel">${icon('x')}Stop copying</button><button class="btn" data-act="imp-close">Hide</button></div>`;
+      return;
+    }
+    if (imp.phase === 'done' && imp.done) {
+      const d = imp.done;
+      const rows = (d.results || []).map(r => r.ok
+        ? `<div class="imp-done">${icon('check', '')}<div><b>${esc(r.name)}</b> is ready as a ${esc(r.target)} instance.`
+          + (r.copied && r.copied.length ? `<br>Copied: ${esc(r.copied.join(', '))}.` : '')
+          + (r.skipped && r.skipped.length ? `<br>Skipped: ${esc(r.skipped.join('; '))}.` : '') + `</div></div>`
+        : `<div class="imp-done bad">${icon('alert', '')}<div><b>${esc(r.name)}</b>: ${esc(r.error || 'not imported')}</div></div>`).join('');
+      const okCount = (d.results || []).filter(r => r.ok).length;
+      card.innerHTML = head(okCount ? 'Import finished' : 'Nothing was imported', okCount ? 'The last one is now your active instance. Anything the game still needs downloads when you press Play.' : keep)
+        + `<div class="imp-body">${d.error ? `<div class="imp-done bad">${icon('alert', '')}<div>${esc(d.error)}</div></div>` : ''}${rows}</div>`
+        + `<div class="imp-foot"><span class="grow"></span><button class="btn" data-act="imp-rescan">Import more</button>${okCount ? `<button class="btn primary" data-act="imp-library">${icon('library')}Open Library</button>` : `<button class="btn primary" data-act="imp-close">Close</button>`}</div>`;
+      return;
+    }
+    const d = imp.data || { items: [], launchers: [] };
+    if (d.error || !d.items.length) {
+      const where = d.launchers.length ? `Found ${d.launchers.map(l => esc(l.name)).join(', ')}, but no instances with worlds, packs or settings to copy.` : 'Lumos looked for the Minecraft Launcher, Prism Launcher, MultiMC, Modrinth App, CurseForge, SKLauncher and ATLauncher in their usual folders and found none.';
+      card.innerHTML = head('Import from another launcher', keep)
+        + `<div class="imp-body"><div class="empty">${icon('copy', '')}<b>No instances to import</b><span>${esc(d.error || '')} ${where}</span><span class="faint">Got a Modrinth modpack file? Use Import modpack in the Library.</span></div></div>`
+        + `<div class="imp-foot"><span class="grow"></span><button class="btn" data-act="imp-rescan">${icon('refresh')}Look again</button><button class="btn primary" data-act="imp-close">Close</button></div>`;
+      return;
+    }
+    let html = '', last = '';
+    d.items.forEach(it => {
+      if (it.source !== last) { html += `<div class="imp-group">${esc(it.source)}</div>`; last = it.source; }
+      const can = !!it.target, on = can && imp.picked.has(it.key);
+      const ver = it.mc ? `${esc(it.mc)}${it.loader && it.loader !== 'Vanilla' ? ' · ' + esc(it.loader) : ''}` : 'Unknown version';
+      const notes = (it.notes || []).map(n => `<div class="note ${it.fallback || !can ? 'warn' : ''}">${esc(n)}</div>`).join('');
+      html += `<label class="imp-row ${on ? 'on' : ''} ${can ? '' : 'off'}" title="${esc(it.path)}">`
+        + `<span class="switch"><input type="checkbox" data-imp-key="${esc(it.key)}" ${on ? 'checked' : ''} ${can ? '' : 'disabled'} aria-label="Import ${esc(it.name)}" /><span></span></span>`
+        + `<span class="grow"><span class="nm">${esc(it.name)}</span>`
+        + `<span class="meta"><span class="chip mono">${ver}</span>${can ? `${icon('chev-right')}<span class="chip accent">${esc(it.targetLabel)}</span>` : ''}<span>${esc(counts(it))}</span></span>`
+        + notes + `</span></label>`;
+    });
+    const n = d.items.filter(it => it.target && imp.picked.has(it.key)).length;
+    card.innerHTML = head('Import from another launcher', 'Pick the instances to bring over. Each becomes a new Lumos instance with a copy of its worlds, packs and settings.')
+      + `<div class="imp-body">${html}</div>`
+      + `<div class="imp-foot"><span class="grow">${esc(keep)}</span><button class="btn" data-act="imp-close">Cancel</button><button class="btn primary" data-act="imp-run" ${n ? '' : 'disabled'}>${icon('copy')}${n ? `Import ${plural(n, 'instance')}` : 'Import'}</button></div>`;
+  }
+
+  window.onImportScan = function (d) {
+    imp.data = d || { items: [], launchers: [] };
+    // Ticked to start: everything that keeps its own version and loader. A fallback (worlds
+    // and packs only) waits for the player to tick it.
+    imp.picked = new Set((imp.data.items || []).filter(it => it.target && !it.fallback).map(it => it.key));
+    if (imp.phase === 'scanning') imp.phase = 'list';
+    renderImport();
+  };
+  window.onImportDone = function (d) {
+    imp.phase = 'done'; imp.done = d || { results: [] }; imp.progress = null;
+    const ok = (imp.done.results || []).filter(r => r.ok).length;
+    if (isOpen('impScrim')) renderImport();
+    else if (ok) toast(`Imported ${plural(ok, 'instance')}. The last one is now active.`);
+    else if (imp.done.error) toast(imp.done.error, 'err');
+    if (!isOpen('impScrim') && (imp.done.results || []).some(r => !r.ok)) { makeScrim('impScrim', 'imp-card', 'Import from another launcher').classList.add('open'); renderImport(); }
+  };
+  // The task strip's progress, mirrored in the dialog while it copies.
+  const prevOnTask = window.onTask;
+  window.onTask = function (t) {
+    prevOnTask && prevOnTask(t);
+    if (imp.phase === 'copying' && t && t.label) { imp.progress = { label: t.label, fraction: t.fraction }; if (isOpen('impScrim')) renderImport(); }
+  };
+
+  document.addEventListener('change', (e) => {
+    const k = e.target && e.target.dataset && e.target.dataset.impKey;
+    if (!k) return;
+    e.target.checked ? imp.picked.add(k) : imp.picked.delete(k);
+    renderImport();
+  });
+
+  // ───────────── Getting-started guide ─────────────
+  const mac = /Mac/i.test(navigator.platform || navigator.userAgent || '');
+  const steps = [
+    { ic: 'user', title: 'Welcome to Lumos', text: 'First, the name you play as. Play <b>offline</b> with any name (3–16 letters, numbers or _), or sign in with <b>Ely.by</b> to use skins and capes. Your avatar at the bottom of the side bar changes it any time.',
+      acts: [['guide-account', 'user', 'Choose your name']] },
+    { ic: 'library', title: 'Your instances', text: 'An instance is one game setup with its own version, mods, packs, worlds and settings. Make one with <b>New instance</b> in the Library, or bring yours over from another launcher: Lumos copies them and leaves the originals alone.',
+      acts: [['guide-import', 'copy', 'Import from another launcher'], ['guide-new', 'plus', 'New instance']] },
+    { ic: 'compass', title: 'Discover', text: 'Find mods, resource packs, shaders and modpacks in <b>Discover</b>. Lumos checks each mod against your instance before installing it and tells you when something clashes or is missing.',
+      acts: [['guide-discover', 'compass', 'Open Discover']] },
+    { ic: 'engine', title: 'Horizon 26.3', text: '<b>Horizon 26.3</b> is Lumos’s own all-in-one 26.3 game, written in Rust. It sets itself up the first time you press Play. Its mods are native: add and switch them in the instance’s <b>Mods</b> tab, or press <b>Right Ctrl</b> in game to open Discover there.',
+      acts: [] },
+    { ic: 'folder', title: 'Your files', text: 'The <b>folder button</b> on an instance’s page opens its folder. <b>Settings › Storage</b> has buttons straight to Worlds, Mods, Resource packs, Shaders and Screenshots.',
+      acts: [['guide-storage', 'gear', 'Open Settings › Storage']] },
+  ];
+  if (mac) steps.push({ ic: 'alert', title: 'If macOS blocks Lumos', text: 'Lumos isn’t signed by Apple, so macOS may say it can’t be opened. If it does, <b>right-click</b> (or Control-click) Lumos.app, choose <b>Open</b>, then <b>Open</b> again.', acts: [] });
+  const g = { i: 0, auto: false };
+
+  function openGuide() {
+    L.closePalette(); L.closeSettings();
+    g.i = 0;
+    makeScrim('guideScrim', 'guide-card', 'Getting started').classList.add('open');
+    renderGuide();
+  }
+  // Closing it any way (Skip, Esc, the last step, an action) counts as seen.
+  function closeGuide() {
+    if (!isOpen('guideScrim')) return;
+    $('guideScrim').classList.remove('open');
+    markSeen();
+  }
+  function markSeen() { if (!L.getState().guideSeen) { L.getState().guideSeen = true; send('guide_seen'); } }
+  function move(d) { g.i = Math.max(0, Math.min(steps.length - 1, g.i + d)); renderGuide(); }
+  function renderGuide() {
+    const s = steps[g.i], last = g.i === steps.length - 1;
+    $('guideScrimCard').innerHTML =
+      `<div class="g-top"><div class="guide-dots" aria-hidden="true">${steps.map((_, i) => `<i class="${i === g.i ? 'on' : ''}"></i>`).join('')}</div>`
+      + `<button class="btn ghost sm" data-act="guide-skip">Skip</button></div>`
+      + `<div class="g-body"><div class="g-ic">${icon(s.ic, '')}</div><h2 id="guideTitle">${esc(s.title)}</h2><p>${s.text}</p>`
+      + (s.acts.length ? `<div class="g-acts">${s.acts.map(([act, ic, label]) => `<button class="btn sm" data-act="${act}">${icon(ic)}${esc(label)}</button>`).join('')}</div>` : '')
+      + `</div><div class="g-foot"><span class="grow">${g.i + 1} of ${steps.length} · <kbd>←</kbd> <kbd>→</kbd> to move, <kbd>esc</kbd> to skip</span>`
+      + (g.i ? `<button class="btn" data-act="guide-back">Back</button>` : '')
+      + `<button class="btn primary" data-act="${last ? 'guide-finish' : 'guide-next'}">${last ? 'Start playing' : 'Next'}${last ? '' : icon('chev-right')}</button></div>`;
+    $('guideScrimCard').setAttribute('aria-labelledby', 'guideTitle');
+    const btn = $('guideScrimCard').querySelector('.g-foot .btn.primary'); if (btn) btn.focus({ preventScroll: true });
+  }
+  // The first time Lumos opens (launcher.json without guideSeen), once the state has arrived.
+  const prevRender = window.renderState;
+  window.renderState = function (next) {
+    prevRender(next);
+    if (!g.auto && next && next.guideSeen === false) {
+      g.auto = true;
+      setTimeout(() => { if (!document.querySelector('.scrim.open')) openGuide(); }, 400);
+    }
+  };
+
+  document.addEventListener('click', (e) => {
+    // A click on the dim backdrop closes a dialog (the main handler hides it): the guide counts as seen.
+    if (e.target === $('guideScrim')) { markSeen(); return; }
+    const el = e.target.closest('[data-act]');
+    if (!el) return;
+    const act = el.dataset.act;
+    const thenClose = (f) => { closeGuide(); toast('Open this guide again any time from ⌘K or Settings › About.', 'info'); f(); };
+    switch (act) {
+      case 'import-launchers': openImport(); break;
+      case 'imp-close': closeImport(); break;
+      case 'imp-rescan': imp.phase = 'scanning'; imp.done = null; send('import_scan'); renderImport(); break;
+      case 'imp-run': {
+        const keys = [...imp.picked].filter(k => ((imp.data && imp.data.items) || []).some(it => it.key === k && it.target));
+        if (!keys.length) break;
+        if (L.getState().task || L.getState().running) { toast('Lumos is busy. Try again when the game has closed or finished getting ready.', 'err'); break; }
+        imp.phase = 'copying'; imp.progress = null;
+        send('import_run', { keys });
+        renderImport();
+        break;
+      }
+      case 'imp-cancel': send('import_cancel'); el.disabled = true; el.textContent = 'Stopping…'; break;
+      case 'imp-library': closeImport(); L.go('library'); break;
+      case 'guide-open': openGuide(); break;
+      case 'guide-skip': case 'guide-finish': closeGuide(); break;
+      case 'guide-next': move(1); break;
+      case 'guide-back': move(-1); break;
+      case 'guide-account': thenClose(() => setTimeout(() => L.openAccount(), 0)); break;
+      case 'guide-import': thenClose(openImport); break;
+      case 'guide-new': thenClose(() => { L.go('library'); L.openNewInstance(); }); break;
+      case 'guide-discover': thenClose(() => L.go('discover')); break;
+      case 'guide-storage': thenClose(() => L.openSettings('storage')); break;
+    }
+  });
+  // Capture phase: these dialogs sit on top, so their keys win over the pages' shortcuts.
+  document.addEventListener('keydown', (e) => {
+    if (isOpen('guideScrim')) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeGuide(); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); e.stopImmediatePropagation(); move(1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopImmediatePropagation(); move(-1); }
+      return;
+    }
+    if (isOpen('impScrim') && e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeImport(); }
+  }, true);
+
+  window.lumosImport = { open: openImport };
+  window.lumosGuide = { open: openGuide };
+})();
+</script>
+<!-- ═════════════════ end import / guide ═════════════════ -->
 </body>
 </html>
