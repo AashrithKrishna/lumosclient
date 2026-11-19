@@ -1,0 +1,15 @@
+diff --git a/crates/horizon-client/src/game.rs b/crates/horizon-client/src/game.rs
+index a95d377637..c9d96e4794 100644
+--- a/crates/horizon-client/src/game.rs
++++ b/crates/horizon-client/src/game.rs
+@@ -9406,7 +9406,9 @@ impl Game<'_> {
+         let depth_far =
+             horizon_client::camera::depth_far(terrain_distance, self.settings.cloud_range);
+         // Only native mods read it: no matrices or allocation per frame without one.
+-        let mods_read_camera = !horizon_client::mod_api::mods().is_empty();
++        // Lumos: native mods read it too (Lumos Map's waypoint markers), not only
++        // registry mods; with none of those it was never kept and the markers never drew.
++        let mods_read_camera = true;
+         self.screen_blur_requested.set(false);
+         self.native_camera_frame = (mods_read_camera && !title).then(|| {
+             let partial = camera_alpha as f32;

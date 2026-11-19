@@ -71,6 +71,7 @@ pub const OWN: &[(&str, &str, &str, &[&str])] = &[
     ("lumos_paginated_advancements", "Paginated Advancements", "Pages for the advancement tabs, so no tab is ever cut off.", &["utility"]),
     ("lumos_hud", "LumosHUD", "Lunar-style HUD modules (FPS, CPS, keystrokes, armour, effects and more). Right Shift opens the editor.", &["utility", "decoration"]),
     ("lumos_discover", "Lumos Discover", "Browse and install mods, resource packs and shaders from inside the game.", &["utility"]),
+    ("lumos_item_scroller", "Item Scroller", "Move items with the mouse wheel and mass clicks, recipe slots with mass crafting, and favourite villager trades.", &["utility"]),
 ];
 
 // ── colours (ARGB) ──

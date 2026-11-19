@@ -1,0 +1,57 @@
+diff --git a/crates/horizon-client/src/game/remote.rs b/crates/horizon-client/src/game/remote.rs
+index f5bfa18ea9..e5936099e8 100644
+--- a/crates/horizon-client/src/game/remote.rs
++++ b/crates/horizon-client/src/game/remote.rs
+@@ -6059,6 +6059,7 @@ impl Game<'_> {
+             self.mining = None;
+             return Ok(());
+         }
++        let had_player = self.player.is_some();
+         match self.player.as_mut() {
+             Some(player) => {
+                 player.position = position;
+@@ -6081,7 +6082,19 @@ impl Game<'_> {
+             }
+         }
+         if !self.replay.playing() {
+-            self.previous_position = position;
++            // Lumos: setValuesFromPositionPacket gives the old position the same
++            // change (setOldPosAndRot after calculateAbsolute), so a relative axis
++            // keeps its interpolation and only an absolute one snaps.
++            self.previous_position = if had_player {
++                let o = self.previous_position;
++                Vec3::new(
++                    pick(rel::X, o.x, p.position[0]),
++                    pick(rel::Y, o.y, p.position[1]),
++                    pick(rel::Z, o.z, p.position[2]),
++                )
++            } else {
++                position
++            };
+         }
+         self.yaw = yaw;
+         self.pitch = pitch;
+@@ -9452,7 +9465,10 @@ impl Game<'_> {
+     /// look rotation before sending action 8, reports PvP reach and combo tracking if a mob
+     /// is within range, and executes the jab.
+     fn remote_spear_attack(&mut self, kinetic: horizon_client::spear::Kinetic) -> bool {
+-        self.remote_sync_look();
++        // Lumos: vanilla's piercingAttack sends only the STAB; the look goes with
++        // the tick's movement packet. An extra movement packet here counts as a
++        // client tick to server anticheats and, mid-lunge, brings about a second
++        // of setbacks (the camera stepping at 20 Hz).
+         if let Some((i, distance, _)) = self.mob_hit()
+             && self.before_block(distance)
+             && self.held_range_allows(distance)
+diff --git a/crates/horizon-client/src/game/spear.rs b/crates/horizon-client/src/game/spear.rs
+index ce827600fe..d23c567980 100644
+--- a/crates/horizon-client/src/game/spear.rs
++++ b/crates/horizon-client/src/game/spear.rs
+@@ -458,6 +458,7 @@ impl Game<'_> {
+ 
+     /// Synchronize look rotation before sending a spear jab so the server
+     /// raycasts along the player's updated look direction.
++    #[allow(dead_code)] // Lumos: no longer sent before a jab (engine patch 07).
+     pub(super) fn remote_sync_look(&mut self) {
+         let (yaw, pitch) = (self.yaw, self.pitch);
+         let (riding, controls) = (self.riding.is_some(), self.controls_camera());
