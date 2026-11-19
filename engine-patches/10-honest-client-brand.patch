@@ -1,0 +1,27 @@
+diff --git a/crates/horizon-client/src/net.rs b/crates/horizon-client/src/net.rs
+index d091ffcfd2..abc0f797b2 100644
+--- a/crates/horizon-client/src/net.rs
++++ b/crates/horizon-client/src/net.rs
+@@ -1284,10 +1284,11 @@ fn receive_brand(payload: &cfg::CustomPayload, send: &Sender<Event>) {
+     }
+ }
+ 
+-/// `ClientBrandRetriever.getClientModName`: vanilla's default client brand.
++/// The brand servers see: honestly "horizon", not vanilla's, so anticheats don't take a
++/// non-vanilla client for a brand spoofer.
+ fn brand() -> Vec<u8> {
+     let mut w = horizon_protocol::buf::Writer::new();
+-    w.string("vanilla");
++    w.string("horizon");
+     w.data
+ }
+ 
+@@ -1655,7 +1656,7 @@ mod tests {
+                 cfg::Serverbound::decode(id, &body).unwrap(),
+                 cfg::Serverbound::CustomPayload(cfg::CustomPayload {
+                     channel: "minecraft:brand".into(),
+-                    data: b"\x07vanilla".to_vec(),
++                    data: b"\x07horizon".to_vec(),
+                 })
+             );
+             let (id, body) = server.recv().unwrap();
