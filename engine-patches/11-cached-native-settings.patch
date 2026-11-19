@@ -1,0 +1,127 @@
+diff --git a/crates/horizon-client/src/game/native_hooks.rs b/crates/horizon-client/src/game/native_hooks.rs
+index 1a94960b3f..f51a107843 100644
+--- a/crates/horizon-client/src/game/native_hooks.rs
++++ b/crates/horizon-client/src/game/native_hooks.rs
+@@ -1067,10 +1067,50 @@ use std::{
+     collections::HashMap,
+     fs,
+     path::{Path, PathBuf},
+-    sync::Arc,
+-    time::Duration,
++    sync::{Arc, Mutex, OnceLock},
++    time::{Duration, Instant},
+ };
+ use winit::{event::MouseButton, keyboard::KeyCode};
++/// How long `native_setting` trusts a value it read from disk.
++const SETTING_FRESH: Duration = Duration::from_secs(1);
++/// Mods' settings by file: when each was read and what it held (None: no
++/// file). One for the whole process, so the window and its server thread see
++/// each other's `native_set_setting`.
++type SettingCache = Mutex<HashMap<PathBuf, (Instant, Option<String>)>>;
++fn setting_cache() -> &'static SettingCache {
++    static CACHE: OnceLock<SettingCache> = OnceLock::new();
++    CACHE.get_or_init(Default::default)
++}
++/// The setting in `path` as `read` gives it, read again only when the kept one
++/// is `SETTING_FRESH` old or older.
++fn cached_setting(
++    cache: &SettingCache,
++    path: PathBuf,
++    now: Instant,
++    read: impl FnOnce(&Path) -> Option<String>,
++) -> Option<String> {
++    if let Some((at, value)) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&path)
++        && now.saturating_duration_since(*at) < SETTING_FRESH
++    {
++        return value.clone();
++    }
++    let value = read(&path);
++    cache
++        .lock()
++        .unwrap_or_else(|e| e.into_inner())
++        .insert(path, (now, value.clone()));
++    value
++}
++/// After `native_set_setting` wrote `value` to `path`: keep it as read now, or,
++/// when the write failed, forget the file so the next read goes to disk.
++fn remember_setting(cache: &SettingCache, path: PathBuf, now: Instant, written: bool, value: &str) {
++    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
++    if written {
++        cache.insert(path, (now, Some(value.trim().to_owned())));
++    } else {
++        cache.remove(&path);
++    }
++}
+ 
+ #[path = "native_screen_observer.rs"]
+ mod screen_observer;
+@@ -11465,15 +11505,24 @@ impl Game<'_> {
+     pub(super) fn native_built_data(&self, mod_id: &str) -> Option<PathBuf> {
+         horizon_client::native_data::built(mod_id)
+     }
+-    /// A mod's setting `key` (one file per key in `native_data_dir`).
++    /// A mod's setting `key` (one file per key in `native_data_dir`). Kept in
++    /// memory and read from disk again once it is a second old
++    /// (`SETTING_FRESH`), so mods that ask every frame cost no file reads; a
++    /// file changed outside `native_set_setting` (the launcher, another mod)
++    /// shows within that second.
+     pub(super) fn native_setting(&self, mod_id: &str, key: &str) -> Option<String> {
+         let path = self.native_data_dir(mod_id).join(key);
+-        fs::read_to_string(path).ok().map(|v| v.trim().to_owned())
++        cached_setting(setting_cache(), path, Instant::now(), |p| {
++            fs::read_to_string(p).ok().map(|v| v.trim().to_owned())
++        })
+     }
+-    /// Keeps a mod's setting `key`.
++    /// Keeps a mod's setting `key`. `native_setting` sees it at once, on every
++    /// thread.
+     pub(super) fn native_set_setting(&self, mod_id: &str, key: &str, value: &str) {
+         let dir = self.native_data_dir(mod_id);
+-        let _ = fs::create_dir_all(&dir).and_then(|()| fs::write(dir.join(key), value));
++        let path = dir.join(key);
++        let written = fs::create_dir_all(&dir).and_then(|()| fs::write(&path, value));
++        remember_setting(setting_cache(), path, Instant::now(), written.is_ok(), value);
+     }
+     /// The game's `config/` folder beside `options.txt`, shared by every mod
+     /// as on Fabric and NeoForge: a mod names its own files in it
+diff --git a/crates/horizon-client/src/game/native_hooks_tests.rs b/crates/horizon-client/src/game/native_hooks_tests.rs
+index bc99673e7f..4c2efa88db 100644
+--- a/crates/horizon-client/src/game/native_hooks_tests.rs
++++ b/crates/horizon-client/src/game/native_hooks_tests.rs
+@@ -888,3 +888,36 @@ fn a_mod_image_is_taken_whole_and_only_when_it_fits() {
+     assert!(!mod_image_fits(4, 2, 33, 1024, 1024));
+     assert!(!mod_image_fits(2048, 1, 2048 * 4, 1024, 1024));
+ }
++
++#[test]
++fn native_settings_are_kept_a_second_and_set_at_once() {
++    use super::{SETTING_FRESH, SettingCache, cached_setting, remember_setting};
++    use std::time::{Duration, Instant};
++    let dir = std::env::temp_dir().join(format!("horizon-setting-cache-{}", std::process::id()));
++    std::fs::create_dir_all(&dir).unwrap();
++    let path = dir.join("zoom");
++    let disk = |p: &std::path::Path| std::fs::read_to_string(p).ok().map(|v| v.trim().to_owned());
++    let cache = SettingCache::default();
++    let t0 = Instant::now();
++    // No file: None, as before, and kept.
++    assert_eq!(cached_setting(&cache, path.clone(), t0, disk), None);
++    std::fs::write(&path, " 2 \n").unwrap();
++    assert_eq!(cached_setting(&cache, path.clone(), t0 + Duration::from_millis(500), disk), None);
++    // A change outside the game shows once the kept value is a second old.
++    assert_eq!(cached_setting(&cache, path.clone(), t0 + SETTING_FRESH, disk).as_deref(), Some("2"));
++    std::fs::write(&path, "3").unwrap();
++    let t1 = t0 + SETTING_FRESH + Duration::from_millis(10);
++    assert_eq!(cached_setting(&cache, path.clone(), t1, disk).as_deref(), Some("2"));
++    // Not read from disk while fresh.
++    let t2 = t0 + SETTING_FRESH + Duration::from_millis(20);
++    assert_eq!(cached_setting(&cache, path.clone(), t2, |_| unreachable!()).as_deref(), Some("2"));
++    // native_set_setting's write is seen at once, trimmed as a read would be.
++    std::fs::write(&path, " 4\n").unwrap();
++    remember_setting(&cache, path.clone(), t2, true, " 4\n");
++    assert_eq!(cached_setting(&cache, path.clone(), t2, |_| unreachable!()).as_deref(), Some("4"));
++    // A failed write forgets the value: the next read goes to disk.
++    std::fs::write(&path, "5").unwrap();
++    remember_setting(&cache, path.clone(), t2, false, "6");
++    assert_eq!(cached_setting(&cache, path.clone(), t2, disk).as_deref(), Some("5"));
++    let _ = std::fs::remove_dir_all(&dir);
++}

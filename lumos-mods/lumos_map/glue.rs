@@ -25,7 +25,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-/// Scanning time a frame may take, with the map closed and open.
+/// Scanning time a frame may take, with the map closed and open. Closed, `m::Pace` cuts it to a
+/// share of the last frame and skips spike frames.
 const BUDGET: Duration = Duration::from_micros(700);
 const BUDGET_OPEN: Duration = Duration::from_micros(2500);
 /// The cave layer's scanning time a frame.
@@ -38,7 +39,8 @@ const NEAR_RESCAN: Duration = Duration::from_secs(2);
 const MIN_CHUNK_PX: f32 = 4.0;
 /// How often changed regions are written.
 const SAVE_EVERY: Duration = Duration::from_secs(30);
-/// Time a frame may spend drawing terrain cells, with the map closed and open.
+/// Time a frame may spend drawing terrain cells, with the map closed and open (closed: `m::Pace`
+/// too).
 const CELL_BUDGET: Duration = Duration::from_micros(800);
 const CELL_BUDGET_OPEN: Duration = Duration::from_micros(3000);
 
@@ -837,6 +839,10 @@ struct State {
     /// (with Lumos World Map on, which writes them too).
     book_seen: std::cell::Cell<(Option<std::time::SystemTime>, Option<std::time::SystemTime>)>,
     book_at: Option<Instant>,
+    /// The closed map's scanning and drawing time, following the frame rate, and when the last
+    /// frame began.
+    pace: m::Pace,
+    pace_at: Option<Instant>,
 }
 
 thread_local! {
@@ -1869,6 +1875,9 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
     let held = keys::held(game, keys::ENLARGE) && !hands_enlarge(game);
     let mut reached = None;
     with(|s| {
+        let now = Instant::now();
+        s.pace.frame(s.pace_at.map(|t| now - t));
+        s.pace_at = Some(now);
         s.big = settings.minimap && if settings.enlarge_toggle { s.big_toggled } else { held && game.native_playing() };
         follow_colours(game, s);
         if let Some(p) = s.palette.as_mut() {
@@ -1897,7 +1906,8 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
         if handed && !open {
             follow_book_file(s);
         }
-        explore(game, s, if open { BUDGET_OPEN } else { BUDGET });
+        let budget = if open { BUDGET_OPEN } else { s.pace.budget(BUDGET) };
+        explore(game, s, budget);
         if std::mem::take(&mut s.pending_export) {
             export_png(game, s, &settings);
         }
@@ -1929,7 +1939,8 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
             follow_cave(game, s, &settings);
             follow_light(game, s, &settings);
         }
-        draw_wanted_cells(game, s, &settings, if open { CELL_BUDGET_OPEN } else { CELL_BUDGET });
+        let budget = if open { CELL_BUDGET_OPEN } else { s.pace.budget(CELL_BUDGET) };
+        draw_wanted_cells(game, s, &settings, budget);
         s.icons.follow(game);
     });
     if let Some(text) = reached {

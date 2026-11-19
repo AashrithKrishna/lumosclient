@@ -1010,6 +1010,124 @@ pub fn frame(cfg: &Config, d: &Data, anim: &mut Anim, sw: f32, sh: f32, preview:
     out
 }
 
+// ── the last frame's layout, kept ──
+
+/// How long a kept layout is used at most before it is laid out again anyway (a resource
+/// reload can change the font's widths, which nothing here sees).
+const KEEP_FOR: f64 = 0.25;
+
+/// The modules as last laid out by `frame_kept`, and what from: laid out again only when
+/// something they show changed, so the HUD looks exactly as with `frame` every frame.
+#[derive(Clone, Debug, Default)]
+pub struct Kept {
+    /// The layout, the data, the screen size and the keystrokes' glow it was made from.
+    from: Option<(Config, Data, [f32; 2], [f32; 7])>,
+    at: f64,
+    placed: Vec<Placed>,
+    /// `placed` is with the glue being painted (and not given back yet).
+    lent: bool,
+}
+
+impl Kept {
+    /// Gives back what `frame_kept` returned, to be reused next frame.
+    pub fn give_back(&mut self, placed: Vec<Placed>) {
+        self.placed = placed;
+        self.lent = false;
+    }
+}
+
+/// `frame` (not the editor's preview), reusing the last frame's modules when the layout, the
+/// screen and everything they show are the same: no text measured, nothing allocated. The
+/// keystrokes' glow steps every frame either way. Hand the result back with `Kept::give_back`.
+#[allow(clippy::too_many_arguments)]
+pub fn frame_kept(kept: &mut Kept, cfg: &Config, d: Data, anim: &mut Anim, sw: f32, sh: f32, now: f64, width: Width) -> Vec<Placed> {
+    let mut stepped = anim.clone();
+    stepped.step(d.keys, now);
+    let age = now - kept.at;
+    let same = !kept.lent
+        && !blinks(cfg, &d)
+        && (0.0..KEEP_FOR).contains(&age)
+        && kept.from.as_ref().is_some_and(|(c, old, size, glow)| {
+            c == cfg && *size == [sw, sh] && *glow == stepped.glow && same_shown(old, &d)
+        });
+    kept.lent = true;
+    if same {
+        *anim = stepped;
+        return std::mem::take(&mut kept.placed);
+    }
+    let placed = frame(cfg, &d, anim, sw, sh, false, now, width);
+    kept.from = Some((cfg.clone(), d, [sw, sh], anim.glow));
+    kept.at = now;
+    placed
+}
+
+/// The Lunar potion list fades effects in their last 10 seconds: a picture that moves by itself.
+fn blinks(cfg: &Config, d: &Data) -> bool {
+    cfg.lunar
+        && index_of("potions").is_some_and(|i| cfg.slots[i].on)
+        && d.effects.iter().any(|e| (0..=10).contains(&e.secs))
+}
+
+/// Whether `a` and `b` show the same: equal, except for numbers that look the same as the
+/// modules write them (block coordinates, the facing and compass, two decimals, memory in MB,
+/// the day and sun or moon).
+fn same_shown(a: &Data, b: &Data) -> bool {
+    let block = |p: Option<[f64; 3]>| p.map(|p| p.map(|v| v.floor() as i64));
+    let facing = |y: f32| (quadrant(y), compass(y));
+    let memory = |m: Option<(u64, u64)>| m.map(|(u, x)| (u.saturating_mul(100) / x.max(1), u >> 20, x >> 20));
+    let day = |t: Option<i64>| t.map(|t| (t.div_euclid(24000), (12500..=23500).contains(&t.rem_euclid(24000))));
+    a.fps == b.fps
+        && a.cps == b.cps
+        && block(a.pos) == block(b.pos)
+        && facing(a.yaw) == facing(b.yaw)
+        && a.keys == b.keys
+        && a.key_labels == b.key_labels
+        && a.biome == b.biome
+        && a.armor == b.armor
+        && a.effects == b.effects
+        && a.ping == b.ping
+        && a.clock == b.clock
+        && a.server == b.server
+        && day(a.day_time) == day(b.day_time)
+        && same_two_places(a.speed, b.speed)
+        && same_two_places(a.reach, b.reach)
+        && a.combo == b.combo
+        && a.held == b.held
+        && memory(a.memory) == memory(b.memory)
+        && a.sprint == b.sprint
+}
+
+/// Whether `{:.2}` writes `a` and `b` the same, without allocating.
+fn same_two_places(a: Option<f64>, b: Option<f64>) -> bool {
+    struct Buf([u8; 48], usize, bool);
+    impl std::fmt::Write for Buf {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            let end = self.1 + s.len();
+            if end > self.0.len() {
+                self.2 = false;
+                return Err(std::fmt::Error);
+            }
+            self.0[self.1..end].copy_from_slice(s.as_bytes());
+            self.1 = end;
+            Ok(())
+        }
+    }
+    let shown = |v: f64| {
+        use std::fmt::Write;
+        let mut b = Buf([0; 48], 0, true);
+        let _ = write!(b, "{v:.2}");
+        b
+    };
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            let (a, b) = (shown(a), shown(b));
+            a.2 && b.2 && a.0[..a.1] == b.0[..b.1]
+        }
+        _ => false,
+    }
+}
+
 // ── the editor (Right Shift) ──
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1332,6 +1450,14 @@ pub struct State {
     /// The memory and clock readings, and when they were taken.
     pub memory: Option<((u64, u64), f64)>,
     pub clock: Option<(String, f64)>,
+    /// The HUD's last layout, reused while nothing it shows changed.
+    pub kept: Kept,
+    /// Potion effects' names and sprites by (id, amplifier), and the biome's name by id, as
+    /// last looked up, and when the lookups were started (they are made again each second,
+    /// after a language change).
+    pub effect_names: Vec<((&'static str, i32), String, String)>,
+    pub biome_name: Option<(String, String)>,
+    pub names_at: f64,
 }
 
 thread_local! {
@@ -1639,5 +1765,107 @@ mod tests {
     fn reach_holds_three_seconds() {
         assert_eq!(reach_shown(Some((3.1, 5.0)), 7.0), Some(3.1));
         assert_eq!(reach_shown(Some((3.1, 5.0)), 8.5), None);
+    }
+
+    #[test]
+    fn kept_frames_look_exactly_like_fresh_ones() {
+        let measured = std::cell::Cell::new(0u32);
+        let counting = |t: &str| {
+            measured.set(measured.get() + 1);
+            w(t)
+        };
+        let mut cfg = Config::default();
+        for i in 0..COUNT {
+            cfg.slots[i].on = true;
+        }
+        let mut d = Data { fps: 240, pos: Some([10.2, 64.0, -3.7]), yaw: 10.0, speed: Some(5.611), ..Data::default() };
+        d.effects.push(Effect { name: "Speed II".into(), secs: 95, sprite: "mob_effect/speed".into() });
+        d.memory = Some((2 << 30, 8 << 30));
+        d.day_time = Some(1000);
+        let (mut kept, mut a, mut b) = (Kept::default(), Anim::default(), Anim::default());
+        let mut now = 0.0;
+        // Each step: the kept frame equals a fresh one, and says whether it was laid out again.
+        let mut step = |cfg: &Config, d: &Data, now: f64, give_back: bool| -> bool {
+            measured.set(0);
+            let placed = frame_kept(&mut kept, cfg, d.clone(), &mut a, 480.0, 270.0, now, &counting);
+            let laid = measured.get() > 0;
+            let fresh = frame(cfg, d, &mut b, 480.0, 270.0, false, now, &w);
+            assert_eq!(placed, fresh, "at {now}");
+            if give_back {
+                kept.give_back(placed);
+            }
+            laid
+        };
+        assert!(step(&cfg, &d, now, true), "the first frame is laid out");
+        now += 0.005;
+        assert!(!step(&cfg, &d, now, true), "nothing changed: reused");
+        // Moving inside the block, turning a little, speed the same to two places: reused.
+        d.pos = Some([10.9, 64.5, -3.1]);
+        d.yaw = 10.5;
+        d.speed = Some(5.6149);
+        d.memory = Some(((2 << 30) + 5, 8 << 30));
+        d.day_time = Some(1001);
+        now += 0.005;
+        assert!(!step(&cfg, &d, now, true));
+        // Into the next block: laid out again.
+        d.pos = Some([11.0, 64.5, -3.1]);
+        now += 0.005;
+        assert!(step(&cfg, &d, now, true));
+        // A key pressed: its glow rises over a few frames, then holds; released, it fades.
+        d.keys[0] = true;
+        for _ in 0..20 {
+            now += 0.005;
+            step(&cfg, &d, now, true);
+        }
+        now += 0.005;
+        assert!(!step(&cfg, &d, now, true), "full glow: reused");
+        d.keys[0] = false;
+        now += 0.005;
+        assert!(step(&cfg, &d, now, true), "fading");
+        for _ in 0..60 {
+            now += 0.005;
+            step(&cfg, &d, now, true);
+        }
+        now += 0.005;
+        assert!(!step(&cfg, &d, now, true), "faded out: reused");
+        // Not given back: laid out again (and the next one reused).
+        now += 0.005;
+        step(&cfg, &d, now, false);
+        now += 0.005;
+        assert!(step(&cfg, &d, now, true));
+        now += 0.005;
+        assert!(!step(&cfg, &d, now, true));
+        // At most KEEP_FOR seconds old.
+        now += KEEP_FOR;
+        assert!(step(&cfg, &d, now, true));
+        // Another layout or a new value: laid out again.
+        cfg.slots[0].x += 1.0;
+        now += 0.005;
+        assert!(step(&cfg, &d, now, true));
+        d.fps = 239;
+        now += 0.005;
+        assert!(step(&cfg, &d, now, true));
+        // An effect in its last 10 seconds fades in Lunar: every frame laid out.
+        d.effects[0].secs = 9;
+        for _ in 0..3 {
+            now += 0.005;
+            assert!(step(&cfg, &d, now, true));
+        }
+        // Not in Minimal.
+        cfg.lunar = false;
+        now += 0.005;
+        assert!(step(&cfg, &d, now, true));
+        now += 0.005;
+        assert!(!step(&cfg, &d, now, true));
+    }
+
+    #[test]
+    fn two_places_as_written() {
+        assert!(same_two_places(Some(5.611), Some(5.6149)));
+        assert!(!same_two_places(Some(5.611), Some(5.616)));
+        assert!(!same_two_places(Some(1.0), None));
+        assert!(same_two_places(None, None));
+        // Too long to write here: never taken as the same.
+        assert!(!same_two_places(Some(1e300), Some(1e300)));
     }
 }

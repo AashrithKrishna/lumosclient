@@ -3583,6 +3583,65 @@ pub fn set_settings(new: Settings) {
     SETTINGS.with_borrow_mut(|s| *s = Some(new));
 }
 
+// ---------------------------------------------------------------- frame pacing
+
+/// The share of the last frame's time that mapping with the map closed may take.
+pub const PACE_SHARE: f64 = 0.08;
+/// The least a closed map's mapping gets a frame (unless its own budget is less), so the map
+/// still fills in on very fast frames.
+pub const PACE_FLOOR: std::time::Duration = std::time::Duration::from_micros(200);
+/// A frame this many times the recent median is a spike (a fight, a stall): no mapping on it.
+pub const PACE_SPIKE: f64 = 1.5;
+/// Frames the median is taken over; with fewer known nothing counts as a spike.
+const PACE_FRAMES: usize = 32;
+const PACE_MIN_FRAMES: usize = 8;
+/// Spike frames skipped in a row at most: the next one maps anyway.
+const PACE_MAX_SKIPS: u32 = 3;
+
+/// Mapping time that follows the frame rate: a closed map's budget is cut to `PACE_SHARE` of the
+/// last frame (not under `PACE_FLOOR`) and is nothing on a spike frame. The work is the same,
+/// spread over more frames while the game is busy.
+#[derive(Debug, Default, Clone)]
+pub struct Pace {
+    times: std::collections::VecDeque<std::time::Duration>,
+    last: Option<std::time::Duration>,
+    skip: bool,
+    skipped: u32,
+}
+
+impl Pace {
+    /// Once a frame, with the time since the previous one (None: the first, or not known).
+    pub fn frame(&mut self, dt: Option<std::time::Duration>) {
+        self.last = dt;
+        let spike = dt.is_some_and(|d| {
+            self.times.len() >= PACE_MIN_FRAMES && {
+                let mut sorted: Vec<_> = self.times.iter().copied().collect();
+                sorted.sort_unstable();
+                d.as_secs_f64() > sorted[sorted.len() / 2].as_secs_f64() * PACE_SPIKE
+            }
+        });
+        self.skip = spike && self.skipped < PACE_MAX_SKIPS;
+        self.skipped = if self.skip { self.skipped + 1 } else { 0 };
+        if let Some(d) = dt {
+            if self.times.len() == PACE_FRAMES {
+                self.times.pop_front();
+            }
+            self.times.push_back(d);
+        }
+    }
+
+    /// This frame's budget for work that may take up to `max` with the map closed.
+    pub fn budget(&self, max: std::time::Duration) -> std::time::Duration {
+        if self.skip {
+            return std::time::Duration::ZERO;
+        }
+        match self.last {
+            Some(d) => max.min(PACE_FLOOR.max(d.mul_f64(PACE_SHARE))),
+            None => max,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4539,5 +4598,47 @@ mod tests {
         // Glass: the ground shows, tinted.
         let g = glass_over(0x00_0000, 0xFF_0000);
         assert!(g >> 16 > 0 && g >> 16 < 0xFF);
+    }
+
+    #[test]
+    fn pace_follows_the_frame_and_skips_spikes() {
+        use std::time::Duration;
+        let ms = |v: f64| Duration::from_secs_f64(v / 1000.0);
+        let max = Duration::from_micros(700);
+        let mut p = Pace::default();
+        // Not known yet: the full budget.
+        p.frame(None);
+        assert_eq!(p.budget(max), max);
+        // 60 FPS: 8% is more than the budget, which stays.
+        p.frame(Some(ms(16.7)));
+        assert_eq!(p.budget(max), max);
+        // 200 FPS: 8% of 5 ms.
+        for _ in 0..20 {
+            p.frame(Some(ms(5.0)));
+        }
+        assert_eq!(p.budget(max), Duration::from_micros(400));
+        // 1000 FPS: the floor; a budget under the floor stays as it is.
+        p.frame(Some(ms(1.0)));
+        assert_eq!(p.budget(max), PACE_FLOOR);
+        assert_eq!(p.budget(Duration::from_micros(100)), Duration::from_micros(100));
+        // A spike (more than 1.5x the median): nothing, but never more than 3 frames in a row.
+        p.frame(Some(ms(5.0)));
+        p.frame(Some(ms(20.0)));
+        assert_eq!(p.budget(max), Duration::ZERO);
+        p.frame(Some(ms(20.0)));
+        p.frame(Some(ms(20.0)));
+        assert_eq!(p.budget(max), Duration::ZERO);
+        p.frame(Some(ms(20.0)));
+        assert_eq!(p.budget(max), max.min(ms(20.0).mul_f64(PACE_SHARE)));
+        // A steady slower rate becomes the median: no longer a spike.
+        for _ in 0..40 {
+            p.frame(Some(ms(20.0)));
+        }
+        assert!(p.budget(max) > Duration::ZERO);
+        // Few frames known: no spike yet.
+        let mut q = Pace::default();
+        q.frame(Some(ms(5.0)));
+        q.frame(Some(ms(50.0)));
+        assert_eq!(q.budget(max), max);
     }
 }

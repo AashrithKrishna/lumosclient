@@ -830,6 +830,9 @@ struct State {
     /// The map was set up for this opening.
     opened: bool,
     last_frame: Option<Instant>,
+    /// The closed map's mapping time, following the frame rate, and when the last frame began.
+    pace: m::Pace,
+    pace_at: Option<Instant>,
     tex: Textures,
     tick: u64,
     look: Option<m::Look>,
@@ -1566,6 +1569,9 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
     let mut said = None;
     with(|s| {
         s.tick += 1;
+        let now = Instant::now();
+        s.pace.frame(s.pace_at.map(|t| now - t));
+        s.pace_at = Some(now);
         if open && !s.opened {
             on_open(game, s, &set);
         }
@@ -1586,6 +1592,7 @@ pub(super) fn on_frame(game: &mut Game<'_>) {
         // Mapping (not while asking which map this is).
         if s.asking.is_none() && s.world_dir.is_some() {
             let budget = Duration::from_micros(set.budget_us(open));
+            let budget = if open { budget } else { s.pace.budget(budget) };
             explore(game, s, m::Layer::Surface, &set, budget);
             let full = roof_top(game).is_none() && s.screen.layer == Some(m::Layer::Full) && open && s.screen.dim.is_none();
             if full {

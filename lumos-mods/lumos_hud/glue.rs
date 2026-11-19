@@ -19,11 +19,12 @@ fn now() -> f64 {
 
 /// The layout, read from the mod's data folder once.
 fn config(game: &Game<'_>) -> m::Config {
-    m::with(|s| {
-        s.config
-            .get_or_insert_with(|| m::Config::parse(&game.native_setting(m::ID, m::LAYOUT_KEY).unwrap_or_default()))
-            .clone()
-    })
+    m::with(|s| kept_config(game, &mut s.config).clone())
+}
+
+/// The layout, without a copy (read once, as `config`).
+fn kept_config<'s>(game: &Game<'_>, config: &'s mut Option<m::Config>) -> &'s m::Config {
+    config.get_or_insert_with(|| m::Config::parse(&game.native_setting(m::ID, m::LAYOUT_KEY).unwrap_or_default()))
 }
 
 /// Keeps `cfg`, and writes it when the editor changed something.
@@ -63,6 +64,12 @@ fn gather(game: &Game<'_>) -> m::Data {
     let mut d = m::Data::default();
     d.fps = game.native_frame_rate().0;
     let speed = m::with(|s| {
+        // Effect and biome names are looked up again each second (a language change).
+        if !(0.0..1.0).contains(&(now - s.names_at)) {
+            s.names_at = now;
+            s.effect_names.clear();
+            s.biome_name = None;
+        }
         d.cps = s.cps;
         d.keys = s.keys;
         d.key_labels = s.key_labels.clone();
@@ -77,8 +84,15 @@ fn gather(game: &Game<'_>) -> m::Data {
         }
         let at = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
         d.biome = game.native_biome(at).map(|id| {
-            let key = format!("biome.{}", id.replace(':', "."));
-            game.pack.names.display_get(&key).unwrap_or_else(|| m::pretty_id(&id))
+            m::with(|s| match &s.biome_name {
+                Some((kept, shown)) if *kept == id => shown.clone(),
+                _ => {
+                    let key = format!("biome.{}", id.replace(':', "."));
+                    let shown = game.pack.names.display_get(&key).unwrap_or_else(|| m::pretty_id(&id));
+                    s.biome_name = Some((id, shown.clone()));
+                    shown
+                }
+            })
         });
         d.speed = Some(speed);
     }
@@ -92,18 +106,15 @@ fn gather(game: &Game<'_>) -> m::Data {
     let rate = game.clock.rate();
     for e in game.potions.effects.list.iter() {
         let secs = if e.duration == -1 { -1 } else { (e.duration as f32 / rate) as i32 };
-        let id = format!("{}", e.id);
-        let key = horizon_client_core::potions::description_id(&id);
-        let mut name = game.pack.names.display_get(&key).unwrap_or_else(|| m::pretty_id(&id));
-        let amplifier = e.amplifier as i64;
-        if amplifier > 0 {
-            name = format!("{name} {}", m::roman(amplifier as u32 + 1));
-        }
-        let sprite = match id.split_once(':') {
-            Some((ns, path)) if ns == "minecraft" => format!("mob_effect/{path}"),
-            Some((ns, path)) => format!("{ns}:mob_effect/{path}"),
-            None => format!("mob_effect/{id}"),
-        };
+        let (name, sprite) = m::with(|s| {
+            let at = (e.id, e.amplifier);
+            if let Some((_, name, sprite)) = s.effect_names.iter().find(|n| n.0 == at) {
+                return (name.clone(), sprite.clone());
+            }
+            let (name, sprite) = effect_name(game, e.id, e.amplifier);
+            s.effect_names.push((at, name.clone(), sprite.clone()));
+            (name, sprite)
+        });
         d.effects.push(m::Effect { name, secs, sprite });
     }
     let multiplayer = game.remote.is_some() && !game.has_singleplayer_server();
@@ -169,6 +180,23 @@ fn gather(game: &Game<'_>) -> m::Data {
     d
 }
 
+/// An effect's name as the list shows it ("Speed II") and its HUD sprite.
+fn effect_name(game: &Game<'_>, id: &str, amplifier: i32) -> (String, String) {
+    let id = format!("{}", id);
+    let key = horizon_client_core::potions::description_id(&id);
+    let mut name = game.pack.names.display_get(&key).unwrap_or_else(|| m::pretty_id(&id));
+    let amplifier = amplifier as i64;
+    if amplifier > 0 {
+        name = format!("{name} {}", m::roman(amplifier as u32 + 1));
+    }
+    let sprite = match id.split_once(':') {
+        Some((ns, path)) if ns == "minecraft" => format!("mob_effect/{path}"),
+        Some((ns, path)) => format!("{ns}:mob_effect/{path}"),
+        None => format!("mob_effect/{id}"),
+    };
+    (name, sprite)
+}
+
 fn paint(game: &Game<'_>, batch: &mut HudBatch, prims: &[m::Prim]) {
     for p in prims {
         match p {
@@ -214,15 +242,19 @@ pub(super) fn on_hud(game: &mut Game<'_>, batch: &mut HudBatch, _corners: &mut C
         return;
     }
     input(game);
-    let cfg = config(game);
     let d = gather(game);
     let (sw, sh) = (batch.width, batch.height);
     let g = &*game;
     let width = |t: &str| g.native_text_width(t);
-    let placed = m::with(|s| m::frame(&cfg, &d, &mut s.anim, sw, sh, false, now(), &width));
+    // The last frame's modules again when nothing they show changed; painted every frame.
+    let placed = m::with(|s| {
+        let cfg = kept_config(g, &mut s.config);
+        m::frame_kept(&mut s.kept, cfg, d, &mut s.anim, sw, sh, now(), &width)
+    });
     for p in &placed {
         paint(g, batch, &p.prims);
     }
+    m::with(|s| s.kept.give_back(placed));
 }
 
 /// The vanilla effect icons stay out while the Potion Effects module shows them.
@@ -231,7 +263,7 @@ pub(super) fn on_layer(game: &Game<'_>, layer: &str, canceled: &mut bool) {
         return;
     }
     let i = m::index_of("potions").unwrap_or(0);
-    if config(game).slots[i].on {
+    if m::with(|s| kept_config(game, &mut s.config).slots[i].on) {
         *canceled = true;
     }
 }

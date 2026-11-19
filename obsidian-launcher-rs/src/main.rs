@@ -176,6 +176,9 @@ struct LauncherConfig {
     /// before the guide count as seen: those players already know the launcher.
     #[serde(default)]
     guide_seen: bool,
+    /// Install a new LumosClient by itself when one is found at start (never while a game runs).
+    #[serde(default = "default_true")]
+    auto_update: bool,
 }
 
 fn default_player_name() -> String {
@@ -612,6 +615,7 @@ impl AppState {
                 servers: vec![],
                 curseforge_api_key: String::new(),
                 guide_seen: false,
+                auto_update: true,
             });
         if known_player {
             config.guide_seen = true;
@@ -769,6 +773,7 @@ impl AppState {
             // feat/discover: only whether a key is saved, never the key.
             "curseforgeKeySet": !self.config.curseforge_api_key.trim().is_empty(),
             "guideSeen": self.config.guide_seen,
+            "autoUpdate": self.config.auto_update,
         })
         .to_string()
     }
@@ -3276,6 +3281,12 @@ fn main() {
                     check_resources_async(ipc_proxy.clone(), ipc_state.clone());
                     refresh_catalog_async(ipc_proxy.clone(), ipc_state.clone());
                     refresh_skin_async(ipc_proxy.clone(), ipc_state.clone());
+                }
+                "auto_update" => {
+                    let mut st = ipc_state.lock().unwrap();
+                    st.config.auto_update = v.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true);
+                    st.save_config();
+                    push_state(&ipc_proxy, &st);
                 }
                 "guide_seen" => {
                     let mut st = ipc_state.lock().unwrap();
