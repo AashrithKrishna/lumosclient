@@ -468,6 +468,12 @@ pub fn click_action(button: i32, mods: u32, held: Held) -> Option<Action> {
     }
 }
 
+/// The Shift+hover move's next slot: a hovered slot on the clicked slot's side not moved yet (so a
+/// stack never goes back and forth).
+pub fn hover_pick(hovered: Option<usize>, side: &[usize], visited: &[usize]) -> Option<usize> {
+    hovered.filter(|s| movable(*s) && side.contains(s) && !visited.contains(s))
+}
+
 /// The points a drag from `from` to `to` passes over, `step` apart, `to` included (Item Scroller
 /// walks the line so a fast drag misses no slot).
 pub fn line_points(from: [f32; 2], to: [f32; 2], step: f32) -> Vec<[f32; 2]> {
@@ -1599,6 +1605,22 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hover_moves_each_slot_of_the_clicked_side_once() {
+        use super::*;
+        let slots: Vec<usize> = (0..36).chain(300..327).collect();
+        let side = same_side(305, &slots);
+        assert_eq!(hover_pick(Some(306), &side, &[305]), Some(306));
+        assert_eq!(hover_pick(Some(305), &side, &[305]), None, "already moved");
+        assert_eq!(hover_pick(Some(10), &side, &[305]), None, "the other side: never moved back");
+        assert_eq!(hover_pick(None, &side, &[305]), None);
+        // Inventory alone: the hotbar and the rest are apart.
+        let own: Vec<usize> = (0..36).collect();
+        let side = same_side(12, &own);
+        assert_eq!(hover_pick(Some(20), &side, &[12]), Some(20));
+        assert_eq!(hover_pick(Some(3), &side, &[12]), None);
+    }
+
     use super::*;
 
     fn st(item: &str, count: u32) -> Stack {

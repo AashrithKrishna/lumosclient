@@ -20,6 +20,7 @@ Options > Controls with Lumos Controls on. "Left" is the left mouse button. On m
 | `keyDragMoveOne` | Ctrl + Left (click, drag) | One item from each slot clicked or dragged over goes to the other inventory (once per slot per drag) | **added** |
 | `keyDragMoveMatching` | Alt + Left (click, drag) | Every stack matching the clicked/dragged-over stack, in its inventory, goes to the other inventory | **added** (was Ctrl+Shift+click: **changed**) |
 | `keyDragMoveStacks` | Shift + Left (click, drag) | Each slot clicked or dragged over is shift-clicked | **changed**: the press is now taken too (as Item Scroller), so Horizon's Mouse Tweaks doesn't also act |
+| (Lumos extra) | Shift + Left once, then hover while Shift stays held | Every stack hovered on the clicked slot's side is shift-clicked, once each (never back), until Shift is let go or another button is pressed; follows the Shift + drag setting | **added** |
 | `keyDragMoveLeaveOne` | Shift + Right (click, drag) | All but one item of each slot goes to the other inventory | **added** |
 | `keyMoveEverything` | Alt + Shift + Left (click) | Every stack of the clicked slot's inventory goes to the other inventory | **added** (also Shift + Space + Left, the older default, as `move_everything_old`) |
 | `keyDragDropSingle` | Q + Left (click, drag) | Drops one item from each slot | **added** |

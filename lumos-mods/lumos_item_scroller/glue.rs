@@ -78,6 +78,18 @@ struct Drag {
     visited: Vec<usize>,
 }
 
+/// After a Shift+click lets go, while Shift stays held: each stack hovered on the clicked slot's
+/// side is shift-clicked too, once (no button held: the pointer is followed every frame).
+#[derive(Clone, Debug)]
+struct Hover {
+    first: usize,
+    /// The slots of the clicked slot's side, read at the first frame.
+    side: Option<Vec<usize>>,
+    visited: Vec<usize>,
+    /// The pointer at the last frame.
+    at: [f32; 2],
+}
+
 #[derive(Default)]
 struct State {
     config: Option<m::Config>,
@@ -93,6 +105,7 @@ struct State {
     /// A press the mod took: its release is the mod's too.
     swallow: Option<i32>,
     drag: Option<Drag>,
+    hover: Option<Hover>,
     /// The slot of the last press with an empty hand: where a stack in the hand came from.
     source: Option<usize>,
     /// The mass craft key started a run that hasn't been let go of.
@@ -787,6 +800,7 @@ pub(super) fn on_tick(game: &mut Game<'_>) {
         with(|s| {
             s.queue.clear();
             s.drag = None;
+            s.hover = None;
         });
         return;
     }
@@ -797,6 +811,7 @@ pub(super) fn on_tick(game: &mut Game<'_>) {
         if !open || (!s.queue.is_empty() && s.screen != key) {
             s.queue.clear();
             s.drag = None;
+            s.hover = None;
             s.swallow = None;
             s.wheel = m::Wheel::default();
         }
@@ -1069,7 +1084,10 @@ fn real_button(game: &Game<'_>, button: i32, modifiers: u32) -> i32 {
 /// Presses: the merchant's offers, the recipe view and storing recipes, right-click on the
 /// crafting result, Shift+click with a stack in hand, and Item Scroller's click and drag moves.
 pub(super) fn on_press(game: &Game<'_>, screen: &NativeScreenView<'_>, button: i32, modifiers: u32, canceled: &mut bool) {
-    with(|s| s.drag = None);
+    with(|s| {
+        s.drag = None;
+        s.hover = None;
+    });
     if !game.native_on(m::ID) || screen.id != "inventory" {
         return;
     }
@@ -1268,9 +1286,15 @@ fn store_recipe(game: &Game<'_>) {
 
 /// The release of a press the mod took is the mod's too; a drag ends.
 pub(super) fn on_release(game: &Game<'_>, button: i32, canceled: &mut bool) {
-    let _ = game;
+    let shift_only = game.has_shift_down() && !game.has_control_down() && !game.has_alt_down();
+    let at = [game.cursor.0, game.cursor.1];
     with(|s| {
-        s.drag = None;
+        // A Shift+click (or Shift+drag) of stacks goes on over what's hovered while Shift stays held.
+        s.hover = s
+            .drag
+            .take()
+            .filter(|d| d.action == m::Action::Stacks && d.button == button && shift_only && game.carried.is_none())
+            .and_then(|d| Some(Hover { first: *d.visited.first()?, side: None, visited: d.visited, at }));
         if s.swallow == Some(button) {
             s.swallow = None;
             *canceled = true;
@@ -1311,6 +1335,43 @@ pub(super) fn on_drag(game: &mut Game<'_>, screen: &str, mouse: [f32; 2], button
         d.last = slot;
     }
     with(|s| s.drag = Some(d));
+    run(game, false);
+}
+
+/// Every frame: the Shift+hover move after a Shift+click (see `Hover`).
+pub(super) fn on_frame(game: &mut Game<'_>) {
+    let Some(mut h) = with(|s| s.hover.take()) else {
+        return;
+    };
+    let cfg = config(game);
+    let still = active(game, &cfg)
+        && cfg.drag_stacks
+        && plain_menu(game)
+        && game.carried.is_none()
+        && game.has_shift_down()
+        && !game.has_control_down()
+        && !game.has_alt_down()
+        && m::click_action(0, m::SHIFT, keys::held_keys(game)) == Some(m::Action::Stacks);
+    if !still {
+        return;
+    }
+    let Some(batch) = gui_batch(game) else {
+        return;
+    };
+    let first = h.first;
+    let side = h.side.get_or_insert_with(|| m::same_side(first, &game.slots())).clone();
+    let now = [game.cursor.0, game.cursor.1];
+    if now != h.at {
+        for p in m::line_points(h.at, now, 4.0) {
+            let hovered = game.slot_at(&batch, p[0], p[1]);
+            if let Some(slot) = m::hover_pick(hovered, &side, &h.visited) {
+                enqueue(game, Work::Shift(slot));
+                h.visited.push(slot);
+            }
+        }
+        h.at = now;
+    }
+    with(|s| s.hover = Some(h));
     run(game, false);
 }
 
