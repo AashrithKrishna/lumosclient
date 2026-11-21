@@ -50,12 +50,15 @@ def main():
     token = os.environ.get("GITHUB_TOKEN")
     idx = get_json(INDEX)
     # Horizon's registry moved its native-v1 mods to an archive (2026-11-18); keep building them
-    # from Lumos's frozen copy of those listings, for ids the live index no longer has.
+    # from Lumos's frozen copy of those listings. The frozen listing wins over the live one: an id
+    # the live index still has now carries releases for newer Horizon commits or the newer mod API
+    # (flair, freecam_plus, imfast, living_camera, keystrokes, fps_overlay, right_click_crops in
+    # 2026-11), which the pinned game can't build, and would otherwise drop out of the build.
     frozen = os.path.join(os.path.dirname(os.path.abspath(__file__)), "native-v1-index.json")
     if os.path.exists(frozen):
-        live = {p.get("id") for p in idx.get("projects", [])}
         f = json.load(open(frozen, encoding="utf-8"))
-        idx.setdefault("projects", []).extend(p for p in f.get("projects", []) if p.get("id") not in live)
+        kept = {p.get("id") for p in f.get("projects", [])}
+        idx["projects"] = [p for p in idx.get("projects", []) if p.get("id") not in kept] + f.get("projects", [])
         idx.setdefault("revoked", []).extend(f.get("revoked", []))
     if idx.get("schema") != 1:
         sys.exit(f"unknown registry schema {idx.get('schema')}")
